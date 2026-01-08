@@ -1,15 +1,23 @@
 # GRPM
 
-**Next-generation Source-based Package Manager**
+<p align="center">
+  <img src="assets/devto_cover.png" alt="GRPM - Go Resource Package Manager" width="100%">
+</p>
 
-[![GitHub Release](https://img.shields.io/github/v/release/grpmsoft/grpm?style=flat-square&logo=github&color=blue)](https://github.com/grpmsoft/grpm/releases/latest)
-[![Go Version](https://img.shields.io/github/go-mod/go-version/grpmsoft/grpm?style=flat-square&logo=go)](https://go.dev/dl/)
-[![Go Reference](https://pkg.go.dev/badge/github.com/grpmsoft/grpm.svg)](https://pkg.go.dev/github.com/grpmsoft/grpm)
-[![CI](https://img.shields.io/github/actions/workflow/status/grpmsoft/grpm/test.yml?branch=main&style=flat-square&logo=github-actions&label=CI)](https://github.com/grpmsoft/grpm/actions)
-[![Go Report Card](https://goreportcard.com/badge/github.com/grpmsoft/grpm?style=flat-square)](https://goreportcard.com/report/github.com/grpmsoft/grpm)
-[![License](https://img.shields.io/github/license/grpmsoft/grpm?style=flat-square)](LICENSE)
-[![GitHub Stars](https://img.shields.io/github/stars/grpmsoft/grpm?style=flat-square&logo=github)](https://github.com/grpmsoft/grpm/stargazers)
-[![GitHub Issues](https://img.shields.io/github/issues/grpmsoft/grpm?style=flat-square&logo=github)](https://github.com/grpmsoft/grpm/issues)
+<p align="center">
+  <strong>Next-generation Source-based Package Manager</strong>
+</p>
+
+<p align="center">
+  <a href="https://github.com/grpmsoft/grpm/releases/latest"><img src="https://img.shields.io/github/v/release/grpmsoft/grpm?style=flat-square&logo=github&color=blue" alt="GitHub Release"></a>
+  <a href="https://go.dev/dl/"><img src="https://img.shields.io/github/go-mod/go-version/grpmsoft/grpm?style=flat-square&logo=go" alt="Go Version"></a>
+  <a href="https://pkg.go.dev/github.com/grpmsoft/grpm"><img src="https://pkg.go.dev/badge/github.com/grpmsoft/grpm.svg" alt="Go Reference"></a>
+  <a href="https://github.com/grpmsoft/grpm/actions"><img src="https://img.shields.io/github/actions/workflow/status/grpmsoft/grpm/test.yml?branch=main&style=flat-square&logo=github-actions&label=CI" alt="CI"></a>
+  <a href="https://goreportcard.com/report/github.com/grpmsoft/grpm"><img src="https://goreportcard.com/badge/github.com/grpmsoft/grpm?style=flat-square" alt="Go Report Card"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/grpmsoft/grpm?style=flat-square" alt="License"></a>
+  <a href="https://github.com/grpmsoft/grpm/stargazers"><img src="https://img.shields.io/github/stars/grpmsoft/grpm?style=flat-square&logo=github" alt="GitHub Stars"></a>
+  <a href="https://github.com/grpmsoft/grpm/issues"><img src="https://img.shields.io/github/issues/grpmsoft/grpm?style=flat-square&logo=github" alt="GitHub Issues"></a>
+</p>
 
 GRPM (Go Resource Package Manager) is a modern source-based package manager written in Go, inspired by and fully compatible with **Gentoo's Portage**. It brings SAT-based dependency resolution, transactional updates with filesystem snapshots, and binary package support. While rooted in the Gentoo ecosystem, GRPM is designed to be distribution-agnostic and extensible for any Linux distribution.
 
