@@ -164,16 +164,13 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidelines and [AGENTS.md
 
 **v0.1.0** (Current) — Initial public release with core functionality.
 
-**v1.0.0** (Q2 2026) — Production ready:
-- Full Portage command compatibility
-- Complete eclass support
+**v0.x.x** — Iterative development:
+- Full EAPI 8 support
+- CMake/Meson build systems
+- Extended eclass support
 - Performance optimization
-- Production validation
 
-**Future:**
-- GUI interface ([gogpu/ui](https://github.com/gogpu/ui))
-- Plugin system
-- Distributed builds
+**v1.0.0** — After community validation and API freeze (no fixed date).
 
 See [ROADMAP.md](ROADMAP.md) for details.
 
