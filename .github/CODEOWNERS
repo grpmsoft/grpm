@@ -1,0 +1,67 @@
+# CODEOWNERS for GRPM
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+#
+# Code owners are automatically requested for review when someone opens a pull request
+# that modifies code they own.
+
+# Default owner for everything in the repo
+* @kolkov
+
+# Domain layer - Core business logic
+/internal/pkg/ @kolkov
+/internal/solver/ @kolkov
+
+# Infrastructure layer
+/internal/repo/ @kolkov
+/internal/state/ @kolkov
+/internal/install/ @kolkov
+/internal/sync/ @kolkov
+/internal/fetch/ @kolkov
+
+# Daemon and CLI
+/internal/daemon/ @kolkov
+/internal/cli/ @kolkov
+
+# Ebuild execution - Critical for Portage compatibility
+/internal/ebuild/ @kolkov
+
+# Binary packages
+/internal/binpkg/ @kolkov
+
+# Security-sensitive code
+/internal/sandbox/ @kolkov
+/internal/privilege/ @kolkov
+
+# Application layer
+/internal/application/ @kolkov
+
+# Configuration and profiles
+/internal/config/ @kolkov
+/internal/profile/ @kolkov
+
+# gRPC API definitions
+/api/proto/ @kolkov
+
+# Entry point
+/cmd/grpm/ @kolkov
+
+# Documentation
+*.md @kolkov
+
+# GitHub configuration and CI/CD
+/.github/ @kolkov
+
+# Code quality and linting configuration
+/.golangci.yml @kolkov
+/.goreleaser.yml @kolkov
+
+# Tests
+*_test.go @kolkov
+
+# Go module files - Dependency management
+/go.mod @kolkov
+/go.sum @kolkov
+
+# Build and scripts
+/Makefile @kolkov
+/scripts/ @kolkov

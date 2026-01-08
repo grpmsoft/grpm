@@ -1,0 +1,162 @@
+# GoReleaser configuration for GRPM v2
+# Documentation: https://goreleaser.com
+
+version: 2
+
+project_name: grpm
+
+before:
+  hooks:
+    # Ensure dependencies are up to date
+    - go mod tidy
+    # Generate protobuf code
+    - make proto
+
+builds:
+  - id: grpm
+    main: ./cmd/grpm
+    binary: grpm
+
+    # Build for Linux (primary target - Gentoo)
+    goos:
+      - linux
+
+    goarch:
+      - amd64
+      - arm64
+      - 386
+      - arm
+
+    goarm:
+      - 6
+      - 7
+
+    # Version injection via ldflags
+    ldflags:
+      - -s -w
+      - -X 'main.Version={{.Version}}'
+      - -X 'main.GitCommit={{.ShortCommit}}'
+      - -X 'main.BuildDate={{.Date}}'
+
+    env:
+      - CGO_ENABLED=0  # Static binary for portability
+
+    # Build tags
+    tags:
+      - netgo
+      - osusergo
+
+archives:
+  - id: grpm
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+
+    files:
+      - README.md
+      - LICENSE
+      - CONTRIBUTING.md
+      - docs/*
+
+checksum:
+  name_template: 'checksums.txt'
+  algorithm: sha256
+
+changelog:
+  use: github
+  sort: asc
+  abbrev: 7
+
+  groups:
+    - title: 'Features'
+      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+      order: 0
+    - title: 'Bug Fixes'
+      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+      order: 1
+    - title: 'Performance Improvements'
+      regexp: '^.*?perf(\([[:word:]]+\))??!?:.+$'
+      order: 2
+    - title: 'Documentation'
+      regexp: '^.*?docs(\([[:word:]]+\))??!?:.+$'
+      order: 3
+    - title: 'Dependency Updates'
+      regexp: '^.*?chore\(deps\)(\([[:word:]]+\))??!?:.+$'
+      order: 4
+    - title: 'Other Changes'
+      order: 999
+
+  filters:
+    exclude:
+      - '^test:'
+      - '^chore:'
+      - '^ci:'
+      - '^style:'
+      - '^refactor:'
+      - 'merge conflict'
+      - Merge pull request
+      - Merge remote-tracking branch
+      - Merge branch
+
+release:
+  github:
+    owner: grpmsoft
+    name: grpm
+
+  # Create release as draft for manual review
+  draft: false
+
+  # Mark pre-releases (v0.x.x, beta, alpha, rc)
+  prerelease: auto
+
+  # Release notes template
+  header: |
+    ## GRPM {{ .Version }}
+
+    **Release Date:** {{ .Date }}
+    **Git Commit:** {{ .ShortCommit }}
+
+    ### Installation
+
+    ```bash
+    # Download for your platform
+    wget https://github.com/grpmsoft/grpm/releases/download/{{ .Tag }}/grpm_{{ .Version }}_linux_x86_64.tar.gz
+
+    # Extract
+    tar -xzf grpm_{{ .Version }}_linux_x86_64.tar.gz
+
+    # Install
+    sudo install -m 0755 grpm /usr/bin/grpm
+
+    # Verify
+    grpm version
+    ```
+
+    ### What's Changed
+
+  footer: |
+    **Full Changelog**: https://github.com/grpmsoft/grpm/compare/{{ .PreviousTag }}...{{ .Tag }}
+
+    ---
+
+    🤖 Generated with [GoReleaser](https://goreleaser.com)
+
+  # Disable release if this is a snapshot
+  disable: '{{ if .IsSnapshot }}true{{ end }}'
+
+# Metadata
+metadata:
+  mod_timestamp: '{{ .CommitTimestamp }}'
+
+# Source code archive
+source:
+  enabled: true
+  name_template: '{{ .ProjectName }}_{{ .Version }}_source'
+
+# GitHub Release
+# Note: GoReleaser will create GitHub releases automatically when triggered by tags

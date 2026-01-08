@@ -1,0 +1,240 @@
+syntax = "proto3";
+
+package grpm.v1;
+
+option go_package = "github.com/grpmsoft/grpm/api/gen";
+
+// GRPMService provides package management operations via daemon
+service GRPMService {
+  // Ping checks daemon health
+  rpc Ping(PingRequest) returns (PingResponse);
+
+  // GetStatus returns daemon status information
+  rpc GetStatus(GetStatusRequest) returns (GetStatusResponse);
+
+  // InstallPackage installs a package (streaming progress)
+  rpc InstallPackage(InstallPackageRequest) returns (stream InstallPackageResponse);
+
+  // RemovePackage removes a package (streaming progress)
+  rpc RemovePackage(RemovePackageRequest) returns (stream RemovePackageResponse);
+
+  // UpdateSystem updates the system (streaming progress)
+  rpc UpdateSystem(UpdateSystemRequest) returns (stream UpdateSystemResponse);
+
+  // SearchPackages searches for packages
+  rpc SearchPackages(SearchPackagesRequest) returns (SearchPackagesResponse);
+
+  // GetPackageInfo gets information about a package
+  rpc GetPackageInfo(GetPackageInfoRequest) returns (GetPackageInfoResponse);
+
+  // ResolvePackage resolves package dependencies
+  rpc ResolvePackage(ResolvePackageRequest) returns (ResolvePackageResponse);
+
+  // Job management (Phase 4)
+  // GetJobStatus returns the status of a job
+  rpc GetJobStatus(GetJobStatusRequest) returns (GetJobStatusResponse);
+
+  // ListJobs returns all jobs
+  rpc ListJobs(ListJobsRequest) returns (ListJobsResponse);
+
+  // CancelJob cancels a running or pending job
+  rpc CancelJob(CancelJobRequest) returns (CancelJobResponse);
+}
+
+// ===== Ping =====
+
+message PingRequest {}
+
+message PingResponse {
+  string message = 1;
+  int64 timestamp = 2;
+}
+
+// ===== GetStatus =====
+
+message GetStatusRequest {}
+
+message GetStatusResponse {
+  DaemonStatus daemon = 1;
+  SystemStatus system = 2;
+}
+
+message DaemonStatus {
+  string state = 1;
+  int32 pid = 2;
+  int64 uptime_seconds = 3;
+  string version = 4;
+}
+
+message SystemStatus {
+  int32 installed_packages = 1;
+  int32 available_updates = 2;
+  string portage_version = 3;
+}
+
+// ===== InstallPackage =====
+
+message InstallPackageRequest {
+  string package_name = 1;
+  repeated string use_flags = 2;
+  bool create_snapshot = 3;
+  bool dry_run = 4;
+}
+
+message InstallPackageResponse {
+  string job_id = 4;  // Job ID for tracking (Phase 4)
+  oneof event {
+    ProgressEvent progress = 1;
+    CompletionEvent completion = 2;
+    ErrorEvent error = 3;
+  }
+}
+
+message ProgressEvent {
+  string stage = 1;      // "resolving", "downloading", "compiling", "installing"
+  string message = 2;
+  int32 percent = 3;     // 0-100
+  int64 timestamp = 4;
+}
+
+message CompletionEvent {
+  bool success = 1;
+  string message = 2;
+  repeated string installed_packages = 3;
+  int64 timestamp = 4;
+}
+
+message ErrorEvent {
+  string error = 1;
+  string details = 2;
+  int64 timestamp = 3;
+}
+
+// ===== RemovePackage =====
+
+message RemovePackageRequest {
+  string package_name = 1;
+  bool clean_dependencies = 2;
+  bool dry_run = 3;
+}
+
+message RemovePackageResponse {
+  oneof event {
+    ProgressEvent progress = 1;
+    CompletionEvent completion = 2;
+    ErrorEvent error = 3;
+  }
+}
+
+// ===== UpdateSystem =====
+
+message UpdateSystemRequest {
+  bool deep_update = 1;
+  bool create_snapshot = 2;
+  bool dry_run = 3;
+}
+
+message UpdateSystemResponse {
+  oneof event {
+    ProgressEvent progress = 1;
+    CompletionEvent completion = 2;
+    ErrorEvent error = 3;
+  }
+}
+
+// ===== SearchPackages =====
+
+message SearchPackagesRequest {
+  string query = 1;
+  int32 limit = 2;
+}
+
+message SearchPackagesResponse {
+  repeated PackageInfo packages = 1;
+  int32 total_count = 2;
+}
+
+message PackageInfo {
+  string name = 1;
+  string version = 2;
+  string category = 3;
+  string description = 4;
+  bool installed = 5;
+  repeated string use_flags = 6;
+  string slot = 7;                    // Slot (e.g., "0", "5/5.28")
+}
+
+// ===== GetPackageInfo =====
+
+message GetPackageInfoRequest {
+  string package_name = 1;
+}
+
+message GetPackageInfoResponse {
+  PackageInfo package = 1;
+  PackageDetails details = 2;
+}
+
+message PackageDetails {
+  string homepage = 1;
+  string license = 2;
+  int64 size_bytes = 3;
+  repeated string dependencies = 4;
+  repeated string reverse_dependencies = 5;
+  string install_time = 6;
+}
+
+// ===== ResolvePackage =====
+
+message ResolvePackageRequest {
+  string package_name = 1;
+  repeated string use_flags = 2;
+}
+
+message ResolvePackageResponse {
+  bool success = 1;
+  repeated string packages_to_install = 2;
+  repeated string packages_to_update = 3;
+  repeated string conflicts = 4;
+  string error = 5;
+}
+
+// ===== Job Management (Phase 4) =====
+
+message GetJobStatusRequest {
+  string job_id = 1;
+}
+
+message GetJobStatusResponse {
+  JobInfo job = 1;
+}
+
+message ListJobsRequest {
+  string status_filter = 1;  // Optional: "pending", "running", "completed", "failed", "canceled"
+}
+
+message ListJobsResponse {
+  repeated JobInfo jobs = 1;
+  int32 total_count = 2;
+}
+
+message CancelJobRequest {
+  string job_id = 1;
+}
+
+message CancelJobResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message JobInfo {
+  string id = 1;
+  string type = 2;             // "install", "remove", "update", "sync"
+  string package_name = 3;
+  string status = 4;           // "pending", "running", "completed", "failed", "canceled"
+  int32 progress = 5;          // 0-100
+  string error = 6;            // Error message if failed
+  int64 created_at = 7;        // Unix timestamp
+  int64 started_at = 8;        // Unix timestamp (0 if not started)
+  int64 completed_at = 9;      // Unix timestamp (0 if not completed)
+}

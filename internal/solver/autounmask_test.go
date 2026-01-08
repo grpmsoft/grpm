@@ -1,0 +1,523 @@
+package solver
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/grpmsoft/grpm/internal/pkg"
+)
+
+func TestAutounmaskFile_String(t *testing.T) {
+	tests := []struct {
+		name     string
+		file     AutounmaskFile
+		expected string
+	}{
+		{
+			name:     "package.use",
+			file:     FilePackageUse,
+			expected: "package.use",
+		},
+		{
+			name:     "package.accept_keywords",
+			file:     FilePackageAcceptKeywords,
+			expected: "package.accept_keywords",
+		},
+		{
+			name:     "package.unmask",
+			file:     FilePackageUnmask,
+			expected: "package.unmask",
+		},
+		{
+			name:     "package.license",
+			file:     FilePackageLicense,
+			expected: "package.license",
+		},
+		{
+			name:     "unknown file",
+			file:     AutounmaskFile(99),
+			expected: "unknown",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tt.file.String()
+			if result != tt.expected {
+				t.Errorf("Expected %q, got %q", tt.expected, result)
+			}
+		})
+	}
+}
+
+func TestAutounmaskFile_FilePath(t *testing.T) {
+	tests := []struct {
+		name       string
+		file       AutounmaskFile
+		configRoot string
+		expected   string
+	}{
+		{
+			name:       "default config root",
+			file:       FilePackageUse,
+			configRoot: "/etc/portage",
+			expected:   filepath.Join("/etc/portage", "package.use"),
+		},
+		{
+			name:       "custom config root",
+			file:       FilePackageAcceptKeywords,
+			configRoot: "/custom/portage",
+			expected:   filepath.Join("/custom/portage", "package.accept_keywords"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tt.file.FilePath(tt.configRoot)
+			if result != tt.expected {
+				t.Errorf("Expected %q, got %q", tt.expected, result)
+			}
+		})
+	}
+}
+
+func TestDefaultAutounmaskConfig(t *testing.T) {
+	config := DefaultAutounmaskConfig()
+
+	if config.ConfigRoot != "/etc/portage" {
+		t.Errorf("Expected ConfigRoot '/etc/portage', got %q", config.ConfigRoot)
+	}
+
+	if config.Write {
+		t.Error("Expected Write to be false by default")
+	}
+
+	if config.Continue {
+		t.Error("Expected Continue to be false by default")
+	}
+
+	if config.UseOnly {
+		t.Error("Expected UseOnly to be false by default")
+	}
+}
+
+func TestAutounmaskWriter_AddUseChange(t *testing.T) {
+	writer := NewAutounmaskWriter(nil)
+
+	writer.AddUseChange("sys-libs/zlib", []string{"static-libs"}, "test reason", nil)
+
+	entries := writer.GetEntries()
+	if len(entries) != 1 {
+		t.Fatalf("Expected 1 entry, got %d", len(entries))
+	}
+
+	entry := entries[0]
+	if entry.Atom != "sys-libs/zlib" {
+		t.Errorf("Expected atom 'sys-libs/zlib', got %q", entry.Atom)
+	}
+
+	if len(entry.Changes) != 1 || entry.Changes[0] != "static-libs" {
+		t.Errorf("Expected changes ['static-libs'], got %v", entry.Changes)
+	}
+
+	if entry.File != FilePackageUse {
+		t.Errorf("Expected file FilePackageUse, got %v", entry.File)
+	}
+}
+
+func TestAutounmaskWriter_AddKeywordChange(t *testing.T) {
+	writer := NewAutounmaskWriter(nil)
+
+	writer.AddKeywordChange("app-misc/hello", "~amd64", "testing version", nil)
+
+	entries := writer.GetEntries()
+	if len(entries) != 1 {
+		t.Fatalf("Expected 1 entry, got %d", len(entries))
+	}
+
+	entry := entries[0]
+	if entry.Keyword != "~amd64" {
+		t.Errorf("Expected keyword '~amd64', got %q", entry.Keyword)
+	}
+
+	if entry.File != FilePackageAcceptKeywords {
+		t.Errorf("Expected file FilePackageAcceptKeywords, got %v", entry.File)
+	}
+}
+
+func TestAutounmaskWriter_AddUnmask(t *testing.T) {
+	writer := NewAutounmaskWriter(nil)
+
+	writer.AddUnmask("=sys-libs/zlib-1.3.0", "new version needed", nil)
+
+	entries := writer.GetEntries()
+	if len(entries) != 1 {
+		t.Fatalf("Expected 1 entry, got %d", len(entries))
+	}
+
+	entry := entries[0]
+	if entry.Atom != "=sys-libs/zlib-1.3.0" {
+		t.Errorf("Expected atom '=sys-libs/zlib-1.3.0', got %q", entry.Atom)
+	}
+
+	if entry.File != FilePackageUnmask {
+		t.Errorf("Expected file FilePackageUnmask, got %v", entry.File)
+	}
+}
+
+func TestAutounmaskWriter_GetEntriesByFile(t *testing.T) {
+	writer := NewAutounmaskWriter(nil)
+
+	writer.AddUseChange("pkg-a", []string{"flag1"}, "", nil)
+	writer.AddUseChange("pkg-b", []string{"flag2"}, "", nil)
+	writer.AddKeywordChange("pkg-c", "~amd64", "", nil)
+
+	byFile := writer.GetEntriesByFile()
+
+	if len(byFile[FilePackageUse]) != 2 {
+		t.Errorf("Expected 2 package.use entries, got %d", len(byFile[FilePackageUse]))
+	}
+
+	if len(byFile[FilePackageAcceptKeywords]) != 1 {
+		t.Errorf("Expected 1 package.accept_keywords entry, got %d", len(byFile[FilePackageAcceptKeywords]))
+	}
+}
+
+func TestAutounmaskWriter_GenerateContent(t *testing.T) {
+	writer := NewAutounmaskWriter(nil)
+
+	writer.AddUseChange("sys-libs/zlib", []string{"static-libs", "-minizip"}, "resolve conflict", nil)
+	writer.AddKeywordChange("app-misc/hello", "~amd64", "testing", nil)
+
+	content := writer.GenerateContent()
+
+	// Check package.use content
+	useContent, ok := content[FilePackageUse]
+	if !ok {
+		t.Fatal("Expected package.use content")
+	}
+
+	expectedSubstrings := []string{
+		"Generated by GRPM",
+		"sys-libs/zlib",
+		"static-libs",
+		"-minizip",
+		"resolve conflict",
+	}
+
+	for _, substr := range expectedSubstrings {
+		if !strings.Contains(useContent, substr) {
+			t.Errorf("Expected package.use to contain %q, got:\n%s", substr, useContent)
+		}
+	}
+
+	// Check package.accept_keywords content
+	kwContent, ok := content[FilePackageAcceptKeywords]
+	if !ok {
+		t.Fatal("Expected package.accept_keywords content")
+	}
+
+	if !strings.Contains(kwContent, "app-misc/hello ~amd64") {
+		t.Errorf("Expected keyword entry, got:\n%s", kwContent)
+	}
+}
+
+func TestAutounmaskWriter_FormatPreview(t *testing.T) {
+	tests := []struct {
+		name     string
+		setup    func(*AutounmaskWriter)
+		contains []string
+	}{
+		{
+			name:     "no entries",
+			setup:    func(w *AutounmaskWriter) {},
+			contains: []string{"No autounmask changes required"},
+		},
+		{
+			name: "with entries",
+			setup: func(w *AutounmaskWriter) {
+				w.AddUseChange("sys-libs/zlib", []string{"static-libs"}, "", nil)
+			},
+			contains: []string{
+				"changes would be made",
+				"package.use",
+				"sys-libs/zlib",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			writer := NewAutounmaskWriter(nil)
+			tt.setup(writer)
+
+			preview := writer.FormatPreview()
+
+			for _, substr := range tt.contains {
+				if !strings.Contains(preview, substr) {
+					t.Errorf("Expected preview to contain %q, got:\n%s", substr, preview)
+				}
+			}
+		})
+	}
+}
+
+func TestAutounmaskWriter_HasEntries(t *testing.T) {
+	writer := NewAutounmaskWriter(nil)
+
+	if writer.HasEntries() {
+		t.Error("Expected no entries initially")
+	}
+
+	writer.AddUseChange("pkg", []string{"flag"}, "", nil)
+
+	if !writer.HasEntries() {
+		t.Error("Expected entries after adding")
+	}
+}
+
+func TestAutounmaskWriter_EntryCount(t *testing.T) {
+	writer := NewAutounmaskWriter(nil)
+
+	if writer.EntryCount() != 0 {
+		t.Errorf("Expected 0 entries, got %d", writer.EntryCount())
+	}
+
+	writer.AddUseChange("pkg1", []string{"flag1"}, "", nil)
+	writer.AddUseChange("pkg2", []string{"flag2"}, "", nil)
+
+	if writer.EntryCount() != 2 {
+		t.Errorf("Expected 2 entries, got %d", writer.EntryCount())
+	}
+}
+
+func TestAutounmaskWriter_Clear(t *testing.T) {
+	writer := NewAutounmaskWriter(nil)
+
+	writer.AddUseChange("pkg", []string{"flag"}, "", nil)
+
+	if writer.EntryCount() != 1 {
+		t.Fatal("Expected 1 entry before clear")
+	}
+
+	writer.Clear()
+
+	if writer.EntryCount() != 0 {
+		t.Errorf("Expected 0 entries after clear, got %d", writer.EntryCount())
+	}
+}
+
+func TestAutounmaskWriter_AddFromSolution(t *testing.T) {
+	writer := NewAutounmaskWriter(nil)
+
+	solution := &CollisionSolution{
+		UseChanges: []*UseChangeSuggestion{
+			{
+				Package: pkg.NewPackage("sys-libs/zlib", "1.2.13", "0"),
+				FlagChanges: map[string]bool{
+					"static-libs": true,
+					"minizip":     false,
+				},
+				Reason: "resolve collision",
+			},
+			{
+				Package: pkg.NewPackage("dev-libs/openssl", "1.1.1", "0"),
+				FlagChanges: map[string]bool{
+					"asm": true,
+				},
+				Reason: "required for zlib",
+			},
+		},
+	}
+
+	collision := &SlotCollision{
+		SlotAtom: "sys-libs/zlib:0",
+	}
+
+	writer.AddFromSolution(solution, collision)
+
+	if writer.EntryCount() != 2 {
+		t.Errorf("Expected 2 entries, got %d", writer.EntryCount())
+	}
+
+	entries := writer.GetEntries()
+	for _, entry := range entries {
+		if entry.SourceCollision != collision {
+			t.Error("Expected source collision to be set")
+		}
+	}
+}
+
+func TestAutounmaskWriter_Write(t *testing.T) {
+	// Create temp directory
+	tmpDir, err := os.MkdirTemp("", "grpm-autounmask-test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	config := &AutounmaskConfig{
+		ConfigRoot: tmpDir,
+		Write:      true,
+	}
+
+	writer := NewAutounmaskWriter(config)
+	writer.AddUseChange("sys-libs/zlib", []string{"static-libs"}, "test", nil)
+
+	err = writer.Write()
+	if err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	// Verify file was created
+	path := filepath.Join(tmpDir, "package.use")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("Failed to read written file: %v", err)
+	}
+
+	if !strings.Contains(string(content), "sys-libs/zlib") {
+		t.Errorf("Expected file to contain package atom, got:\n%s", content)
+	}
+}
+
+func TestAutounmaskWriter_Write_NoWrite(t *testing.T) {
+	config := &AutounmaskConfig{
+		ConfigRoot: "/nonexistent/path",
+		Write:      false, // Writing disabled
+	}
+
+	writer := NewAutounmaskWriter(config)
+	writer.AddUseChange("sys-libs/zlib", []string{"static-libs"}, "test", nil)
+
+	// Should not error even with invalid path because Write is false
+	err := writer.Write()
+	if err != nil {
+		t.Errorf("Expected no error with Write=false, got: %v", err)
+	}
+}
+
+func TestAutounmaskWriter_Write_DirectoryStyle(t *testing.T) {
+	// Create temp directory with package.use as directory
+	tmpDir, err := os.MkdirTemp("", "grpm-autounmask-test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Create package.use as directory
+	pkgUseDir := filepath.Join(tmpDir, "package.use")
+	if err := os.MkdirAll(pkgUseDir, 0755); err != nil {
+		t.Fatalf("Failed to create package.use dir: %v", err)
+	}
+
+	config := &AutounmaskConfig{
+		ConfigRoot: tmpDir,
+		Write:      true,
+	}
+
+	writer := NewAutounmaskWriter(config)
+	writer.AddUseChange("sys-libs/zlib", []string{"static-libs"}, "test", nil)
+
+	err = writer.Write()
+	if err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	// Verify file was created inside directory
+	grpmFile := filepath.Join(pkgUseDir, "grpm")
+	content, err := os.ReadFile(grpmFile)
+	if err != nil {
+		t.Fatalf("Failed to read written file: %v", err)
+	}
+
+	if !strings.Contains(string(content), "sys-libs/zlib") {
+		t.Errorf("Expected file to contain package atom, got:\n%s", content)
+	}
+}
+
+func TestInteractiveAutounmask_ProcessCollisions(t *testing.T) {
+	graph := NewDependencyGraph()
+
+	// Setup collision
+	p1 := pkg.NewPackage("sys-libs/zlib", "1.2.13", "0")
+	p2 := pkg.NewPackage("sys-libs/zlib", "1.2.11", "0")
+
+	graph.AddPackage(p1, true)
+	node2 := &GraphNode{
+		Package:      p2,
+		Dependencies: make([]*GraphEdge, 0),
+		Dependents:   make([]*GraphEdge, 0),
+		Depth:        -1,
+		State:        NodeStateUnvisited,
+	}
+	graph.nodes["sys-libs/zlib-1.2.11"] = node2
+
+	detector := NewSlotCollisionDetector(graph, nil)
+	collisions := detector.DetectCollisions()
+
+	resolver := NewCollisionResolver(detector, nil)
+	ia := NewInteractiveAutounmask(resolver, nil)
+
+	err := ia.ProcessCollisions(collisions)
+	if err != nil {
+		t.Fatalf("ProcessCollisions failed: %v", err)
+	}
+
+	// Check that writer was populated (may have 0 entries for version conflicts)
+	writer := ia.GetWriter()
+	if writer == nil {
+		t.Error("Expected non-nil writer")
+	}
+}
+
+func TestInteractiveAutounmask_FormatReport(t *testing.T) {
+	graph := NewDependencyGraph()
+
+	p1 := pkg.NewPackage("sys-libs/zlib", "1.2.13", "0")
+	graph.AddPackage(p1, true)
+
+	detector := NewSlotCollisionDetector(graph, nil)
+	collisions := detector.DetectCollisions() // Should be empty
+
+	resolver := NewCollisionResolver(detector, nil)
+	ia := NewInteractiveAutounmask(resolver, nil)
+
+	report := ia.FormatReport(collisions)
+
+	if !strings.Contains(report, "No slot conflicts") {
+		t.Errorf("Expected 'No slot conflicts', got:\n%s", report)
+	}
+}
+
+func BenchmarkAutounmaskWriter_GenerateContent(b *testing.B) {
+	writer := NewAutounmaskWriter(nil)
+
+	// Add many entries
+	for i := 0; i < 100; i++ {
+		atom := fmt.Sprintf("category-%d/package-%d", i%10, i)
+		writer.AddUseChange(atom, []string{"flag1", "flag2", "-flag3"}, "benchmark", nil)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = writer.GenerateContent()
+	}
+}
+
+func BenchmarkAutounmaskWriter_FormatPreview(b *testing.B) {
+	writer := NewAutounmaskWriter(nil)
+
+	for i := 0; i < 50; i++ {
+		atom := fmt.Sprintf("category/package-%d", i)
+		writer.AddUseChange(atom, []string{"flag"}, "reason", nil)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = writer.FormatPreview()
+	}
+}

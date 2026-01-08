@@ -1,0 +1,50 @@
+# GolangCI-Lint v2 Configuration
+# Documentation: https://golangci-lint.run/docs/configuration/
+
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  # Enable additional useful linters beyond defaults
+  enable:
+    - misspell      # Check for misspelled words
+    - unconvert     # Remove unnecessary type conversions
+    - gocyclo       # Check cyclomatic complexity
+    - errname       # Check error naming conventions
+    - errorlint     # Check error wrapping
+    - whitespace    # Check for trailing whitespace
+
+  settings:
+    govet:
+      # Disable fieldalignment check (memory optimization not critical in rapid dev)
+      disable:
+        - fieldalignment
+
+    gocyclo:
+      # Allow higher complexity during rapid development
+      min-complexity: 20
+
+    misspell:
+      locale: US
+
+  # Exclusions (v2 structure)
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - gocyclo
+          - errcheck
+          - gosec
+
+      - path: ".*\\.pb\\.go"  # Generated files
+        linters:
+          - gofmt
+          - goimports
+
+issues:
+  # Show all issues
+  max-issues-per-linter: 0
+  max-same-issues: 0
