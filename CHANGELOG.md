@@ -17,6 +17,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.2.0] - 2026-01-09
+
+### Ebuild Parser Improvements
+
+This release focuses on improving ebuild parsing with proper variable expansion and removing hardcoded eclass handling.
+
+### Added
+
+#### Package Variable Expansion (v0.2.0-003)
+- `PackageMetadata` struct for PMS 11.1 variables (P, PN, PV, PR, PVR, PF, CATEGORY)
+- `NewPackageMetadata()` constructor for building metadata from package info
+- `NewEbuildParserWithMetadata()` for creating parser with variable expansion context
+- Proper `${P}`, `${PN}`, `${PV}`, `${PVR}`, `${PF}`, `${CATEGORY}` expansion in ebuild content
+- Exported `ExtractVariable()` method for public access
+
+#### REST API Improvements (v0.2.0-001)
+- Unix socket support for daemon communication
+- Improved socket handling and error messages
+
+#### xargs Helper (v0.2.0-004)
+- Native `xargs` implementation for ebuild helpers
+- Cross-platform support without external dependencies
+
+### Changed
+
+#### Eclass Loading (v0.2.0-005)
+- **BREAKING**: Removed `handleBuiltinEclass()` function
+- All eclasses now loaded exclusively from repository
+- Go helper implementations (tc-getCC, etc.) registered in interpreter
+- More accurate Portage behavior emulation
+
+### Fixed
+- Eclass loading now correctly sources from repository filesystem
+- Variable expansion works in DEPEND, RDEPEND, SRC_URI, SLOT, etc.
+- Tests updated to use real eclass files instead of builtin mocks
+
+---
+
 ## [0.1.1] - 2026-01-09
 
 ### Module Architecture Improvements

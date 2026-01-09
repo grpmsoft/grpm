@@ -331,7 +331,7 @@ func (i *Interpreter) buildCommandMap() map[string]helperFunc {
 //   - default, default_src_* (default phase implementations)
 //   - ver_cut, ver_rs (version manipulation)
 //   - dosym, edosym, fperms, fowners, doconfd, doinitd, doenvd (installation)
-//   - sed, cat, mkdir, rm, cp, mv, chmod, ln, find, grep, etc. (utilities)
+//   - sed, cat, mkdir, rm, cp, mv, chmod, ln, find, grep, xargs, etc. (utilities)
 //   - epatch, eshopts_push, eshopts_pop, estack_push, estack_pop (eutils)
 //   - get_libdir, multilib_native_use_* (multilib)
 //   - append-cflags, filter-flags, strip-flags, etc. (flag-o-matic)
@@ -351,6 +351,12 @@ func (i *Interpreter) execHandler(next interp.ExecHandlerFunc) interp.ExecHandle
 
 		cmd := args[0]
 		cmdArgs := args[1:]
+
+		// Special handling for xargs - needs stdin from context
+		if cmd == "xargs" {
+			hc := interp.HandlerCtx(ctx)
+			return i.helpers.XargsWithStdin(hc.Stdin, cmdArgs)
+		}
 
 		// Look up command in map
 		if handler, ok := commands[cmd]; ok {

@@ -33,7 +33,8 @@ type Config struct {
 
 	// REST API
 	RESTEnabled      bool   `toml:"rest_enabled"`
-	RESTBind         string `toml:"rest_bind"`
+	RESTSocketPath   string `toml:"rest_socket"` // Unix socket path for REST API
+	RESTBind         string `toml:"rest_bind"`   // TCP bind address (empty = disabled)
 	RESTAuthRequired bool   `toml:"rest_auth_required"`
 }
 
@@ -54,8 +55,9 @@ func DefaultConfig() *Config {
 		QueueMaxWorkers:         4,
 		QueueMaxSize:            100,
 		RESTEnabled:             true,
-		RESTBind:                "127.0.0.1:8080",
-		RESTAuthRequired:        false, // For localhost
+		RESTSocketPath:          "/var/run/grpm-rest.sock",
+		RESTBind:                "", // Empty = TCP disabled, use socket only
+		RESTAuthRequired:        false,
 	}
 }
 

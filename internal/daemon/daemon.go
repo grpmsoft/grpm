@@ -27,6 +27,7 @@ type Daemon struct {
 	grpcServer *grpc.Server
 	grpcLis    net.Listener
 	restServer *http.Server
+	restLis    net.Listener // REST Unix socket listener (nil if TCP mode)
 
 	// State
 	state   DaemonState
@@ -204,6 +205,11 @@ func (d *Daemon) Stop(ctx context.Context) error {
 		}
 	}
 
+	// Close REST socket listener first to stop accepting new connections
+	if d.restLis != nil {
+		_ = d.restLis.Close()
+	}
+
 	// Stop REST server (respects context timeout)
 	var restErr error
 	if d.restServer != nil {
@@ -216,6 +222,13 @@ func (d *Daemon) Stop(ctx context.Context) error {
 			}
 		} else {
 			log.Printf("REST server stopped gracefully")
+		}
+	}
+
+	// Clean up REST socket file
+	if d.config.RESTSocketPath != "" {
+		if err := os.RemoveAll(d.config.RESTSocketPath); err != nil {
+			log.Printf("Failed to remove REST socket: %v", err)
 		}
 	}
 
@@ -299,9 +312,9 @@ func (d *Daemon) startGRPCServer() error {
 	return nil
 }
 
-// startRESTServer starts the REST API server
+// startRESTServer starts the REST API server on Unix socket and/or TCP
 func (d *Daemon) startRESTServer() error {
-	// Create HTTP server
+	// Create HTTP server (Addr only used for TCP mode)
 	d.restServer = &http.Server{
 		Addr:         d.config.RESTBind,
 		Handler:      d.createRESTHandler(),
@@ -310,13 +323,63 @@ func (d *Daemon) startRESTServer() error {
 		IdleTimeout:  60 * time.Second,
 	}
 
-	// Start REST server in background
+	// Start Unix socket listener if configured
+	if d.config.RESTSocketPath != "" {
+		if err := d.startRESTUnixSocket(); err != nil {
+			return err
+		}
+	}
+
+	// Start TCP listener if configured
+	if d.config.RESTBind != "" {
+		if err := d.startRESTTCP(); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// startRESTUnixSocket starts REST API on Unix socket
+func (d *Daemon) startRESTUnixSocket() error {
+	// Remove old socket if exists
+	if err := os.RemoveAll(d.config.RESTSocketPath); err != nil {
+		return fmt.Errorf("failed to remove old REST socket: %w", err)
+	}
+
+	// Create Unix listener
+	listener, err := net.Listen("unix", d.config.RESTSocketPath)
+	if err != nil {
+		return fmt.Errorf("failed to listen on REST Unix socket: %w", err)
+	}
+	d.restLis = listener
+
+	// Set socket permissions (owner read/write only)
+	if err := os.Chmod(d.config.RESTSocketPath, 0600); err != nil {
+		return fmt.Errorf("failed to set REST socket permissions: %w", err)
+	}
+
+	// Start server on Unix socket
+	d.wg.Add(1)
+	go func() {
+		defer d.wg.Done()
+		log.Printf("REST API listening on unix://%s", d.config.RESTSocketPath)
+		if err := d.restServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Printf("REST Unix socket server error: %v", err)
+		}
+	}()
+
+	return nil
+}
+
+// startRESTTCP starts REST API on TCP port
+func (d *Daemon) startRESTTCP() error {
 	d.wg.Add(1)
 	go func() {
 		defer d.wg.Done()
 		log.Printf("REST API listening on http://%s", d.config.RESTBind)
 		if err := d.restServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Printf("REST server error: %v", err)
+			log.Printf("REST TCP server error: %v", err)
 		}
 	}()
 

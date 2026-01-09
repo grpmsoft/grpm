@@ -564,10 +564,340 @@ func (h *Helpers) Grep(args []string) error {
 	return nil
 }
 
-// Xargs executes command with arguments from stdin (stub).
+// XargsOptions configures xargs behavior.
+type XargsOptions struct {
+	NullDelimiter bool   // -0: Use null byte as delimiter
+	MaxArgs       int    // -n: Maximum arguments per command invocation
+	NoRunIfEmpty  bool   // -r: Don't run command if stdin is empty
+	Delimiter     string // -d: Custom delimiter
+	Verbose       bool   // -t: Print commands before executing
+}
+
+// Xargs executes command with arguments from stdin.
+//
+// Usage: xargs [OPTIONS] COMMAND [INITIAL-ARGS]
+//
+// Reads arguments from stdin (typically piped from another command)
+// and executes the specified command with those arguments.
+//
+// Options:
+//
+//	-0, --null           Items are separated by null byte, not whitespace
+//	-n N, --max-args=N   Use at most N arguments per command line
+//	-r, --no-run-if-empty  Don't run if stdin is empty
+//	-d CHAR              Use CHAR as delimiter instead of whitespace
+//	-t, --verbose        Print commands before executing
+//
+// This is called from XargsWithStdin which provides the stdin reader.
 func (h *Helpers) Xargs(args []string) error {
-	// Stub - would need to read from stdin and execute command
-	h.writeStdout(">>> xargs: stub implementation\n")
+	// This is a fallback when called without stdin context.
+	// Real implementation is XargsWithStdin which gets stdin from interpreter.
+	h.writeStderr(">>> xargs: warning: no stdin available (use in pipeline)\n")
+	return nil
+}
+
+// XargsWithStdin executes xargs with provided stdin reader.
+//
+// This is the real implementation called by the interpreter when it
+// can provide the stdin reader from the shell context.
+func (h *Helpers) XargsWithStdin(stdin io.Reader, args []string) error {
+	opts, cmdIdx := h.parseXargsOptions(args)
+
+	// Get command and initial args
+	if cmdIdx >= len(args) {
+		// No command specified - default to echo
+		return h.xargsExecute(stdin, opts, "echo", nil)
+	}
+
+	cmd := args[cmdIdx]
+	var initialArgs []string
+	if cmdIdx+1 < len(args) {
+		initialArgs = args[cmdIdx+1:]
+	}
+
+	return h.xargsExecute(stdin, opts, cmd, initialArgs)
+}
+
+// parseXargsOptions parses xargs command line options.
+// Returns options and index of first non-option argument (command).
+func (h *Helpers) parseXargsOptions(args []string) (XargsOptions, int) {
+	opts := XargsOptions{
+		MaxArgs:   0,  // 0 means unlimited
+		Delimiter: "", // empty means whitespace/newline
+	}
+
+	i := 0
+	for i < len(args) {
+		arg := args[i]
+		advance, done := h.parseXargsSingleOption(&opts, args, i)
+		i += advance
+		if done {
+			break
+		}
+		// If advance is 0, we hit a non-option (command)
+		if advance == 0 && !strings.HasPrefix(arg, "-") {
+			break
+		}
+	}
+
+	return opts, i
+}
+
+// parseXargsSingleOption parses a single xargs option.
+// Returns (advance count, should stop parsing).
+func (h *Helpers) parseXargsSingleOption(opts *XargsOptions, args []string, i int) (int, bool) {
+	if i >= len(args) {
+		return 0, true
+	}
+
+	arg := args[i]
+
+	// Simple boolean flags
+	if arg == "-0" || arg == "--null" {
+		opts.NullDelimiter = true
+		return 1, false
+	}
+	if arg == "-r" || arg == "--no-run-if-empty" {
+		opts.NoRunIfEmpty = true
+		return 1, false
+	}
+	if arg == "-t" || arg == "--verbose" {
+		opts.Verbose = true
+		return 1, false
+	}
+
+	// Max args option
+	if advance := h.parseXargsMaxArgs(opts, args, i); advance > 0 {
+		return advance, false
+	}
+
+	// Delimiter option
+	if advance := h.parseXargsDelimiter(opts, args, i); advance > 0 {
+		return advance, false
+	}
+
+	// End of options marker
+	if arg == "--" {
+		return 1, true
+	}
+
+	// Unknown option - skip
+	if strings.HasPrefix(arg, "-") {
+		return 1, false
+	}
+
+	// Non-option found (command)
+	return 0, true
+}
+
+// parseXargsMaxArgs parses -n / --max-args option.
+// Returns advance count (0 if not a max-args option).
+func (h *Helpers) parseXargsMaxArgs(opts *XargsOptions, args []string, i int) int {
+	arg := args[i]
+
+	if arg == "-n" || arg == "--max-args" {
+		if i+1 < len(args) {
+			n, err := strconv.Atoi(args[i+1])
+			if err == nil && n > 0 {
+				opts.MaxArgs = n
+			}
+			return 2
+		}
+		return 1
+	}
+
+	if strings.HasPrefix(arg, "--max-args=") {
+		val := strings.TrimPrefix(arg, "--max-args=")
+		n, err := strconv.Atoi(val)
+		if err == nil && n > 0 {
+			opts.MaxArgs = n
+		}
+		return 1
+	}
+
+	return 0
+}
+
+// parseXargsDelimiter parses -d / --delimiter option.
+// Returns advance count (0 if not a delimiter option).
+func (h *Helpers) parseXargsDelimiter(opts *XargsOptions, args []string, i int) int {
+	arg := args[i]
+
+	if arg == "-d" || arg == "--delimiter" {
+		if i+1 < len(args) {
+			opts.Delimiter = args[i+1]
+			return 2
+		}
+		return 1
+	}
+
+	if strings.HasPrefix(arg, "-d") && len(arg) > 2 {
+		// -dX format (delimiter immediately follows)
+		opts.Delimiter = strings.TrimPrefix(arg, "-d")
+		return 1
+	}
+
+	if strings.HasPrefix(arg, "--delimiter=") {
+		opts.Delimiter = strings.TrimPrefix(arg, "--delimiter=")
+		return 1
+	}
+
+	return 0
+}
+
+// xargsExecute reads input and executes command with batched arguments.
+func (h *Helpers) xargsExecute(stdin io.Reader, opts XargsOptions, cmd string, initialArgs []string) error {
+	// Read all input arguments
+	inputArgs, err := h.xargsReadInput(stdin, opts)
+	if err != nil {
+		return &DieError{Message: fmt.Sprintf("xargs: reading input: %v", err)}
+	}
+
+	// Check if we should run at all
+	if len(inputArgs) == 0 && opts.NoRunIfEmpty {
+		return nil
+	}
+
+	// Batch arguments and execute
+	if opts.MaxArgs > 0 && len(inputArgs) > opts.MaxArgs {
+		// Execute in batches
+		for i := 0; i < len(inputArgs); i += opts.MaxArgs {
+			end := i + opts.MaxArgs
+			if end > len(inputArgs) {
+				end = len(inputArgs)
+			}
+			batch := inputArgs[i:end]
+			if err := h.xargsRunCommand(cmd, initialArgs, batch, opts.Verbose); err != nil {
+				return err
+			}
+		}
+	} else {
+		// Execute all at once
+		if err := h.xargsRunCommand(cmd, initialArgs, inputArgs, opts.Verbose); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// xargsReadInput reads arguments from stdin based on options.
+func (h *Helpers) xargsReadInput(stdin io.Reader, opts XargsOptions) ([]string, error) {
+	if stdin == nil {
+		return nil, nil
+	}
+
+	var args []string
+
+	if opts.NullDelimiter {
+		// Read null-delimited input
+		args = h.xargsReadNullDelimited(stdin)
+	} else if opts.Delimiter != "" {
+		// Read with custom delimiter
+		args = h.xargsReadDelimited(stdin, opts.Delimiter)
+	} else {
+		// Read whitespace/newline delimited (default)
+		args = h.xargsReadWhitespaceDelimited(stdin)
+	}
+
+	return args, nil
+}
+
+// xargsReadNullDelimited reads null-byte delimited input.
+func (h *Helpers) xargsReadNullDelimited(stdin io.Reader) []string {
+	var args []string
+	scanner := bufio.NewScanner(stdin)
+	scanner.Split(func(data []byte, atEOF bool) (advance int, token []byte, err error) {
+		// Split on null byte
+		for i := 0; i < len(data); i++ {
+			if data[i] == 0 {
+				return i + 1, data[:i], nil
+			}
+		}
+		if atEOF && len(data) > 0 {
+			return len(data), data, nil
+		}
+		return 0, nil, nil
+	})
+
+	for scanner.Scan() {
+		text := scanner.Text()
+		if text != "" {
+			args = append(args, text)
+		}
+	}
+
+	return args
+}
+
+// xargsReadDelimited reads input with custom delimiter.
+func (h *Helpers) xargsReadDelimited(stdin io.Reader, delimiter string) []string {
+	var args []string
+
+	content, err := io.ReadAll(stdin)
+	if err != nil {
+		return nil
+	}
+
+	// Split by delimiter
+	parts := strings.Split(string(content), delimiter)
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed != "" {
+			args = append(args, trimmed)
+		}
+	}
+
+	return args
+}
+
+// xargsReadWhitespaceDelimited reads whitespace/newline delimited input (default).
+func (h *Helpers) xargsReadWhitespaceDelimited(stdin io.Reader) []string {
+	var args []string
+	scanner := bufio.NewScanner(stdin)
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		// Split line on whitespace
+		fields := strings.Fields(line)
+		args = append(args, fields...)
+	}
+
+	return args
+}
+
+// xargsRunCommand executes the command with given arguments.
+func (h *Helpers) xargsRunCommand(cmd string, initialArgs, inputArgs []string, verbose bool) error {
+	// Build full argument list
+	fullArgs := make([]string, 0, len(initialArgs)+len(inputArgs))
+	fullArgs = append(fullArgs, initialArgs...)
+	fullArgs = append(fullArgs, inputArgs...)
+
+	if verbose {
+		// Print command before executing
+		h.writeStderr(cmd + " " + strings.Join(fullArgs, " ") + "\n")
+	}
+
+	// Execute command
+	execCmd := exec.Command(cmd, fullArgs...)
+	if h.env != nil && h.env.S != "" {
+		execCmd.Dir = h.env.S
+	}
+
+	// Set environment if available
+	if h.env != nil {
+		execCmd.Env = h.env.ToSlice()
+	}
+
+	output, err := execCmd.CombinedOutput()
+	if len(output) > 0 {
+		h.writeStdout(string(output))
+	}
+
+	if err != nil {
+		return &DieError{Message: fmt.Sprintf("xargs: %s: %v", cmd, err)}
+	}
+
 	return nil
 }
 

@@ -181,7 +181,7 @@ func TestEclassStack(t *testing.T) {
 
 // TestEclassLoader tests the EclassLoader functionality.
 func TestEclassLoader(t *testing.T) {
-	t.Run("BuiltinEclass handling", func(t *testing.T) {
+	t.Run("EclassLoader creation", func(t *testing.T) {
 		pkg := &pkgdomain.Package{
 			Name:     "app-misc/test",
 			Version:  "1.0",
@@ -198,12 +198,12 @@ func TestEclassLoader(t *testing.T) {
 		registry := NewEclassRegistry("")
 		loader := NewEclassLoader(registry, interp)
 
-		// Test that builtin eclasses are handled without file access
-		// toolchain-funcs is a builtin - handleBuiltinEclass returns true
-		// but doesn't call MarkLoaded (that's done in loadEclass)
-		handled := loader.handleBuiltinEclass("toolchain-funcs")
-		if !handled {
-			t.Error("toolchain-funcs should be a builtin eclass")
+		// Verify loader is created with correct references
+		if loader.registry != registry {
+			t.Error("loader should have correct registry reference")
+		}
+		if loader.interpreter != interp {
+			t.Error("loader should have correct interpreter reference")
 		}
 	})
 }
@@ -1071,12 +1071,28 @@ func TestInheritRealImplementation(t *testing.T) {
 	})
 
 	t.Run("inherit with eclassLoader uses real implementation", func(t *testing.T) {
+		// Create test eclass directory
+		tmpDir := t.TempDir()
+		eclassDir := filepath.Join(tmpDir, "eclass")
+		if err := os.MkdirAll(eclassDir, 0755); err != nil {
+			t.Fatalf("failed to create eclass dir: %v", err)
+		}
+
+		// Create test eclass file (simulating toolchain-funcs)
+		eclassContent := `# toolchain-funcs.eclass - Test eclass
+tc-getCC() { echo "gcc"; }
+tc-getCXX() { echo "g++"; }
+`
+		if err := os.WriteFile(filepath.Join(eclassDir, "toolchain-funcs.eclass"), []byte(eclassContent), 0644); err != nil {
+			t.Fatalf("failed to write eclass: %v", err)
+		}
+
 		pkg := &pkgdomain.Package{
 			Name:    "app-misc/test",
 			Version: "1.0",
 		}
 
-		env, err := NewEnvironment(pkg, "/tmp/portage", "/var/db/repos/gentoo", "/var/cache/distfiles")
+		env, err := NewEnvironment(pkg, "/tmp/portage", tmpDir, "/var/cache/distfiles")
 		if err != nil {
 			t.Fatalf("NewEnvironment failed: %v", err)
 		}
@@ -1091,10 +1107,10 @@ func TestInheritRealImplementation(t *testing.T) {
 			t.Fatal("eclassLoader should be set when using Interpreter")
 		}
 
-		// Inherit a builtin eclass (toolchain-funcs)
+		// Inherit the test eclass
 		err = helpers.Inherit([]string{"toolchain-funcs"})
 		if err != nil {
-			t.Errorf("Inherit should succeed for builtin eclass: %v", err)
+			t.Errorf("Inherit should succeed: %v", err)
 		}
 
 		// Check that INHERITED is populated
@@ -1104,13 +1120,33 @@ func TestInheritRealImplementation(t *testing.T) {
 		}
 	})
 
-	t.Run("inherit multiple builtin eclasses", func(t *testing.T) {
+	t.Run("inherit multiple eclasses", func(t *testing.T) {
+		// Create test eclass directory
+		tmpDir := t.TempDir()
+		eclassDir := filepath.Join(tmpDir, "eclass")
+		if err := os.MkdirAll(eclassDir, 0755); err != nil {
+			t.Fatalf("failed to create eclass dir: %v", err)
+		}
+
+		// Create test eclasses
+		eclasses := map[string]string{
+			"toolchain-funcs": "# toolchain-funcs.eclass\ntc-getCC() { echo gcc; }",
+			"eutils":          "# eutils.eclass\nepatch() { eapply \"$@\"; }",
+			"multilib":        "# multilib.eclass\nget_libdir() { echo lib64; }",
+		}
+		for name, content := range eclasses {
+			path := filepath.Join(eclassDir, name+".eclass")
+			if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+				t.Fatalf("failed to write eclass %s: %v", name, err)
+			}
+		}
+
 		pkg := &pkgdomain.Package{
 			Name:    "app-misc/test",
 			Version: "1.0",
 		}
 
-		env, err := NewEnvironment(pkg, "/tmp/portage", "/var/db/repos/gentoo", "/var/cache/distfiles")
+		env, err := NewEnvironment(pkg, "/tmp/portage", tmpDir, "/var/cache/distfiles")
 		if err != nil {
 			t.Fatalf("NewEnvironment failed: %v", err)
 		}
@@ -1119,7 +1155,7 @@ func TestInheritRealImplementation(t *testing.T) {
 		interp := NewInterpreter(env, &stdout, &stderr)
 		helpers := interp.GetHelpers()
 
-		// Inherit multiple builtin eclasses
+		// Inherit multiple eclasses
 		err = helpers.Inherit([]string{"toolchain-funcs", "eutils", "multilib"})
 		if err != nil {
 			t.Errorf("Inherit should succeed: %v", err)
@@ -1132,12 +1168,25 @@ func TestInheritRealImplementation(t *testing.T) {
 	})
 
 	t.Run("inherit prevents double loading", func(t *testing.T) {
+		// Create test eclass directory
+		tmpDir := t.TempDir()
+		eclassDir := filepath.Join(tmpDir, "eclass")
+		if err := os.MkdirAll(eclassDir, 0755); err != nil {
+			t.Fatalf("failed to create eclass dir: %v", err)
+		}
+
+		// Create test eclass
+		eclassContent := "# toolchain-funcs.eclass\ntc-getCC() { echo gcc; }"
+		if err := os.WriteFile(filepath.Join(eclassDir, "toolchain-funcs.eclass"), []byte(eclassContent), 0644); err != nil {
+			t.Fatalf("failed to write eclass: %v", err)
+		}
+
 		pkg := &pkgdomain.Package{
 			Name:    "app-misc/test",
 			Version: "1.0",
 		}
 
-		env, err := NewEnvironment(pkg, "/tmp/portage", "/var/db/repos/gentoo", "/var/cache/distfiles")
+		env, err := NewEnvironment(pkg, "/tmp/portage", tmpDir, "/var/cache/distfiles")
 		if err != nil {
 			t.Fatalf("NewEnvironment failed: %v", err)
 		}
@@ -1401,13 +1450,30 @@ einfo "After inherit"
 		}
 	})
 
-	t.Run("inherit builtin from script", func(t *testing.T) {
+	t.Run("inherit eclass from script", func(t *testing.T) {
+		// Create test eclass directory
+		tmpDir := t.TempDir()
+		eclassDir := filepath.Join(tmpDir, "eclass")
+		if err := os.MkdirAll(eclassDir, 0755); err != nil {
+			t.Fatalf("failed to create eclass dir: %v", err)
+		}
+
+		// Create test eclass that defines tc-getCC
+		eclassContent := `# toolchain-funcs.eclass
+tc-getCC() {
+	echo "gcc"
+}
+`
+		if err := os.WriteFile(filepath.Join(eclassDir, "toolchain-funcs.eclass"), []byte(eclassContent), 0644); err != nil {
+			t.Fatalf("failed to write eclass: %v", err)
+		}
+
 		pkg := &pkgdomain.Package{
 			Name:    "app-misc/test",
 			Version: "1.0",
 		}
 
-		env, err := NewEnvironment(pkg, "/tmp/portage", "/var/db/repos/gentoo", "/var/cache/distfiles")
+		env, err := NewEnvironment(pkg, "/tmp/portage", tmpDir, "/var/cache/distfiles")
 		if err != nil {
 			t.Fatalf("NewEnvironment failed: %v", err)
 		}
@@ -1415,7 +1481,7 @@ einfo "After inherit"
 		var stdout, stderr bytes.Buffer
 		interp := NewInterpreter(env, &stdout, &stderr)
 
-		// Run script that inherits builtin eclass and uses its function
+		// Run script that inherits eclass and uses its function
 		script := `inherit toolchain-funcs
 CC=$(tc-getCC)
 einfo "CC is $CC"
@@ -1425,7 +1491,7 @@ einfo "CC is $CC"
 			t.Errorf("Script execution failed: %v", err)
 		}
 
-		// Check output contains gcc (default CC)
+		// Check output contains gcc
 		output := stdout.String()
 		if !bytes.Contains([]byte(output), []byte("gcc")) {
 			t.Errorf("Output should contain 'gcc', got: %s", output)

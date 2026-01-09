@@ -21,7 +21,7 @@
 
 GRPM (Go Resource Package Manager) is a modern source-based package manager written in Go, inspired by and fully compatible with **Gentoo's Portage**. It brings SAT-based dependency resolution, transactional updates with filesystem snapshots, and binary package support. While rooted in the Gentoo ecosystem, GRPM is designed to be distribution-agnostic and extensible for any Linux distribution.
 
-**Current Version:** v0.1.1 (January 2026)
+**Current Version:** v0.2.0 (January 2026)
 
 ---
 

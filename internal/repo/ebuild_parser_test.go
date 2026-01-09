@@ -244,7 +244,7 @@ SLOT="0"
 
 	for _, tt := range tests {
 		t.Run(tt.varName, func(t *testing.T) {
-			result := parser.extractVariable(tt.varName)
+			result := parser.ExtractVariable(tt.varName)
 			if result != tt.expected {
 				t.Errorf("extractVariable(%q) = %q, expected %q", tt.varName, result, tt.expected)
 			}
@@ -273,7 +273,7 @@ DEPEND="${COMMON_DEPEND}"
 
 	for _, tt := range tests {
 		t.Run(tt.varName, func(t *testing.T) {
-			result := parser.extractVariable(tt.varName)
+			result := parser.ExtractVariable(tt.varName)
 			if result != tt.expected {
 				t.Errorf("extractVariable(%q) = %q, expected %q", tt.varName, result, tt.expected)
 			}
@@ -291,7 +291,7 @@ RDEPEND="${COMMON_DEPEND} net-libs/curl"
 
 	parser := NewEbuildParser(content)
 
-	result := parser.extractVariable("RDEPEND")
+	result := parser.ExtractVariable("RDEPEND")
 	expected := "sys-libs/zlib dev-libs/openssl net-libs/curl"
 
 	if result != expected {
@@ -307,7 +307,7 @@ RDEPEND="${PYTHON_DEPS:-dev-lang/python}"
 
 	parser := NewEbuildParser(content)
 
-	result := parser.extractVariable("RDEPEND")
+	result := parser.ExtractVariable("RDEPEND")
 	expected := "dev-lang/python" // PYTHON_DEPS not defined, use default
 
 	if result != expected {
@@ -334,7 +334,7 @@ BDEPEND="sys-devel/gcc"
 	parser := NewEbuildParser(content)
 
 	// Test RDEPEND expansion
-	rdepend := parser.extractVariable("RDEPEND")
+	rdepend := parser.ExtractVariable("RDEPEND")
 	if rdepend == "" {
 		t.Error("extractVariable(RDEPEND) returned empty string")
 	}
@@ -348,7 +348,7 @@ BDEPEND="sys-devel/gcc"
 	}
 
 	// Test DEPEND expansion
-	depend := parser.extractVariable("DEPEND")
+	depend := parser.ExtractVariable("DEPEND")
 	if !contains(depend, "dev-lang/python:3.10") {
 		t.Errorf("extractVariable(DEPEND) should contain expanded PYTHON_DEPS\nGot: %q", depend)
 	}
@@ -366,7 +366,7 @@ RDEPEND="${VAR_A}"
 	parser := NewEbuildParser(content)
 
 	// Should not crash, returns empty string due to depth limit
-	result := parser.extractVariable("RDEPEND")
+	result := parser.ExtractVariable("RDEPEND")
 
 	// Result will be empty or partially expanded (depth limit reached)
 	t.Logf("Infinite recursion test result: %q", result)
@@ -668,8 +668,8 @@ DEPEND="${COMMON_DEPEND}"
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		parser := NewEbuildParser(content)
-		_ = parser.extractVariable("RDEPEND")
-		_ = parser.extractVariable("DEPEND")
+		_ = parser.ExtractVariable("RDEPEND")
+		_ = parser.ExtractVariable("DEPEND")
 	}
 }
 
@@ -846,5 +846,247 @@ RDEPEND="
 
 	if len(foundCompilers) != 3 {
 		t.Errorf("Expected to find all 3 compilers, found %d", len(foundCompilers))
+	}
+}
+
+// TestNewPackageMetadata tests PackageMetadata construction
+func TestNewPackageMetadata(t *testing.T) {
+	tests := []struct {
+		name     string
+		category string
+		pkgName  string
+		version  string
+		expected PackageMetadata
+	}{
+		{
+			name:     "Simple version without revision",
+			category: "app-misc",
+			pkgName:  "hello",
+			version:  "2.10",
+			expected: PackageMetadata{
+				Category: "app-misc",
+				PN:       "hello",
+				PV:       "2.10",
+				PR:       "r0",
+				PVR:      "2.10",
+				PF:       "hello-2.10",
+				P:        "hello-2.10",
+			},
+		},
+		{
+			name:     "Version with revision",
+			category: "sys-libs",
+			pkgName:  "zlib",
+			version:  "1.2.13-r1",
+			expected: PackageMetadata{
+				Category: "sys-libs",
+				PN:       "zlib",
+				PV:       "1.2.13",
+				PR:       "r1",
+				PVR:      "1.2.13-r1",
+				PF:       "zlib-1.2.13-r1",
+				P:        "zlib-1.2.13",
+			},
+		},
+		{
+			name:     "Version with higher revision",
+			category: "dev-libs",
+			pkgName:  "openssl",
+			version:  "3.0.10-r5",
+			expected: PackageMetadata{
+				Category: "dev-libs",
+				PN:       "openssl",
+				PV:       "3.0.10",
+				PR:       "r5",
+				PVR:      "3.0.10-r5",
+				PF:       "openssl-3.0.10-r5",
+				P:        "openssl-3.0.10",
+			},
+		},
+		{
+			name:     "Suffixed version",
+			category: "dev-lang",
+			pkgName:  "python",
+			version:  "3.11.6_beta1",
+			expected: PackageMetadata{
+				Category: "dev-lang",
+				PN:       "python",
+				PV:       "3.11.6_beta1",
+				PR:       "r0",
+				PVR:      "3.11.6_beta1",
+				PF:       "python-3.11.6_beta1",
+				P:        "python-3.11.6_beta1",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			meta := NewPackageMetadata(tt.category, tt.pkgName, tt.version)
+
+			if meta.Category != tt.expected.Category {
+				t.Errorf("Category = %q, expected %q", meta.Category, tt.expected.Category)
+			}
+			if meta.PN != tt.expected.PN {
+				t.Errorf("PN = %q, expected %q", meta.PN, tt.expected.PN)
+			}
+			if meta.PV != tt.expected.PV {
+				t.Errorf("PV = %q, expected %q", meta.PV, tt.expected.PV)
+			}
+			if meta.PR != tt.expected.PR {
+				t.Errorf("PR = %q, expected %q", meta.PR, tt.expected.PR)
+			}
+			if meta.PVR != tt.expected.PVR {
+				t.Errorf("PVR = %q, expected %q", meta.PVR, tt.expected.PVR)
+			}
+			if meta.PF != tt.expected.PF {
+				t.Errorf("PF = %q, expected %q", meta.PF, tt.expected.PF)
+			}
+			if meta.P != tt.expected.P {
+				t.Errorf("P = %q, expected %q", meta.P, tt.expected.P)
+			}
+		})
+	}
+}
+
+// TestNewEbuildParserWithMetadata tests parser creation with package metadata
+func TestNewEbuildParserWithMetadata(t *testing.T) {
+	content := `
+DESCRIPTION="Test package"
+SLOT="0"
+`
+
+	meta := NewPackageMetadata("app-misc", "hello", "2.10")
+	parser := NewEbuildParserWithMetadata(content, meta)
+
+	// Verify metadata variables are set
+	expectedVars := map[string]string{
+		"CATEGORY": "app-misc",
+		"PN":       "hello",
+		"PV":       "2.10",
+		"PR":       "r0",
+		"PVR":      "2.10",
+		"PF":       "hello-2.10",
+		"P":        "hello-2.10",
+	}
+
+	for varName, expected := range expectedVars {
+		actual, exists := parser.variables[varName]
+		if !exists {
+			t.Errorf("Variable %q not found in parser", varName)
+			continue
+		}
+		if actual != expected {
+			t.Errorf("Variable %q = %q, expected %q", varName, actual, expected)
+		}
+	}
+}
+
+// TestVariableExpansion_WithPackageMetadata tests ${P}, ${PN}, ${PV} expansion
+func TestVariableExpansion_WithPackageMetadata(t *testing.T) {
+	content := `
+DESCRIPTION="${PN} - GNU Hello World"
+HOMEPAGE="https://www.gnu.org/software/${PN}/"
+SRC_URI="mirror://gnu/${PN}/${P}.tar.gz"
+S="${WORKDIR}/${P}"
+`
+
+	meta := NewPackageMetadata("app-misc", "hello", "2.10")
+	parser := NewEbuildParserWithMetadata(content, meta)
+
+	tests := []struct {
+		varName  string
+		expected string
+	}{
+		{"DESCRIPTION", "hello - GNU Hello World"},
+		{"HOMEPAGE", "https://www.gnu.org/software/hello/"},
+		{"SRC_URI", "mirror://gnu/hello/hello-2.10.tar.gz"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.varName, func(t *testing.T) {
+			actual := parser.ExtractVariable(tt.varName)
+			if actual != tt.expected {
+				t.Errorf("%s = %q, expected %q", tt.varName, actual, tt.expected)
+			}
+		})
+	}
+}
+
+// TestVariableExpansion_SRC_URI_Complex tests complex SRC_URI expansion
+func TestVariableExpansion_SRC_URI_Complex(t *testing.T) {
+	content := `
+MY_P="${PN}-${PV/_/-}"
+SRC_URI="https://github.com/example/${PN}/archive/v${PV}.tar.gz -> ${P}.tar.gz"
+`
+
+	meta := NewPackageMetadata("dev-libs", "libexample", "1.5.0")
+	parser := NewEbuildParserWithMetadata(content, meta)
+
+	srcURI := parser.ExtractVariable("SRC_URI")
+	expected := "https://github.com/example/libexample/archive/v1.5.0.tar.gz -> libexample-1.5.0.tar.gz"
+
+	if srcURI != expected {
+		t.Errorf("SRC_URI = %q, expected %q", srcURI, expected)
+	}
+}
+
+// TestVariableExpansion_DEPEND_WithPackageVars tests DEPEND with package variables
+func TestVariableExpansion_DEPEND_WithPackageVars(t *testing.T) {
+	content := `
+SLOT="0/${PV}"
+RDEPEND="
+	>=sys-libs/zlib-1.2.13
+	~${CATEGORY}/${PN}-${PV}
+"
+`
+
+	meta := NewPackageMetadata("app-misc", "hello", "2.10")
+	parser := NewEbuildParserWithMetadata(content, meta)
+
+	// Test SLOT expansion
+	slot := parser.ExtractVariable("SLOT")
+	if slot != "0/2.10" {
+		t.Errorf("SLOT = %q, expected %q", slot, "0/2.10")
+	}
+
+	// Parse dependencies - the ~app-misc/hello-2.10 should expand
+	deps, err := parser.ParseDependencies()
+	if err != nil {
+		t.Fatalf("ParseDependencies() error: %v", err)
+	}
+
+	// Should find at least 2 dependencies (zlib and expanded hello)
+	if len(deps) < 2 {
+		t.Fatalf("ParseDependencies() returned %d deps, expected at least 2", len(deps))
+	}
+
+	// Verify the expanded dependency exists
+	found := false
+	for _, dep := range deps {
+		t.Logf("Dependency: %s", dep.Constraint.Name)
+		if contains(dep.Constraint.Name, "hello") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("Expected to find expanded hello dependency")
+	}
+}
+
+// BenchmarkNewEbuildParserWithMetadata benchmarks parser with metadata
+func BenchmarkNewEbuildParserWithMetadata(b *testing.B) {
+	content := `
+DESCRIPTION="${PN} - test package"
+SRC_URI="https://example.com/${P}.tar.gz"
+RDEPEND=">=sys-libs/zlib-1.2.13"
+`
+
+	meta := NewPackageMetadata("app-misc", "hello", "2.10")
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		parser := NewEbuildParserWithMetadata(content, meta)
+		_ = parser.ExtractVariable("SRC_URI")
 	}
 }
