@@ -39,6 +39,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.2.1] - 2026-01-09
+
+### Fixed
+
+#### PMS-Compliant Version Comparison (v0.2.1-001, v0.2.1-002, v0.2.1-003)
+
+Critical bug fixes for version comparison per PMS Chapter 3.2-3.3:
+
+- **Version suffix ordering** - Implemented PMS Algorithm 3.5-3.6:
+  - Correct: `_alpha < _beta < _pre < _rc < (release) < _p`
+  - Previously: Used alphabetical comparison (`_p < _pre < _rc`)
+  - **Impact**: Fixes incorrect package version selection during dependency resolution
+
+- **Leading zero handling** - Implemented PMS Algorithm 3.3:
+  - Components with leading zeros compared lexicographically
+  - Trailing zeros stripped before comparison
+
+- **Letter suffix parsing** - Implemented PMS Section 3.2:
+  - Single letter suffix (`1.0a`, `1.0b`) parsed separately
+  - Correct ordering: `1.0a < 1.0b < 1.0z < 1.0` (letter < no letter)
+
+- **Revision handling** - `-r0` now equals no revision per PMS
+
+### Changed
+
+- `Version` struct refactored to rich domain model with:
+  - `VersionComponent` - numeric parts with leading zero tracking
+  - `VersionSuffix` - suffix type and number
+  - `letterSuffix` field for single letter
+  - `revision` field for `-rN`
+- Comprehensive test suite for PMS compliance (30+ new test cases)
+
+---
+
 ## [0.2.0] - 2026-01-09
 
 ### Ebuild Parser Improvements

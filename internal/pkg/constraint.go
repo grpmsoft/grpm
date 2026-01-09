@@ -1,7 +1,6 @@
 package pkg
 
 import (
-	"strconv"
 	"strings"
 )
 
@@ -137,27 +136,32 @@ func (vc *VersionConstraint) Satisfies(version string) bool {
 	}
 }
 
-// CompareVersions compares two Gentoo-format version strings
+// CompareVersions compares two Gentoo-format version strings per PMS Chapter 3.2-3.3.
 // Returns: <0 if v1<v2, 0 if v1==v2, >0 if v1>v2
+//
+// This implements the full PMS version comparison algorithm:
+// - Suffix ordering: _alpha < _beta < _pre < _rc < (release) < _p
+// - Letter suffix: 1.0a < 1.0b < 1.0 (no letter is newest)
+// - Leading zeros: compared lexicographically after stripping trailing zeros
+// - Revisions: -r1, -r2, etc.
 func CompareVersions(v1, v2 string) int {
-	// Split versions into components: 1.2.3_alpha4-r5 -> [1, 2, 3, "alpha", 4, 5]
-	// Uses precompiled regex from version.go for performance
-	splitVersion := func(v string) []interface{} {
-		parts := versionComponentsRe.FindAllString(v, -1)
+	// Parse both versions using the PMS-compliant parser
+	ver1, err1 := parseVersion(v1)
+	ver2, err2 := parseVersion(v2)
 
-		var result []interface{}
-		for _, part := range parts {
-			if num, err := strconv.Atoi(part); err == nil {
-				result = append(result, num)
-			} else {
-				result = append(result, part)
-			}
-		}
-		return result
+	// If parsing fails, fall back to legacy comparison
+	if err1 != nil || err2 != nil {
+		return legacyCompareVersions(v1, v2)
 	}
 
-	parts1 := splitVersion(v1)
-	parts2 := splitVersion(v2)
+	return compareVersions(ver1, ver2)
+}
+
+// legacyCompareVersions provides backward-compatible version comparison
+// for versions that don't parse with the strict PMS parser.
+func legacyCompareVersions(v1, v2 string) int {
+	parts1 := legacyParseComponents(v1)
+	parts2 := legacyParseComponents(v2)
 
 	// Compare components
 	for i := 0; i < len(parts1) && i < len(parts2); i++ {
