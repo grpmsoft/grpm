@@ -48,11 +48,52 @@ type ParsedDependency struct {
 // EbuildVariables maps variable names to their values
 type EbuildVariables map[string]string
 
+// PackageMetadata contains package information for variable expansion.
+// These correspond to Portage's package variables (PMS 11.1).
+type PackageMetadata struct {
+	Category string // CATEGORY (e.g., "app-misc")
+	PN       string // Package name (e.g., "hello")
+	PV       string // Package version (e.g., "1.0")
+	PR       string // Package revision (e.g., "r0")
+	PVR      string // Version with revision (e.g., "1.0-r0")
+	PF       string // Full package-version-revision (e.g., "hello-1.0-r0")
+	P        string // Package-version (e.g., "hello-1.0")
+	A        string // All source files (SRC_URI filenames)
+}
+
+// NewPackageMetadata creates PackageMetadata from category, name, and version.
+// Automatically derives P, PF, PVR from base values.
+func NewPackageMetadata(category, name, version string) PackageMetadata {
+	// Parse revision from version if present (e.g., "1.0-r1" -> "1.0", "r1")
+	pv := version
+	pr := "r0"
+	if idx := strings.LastIndex(version, "-r"); idx != -1 {
+		pv = version[:idx]
+		pr = version[idx+1:]
+	}
+
+	pvr := pv
+	if pr != "r0" {
+		pvr = pv + "-" + pr
+	}
+
+	return PackageMetadata{
+		Category: category,
+		PN:       name,
+		PV:       pv,
+		PR:       pr,
+		PVR:      pvr,
+		PF:       name + "-" + pvr,
+		P:        name + "-" + pv,
+	}
+}
+
 // EbuildParser handles parsing of ebuild files
 type EbuildParser struct {
 	content       string
 	variables     EbuildVariables // Cached extracted variables
 	nextOrGroupID int             // Counter for OR-group IDs
+	metadata      *PackageMetadata
 }
 
 // NewEbuildParser creates a new ebuild parser
@@ -67,12 +108,38 @@ func NewEbuildParser(content string) *EbuildParser {
 	return ep
 }
 
+// NewEbuildParserWithMetadata creates parser with package metadata for variable expansion.
+// Package variables (P, PN, PV, etc.) will be available for ${VAR} expansion.
+func NewEbuildParserWithMetadata(content string, meta PackageMetadata) *EbuildParser {
+	ep := &EbuildParser{
+		content:       content,
+		variables:     make(EbuildVariables),
+		nextOrGroupID: 1,
+		metadata:      &meta,
+	}
+	// Pre-populate package variables
+	ep.variables["CATEGORY"] = meta.Category
+	ep.variables["PN"] = meta.PN
+	ep.variables["PV"] = meta.PV
+	ep.variables["PR"] = meta.PR
+	ep.variables["PVR"] = meta.PVR
+	ep.variables["PF"] = meta.PF
+	ep.variables["P"] = meta.P
+	if meta.A != "" {
+		ep.variables["A"] = meta.A
+	}
+
+	// Extract all variables from content (may override package vars if redefined)
+	ep.extractAllVariables()
+	return ep
+}
+
 // ParseDependencies parses all dependency types from ebuild
 func (ep *EbuildParser) ParseDependencies() ([]ParsedDependency, error) {
 	var allDeps []ParsedDependency
 
 	// Parse RDEPEND (runtime dependencies)
-	rdepend := ep.extractVariable("RDEPEND")
+	rdepend := ep.ExtractVariable("RDEPEND")
 	if rdepend != "" {
 		deps, err := ep.parseDependencyString(rdepend, DepTypeRuntime)
 		if err != nil {
@@ -82,7 +149,7 @@ func (ep *EbuildParser) ParseDependencies() ([]ParsedDependency, error) {
 	}
 
 	// Parse DEPEND (build dependencies)
-	depend := ep.extractVariable("DEPEND")
+	depend := ep.ExtractVariable("DEPEND")
 	if depend != "" {
 		deps, err := ep.parseDependencyString(depend, DepTypeBuild)
 		if err != nil {
@@ -92,7 +159,7 @@ func (ep *EbuildParser) ParseDependencies() ([]ParsedDependency, error) {
 	}
 
 	// Parse BDEPEND (build-time dependencies)
-	bdepend := ep.extractVariable("BDEPEND")
+	bdepend := ep.ExtractVariable("BDEPEND")
 	if bdepend != "" {
 		deps, err := ep.parseDependencyString(bdepend, DepTypeBuildtime)
 		if err != nil {
@@ -180,9 +247,9 @@ func (ep *EbuildParser) expandVariables(value string, depth int) string {
 	return expanded
 }
 
-// extractVariable extracts a variable value from ebuild content with expansion
-// Now uses the pre-extracted variables map and performs variable expansion
-func (ep *EbuildParser) extractVariable(varName string) string {
+// ExtractVariable extracts a variable value from ebuild content with expansion.
+// Uses the pre-extracted variables map and performs ${VAR} expansion.
+func (ep *EbuildParser) ExtractVariable(varName string) string {
 	// Get raw value from pre-extracted variables
 	rawValue, exists := ep.variables[varName]
 	if !exists {

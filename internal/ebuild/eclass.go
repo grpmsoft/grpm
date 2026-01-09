@@ -268,15 +268,10 @@ func (l *EclassLoader) loadEclass(ctx context.Context, name string) error {
 	l.registry.SetCurrentEclass(name)
 	defer l.registry.SetCurrentEclass("")
 
-	// Check for built-in eclass implementations FIRST
-	// This allows common eclasses (toolchain-funcs, eutils, etc.) to work
-	// without requiring the actual eclass files to be present
-	if handled := l.handleBuiltinEclass(name); handled {
-		l.registry.MarkLoaded(name, "(builtin)")
-		return nil
-	}
-
 	// Find eclass file
+	// NOTE: All eclasses MUST be loaded from repository.
+	// Go helper implementations (tc-getCC, etc.) are registered in the interpreter
+	// and will be called when the eclass code invokes them.
 	path, err := l.registry.FindEclass(name)
 	if err != nil {
 		return err
@@ -297,32 +292,6 @@ func (l *EclassLoader) loadEclass(ctx context.Context, name string) error {
 	l.registry.MarkLoaded(name, path)
 
 	return nil
-}
-
-// handleBuiltinEclass checks if an eclass has a built-in Go implementation.
-//
-// Returns true if the eclass is handled by Go code and doesn't need
-// bash execution.
-func (l *EclassLoader) handleBuiltinEclass(name string) bool {
-	switch name {
-	case "toolchain-funcs":
-		// Already implemented in helpers.go (tc-getCC, tc-getCXX, etc.)
-		return true
-	case "eutils":
-		// Implemented via helpers.go (epatch uses eapply, etc.)
-		return true
-	case "multilib":
-		// Basic multilib functions implemented in helpers.go
-		return true
-	case "flag-o-matic":
-		// Flag manipulation functions
-		return true
-	case "linux-info":
-		// Linux kernel info functions
-		return true
-	default:
-		return false
-	}
 }
 
 func (l *EclassLoader) writeStdout(s string) {

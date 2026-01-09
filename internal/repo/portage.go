@@ -124,19 +124,30 @@ func (pr *PortageRepository) parseEbuild(name, path string) (*pkg.Package, error
 		Provides: make([]pkg.Constraint, 0),
 	}
 
-	// Extract version from filename
-	filename := filepath.Base(path)
-	if matches := strings.Split(filename, "-"); len(matches) > 1 {
-		p.Version = strings.TrimSuffix(matches[len(matches)-1], ".ebuild")
+	// Extract category and package name for variable expansion
+	category := ""
+	pkgName := name
+	if parts := strings.SplitN(name, "/", 2); len(parts) == 2 {
+		category = parts[0]
+		pkgName = parts[1]
 	}
 
-	// Parse metadata using precompiled regex
+	// Extract version from filename correctly
+	// For "complex-2.0-r1.ebuild" with pkgName="complex": version = "2.0-r1"
+	filename := filepath.Base(path)
+	versionFromFile := strings.TrimSuffix(filename, ".ebuild")
+	versionFromFile = strings.TrimPrefix(versionFromFile, pkgName+"-")
+	p.Version = versionFromFile
+
+	// Override with VERSION from content if present (rare case)
 	if matches := portageVersionRe.FindStringSubmatch(string(content)); len(matches) > 1 {
 		p.Version = matches[1]
 	}
 
-	// Parse dependencies using new EbuildParser
-	parser := NewEbuildParser(string(content))
+	// Parse dependencies using EbuildParser with package metadata
+	// This enables ${P}, ${PN}, ${PV} expansion in DEPEND, SRC_URI, etc.
+	meta := NewPackageMetadata(category, pkgName, p.Version)
+	parser := NewEbuildParserWithMetadata(string(content), meta)
 	parsedDeps, err := parser.ParseDependencies()
 	if err == nil {
 		// Convert ParsedDependency to Constraint, preserving OrGroupID

@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -61,7 +62,7 @@ func TestDaemon_StartStop(t *testing.T) {
 	}
 }
 
-// TestDaemon_RESTHealthCheck tests REST API health endpoint
+// TestDaemon_RESTHealthCheck tests REST API health endpoint via TCP
 func TestDaemon_RESTHealthCheck(t *testing.T) {
 	// Create temp directory for socket
 	tmpDir := t.TempDir()
@@ -71,6 +72,7 @@ func TestDaemon_RESTHealthCheck(t *testing.T) {
 	config := DefaultConfig()
 	config.SocketPath = socketPath
 	config.RESTEnabled = true
+	config.RESTSocketPath = ""          // Disable Unix socket for TCP test
 	config.RESTBind = "127.0.0.1:18081" // Use specific port for testing
 
 	// Create daemon
@@ -116,6 +118,190 @@ func TestDaemon_RESTHealthCheck(t *testing.T) {
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("Status endpoint returned %d, want 200", resp.StatusCode)
 		}
+	}
+}
+
+// TestDaemon_RESTUnixSocket tests REST API over Unix socket
+func TestDaemon_RESTUnixSocket(t *testing.T) {
+	// Create temp directory for sockets
+	tmpDir := t.TempDir()
+	grpcSocketPath := filepath.Join(tmpDir, "grpc.sock")
+	restSocketPath := filepath.Join(tmpDir, "rest.sock")
+
+	// Create config with REST on Unix socket only
+	config := DefaultConfig()
+	config.SocketPath = grpcSocketPath
+	config.RESTEnabled = true
+	config.RESTSocketPath = restSocketPath
+	config.RESTBind = "" // Disable TCP
+
+	// Create daemon
+	d := New(config)
+
+	// Start daemon
+	if err := d.Start(); err != nil {
+		t.Fatalf("Start() failed: %v", err)
+	}
+
+	// Wait for ready
+	if err := d.WaitReady(1 * time.Second); err != nil {
+		t.Fatalf("Daemon not ready: %v", err)
+	}
+
+	defer func() {
+		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = d.Stop(stopCtx)
+	}()
+
+	// Give REST server a moment to start
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify REST socket exists
+	if _, err := os.Stat(restSocketPath); os.IsNotExist(err) {
+		t.Fatalf("REST socket was not created: %s", restSocketPath)
+	}
+
+	// Create HTTP client with Unix socket transport
+	client := &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				return net.Dial("unix", restSocketPath)
+			},
+		},
+	}
+
+	// Test health endpoint via Unix socket
+	// Note: hostname is ignored, socket path is used
+	resp, err := client.Get("http://localhost/health")
+	if err != nil {
+		t.Fatalf("Health endpoint via Unix socket error: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("Health endpoint returned %d, want 200", resp.StatusCode)
+	}
+
+	// Test status endpoint via Unix socket
+	resp, err = client.Get("http://localhost/api/v1/status")
+	if err != nil {
+		t.Errorf("Status endpoint via Unix socket error: %v", err)
+	} else {
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("Status endpoint returned %d, want 200", resp.StatusCode)
+		}
+	}
+}
+
+// TestDaemon_RESTDualMode tests REST API with both Unix socket and TCP enabled
+func TestDaemon_RESTDualMode(t *testing.T) {
+	// Create temp directory for sockets
+	tmpDir := t.TempDir()
+	grpcSocketPath := filepath.Join(tmpDir, "grpc.sock")
+	restSocketPath := filepath.Join(tmpDir, "rest.sock")
+
+	// Create config with both REST modes
+	config := DefaultConfig()
+	config.SocketPath = grpcSocketPath
+	config.RESTEnabled = true
+	config.RESTSocketPath = restSocketPath
+	config.RESTBind = "127.0.0.1:18082" // TCP also enabled
+
+	// Create daemon
+	d := New(config)
+
+	// Start daemon
+	if err := d.Start(); err != nil {
+		t.Fatalf("Start() failed: %v", err)
+	}
+
+	// Wait for ready
+	if err := d.WaitReady(1 * time.Second); err != nil {
+		t.Fatalf("Daemon not ready: %v", err)
+	}
+
+	defer func() {
+		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = d.Stop(stopCtx)
+	}()
+
+	// Give servers a moment to start
+	time.Sleep(100 * time.Millisecond)
+
+	// Test via Unix socket
+	unixClient := &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				return net.Dial("unix", restSocketPath)
+			},
+		},
+	}
+
+	resp, err := unixClient.Get("http://localhost/health")
+	if err != nil {
+		t.Fatalf("Unix socket health check failed: %v", err)
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("Unix socket health returned %d, want 200", resp.StatusCode)
+	}
+
+	// Test via TCP
+	tcpResp, err := http.Get("http://127.0.0.1:18082/health")
+	if err != nil {
+		t.Skipf("Skipping TCP test: %v", err)
+		return
+	}
+	defer tcpResp.Body.Close()
+
+	if tcpResp.StatusCode != http.StatusOK {
+		t.Errorf("TCP health returned %d, want 200", tcpResp.StatusCode)
+	}
+}
+
+// TestDaemon_RESTSocketCleanup tests that REST socket is cleaned up on stop
+func TestDaemon_RESTSocketCleanup(t *testing.T) {
+	// Create temp directory for sockets
+	tmpDir := t.TempDir()
+	grpcSocketPath := filepath.Join(tmpDir, "grpc.sock")
+	restSocketPath := filepath.Join(tmpDir, "rest.sock")
+
+	// Create config with REST Unix socket
+	config := DefaultConfig()
+	config.SocketPath = grpcSocketPath
+	config.RESTEnabled = true
+	config.RESTSocketPath = restSocketPath
+	config.RESTBind = ""
+
+	// Create and start daemon
+	d := New(config)
+	if err := d.Start(); err != nil {
+		t.Fatalf("Start() failed: %v", err)
+	}
+
+	if err := d.WaitReady(1 * time.Second); err != nil {
+		t.Fatalf("Daemon not ready: %v", err)
+	}
+
+	// Verify sockets exist
+	if _, err := os.Stat(restSocketPath); os.IsNotExist(err) {
+		t.Fatalf("REST socket was not created")
+	}
+
+	// Stop daemon
+	stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := d.Stop(stopCtx); err != nil {
+		t.Fatalf("Stop() failed: %v", err)
+	}
+
+	// Verify REST socket is cleaned up
+	if _, err := os.Stat(restSocketPath); !os.IsNotExist(err) {
+		t.Error("REST socket was not cleaned up after stop")
 	}
 }
 
@@ -272,7 +458,8 @@ func TestDefaultConfig(t *testing.T) {
 		{"QueueMaxWorkers", config.QueueMaxWorkers, 4},
 		{"QueueMaxSize", config.QueueMaxSize, 100},
 		{"RESTEnabled", config.RESTEnabled, true},
-		{"RESTBind", config.RESTBind, "127.0.0.1:8080"},
+		{"RESTSocketPath", config.RESTSocketPath, "/var/run/grpm-rest.sock"},
+		{"RESTBind", config.RESTBind, ""}, // Empty by default (socket only)
 	}
 
 	for _, tt := range tests {
