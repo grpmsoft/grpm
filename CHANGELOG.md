@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Planned
+- CMake/Meson build systems
+- Performance optimization for large dependency graphs
+- Web UI for daemon management
+- Native GUI application ([gogpu/ui](https://github.com/gogpu/ui))
+
+---
+
+## [0.3.0] - 2026-01-10
+
+### PMS Compliance Release
+
+This release brings comprehensive PMS (Package Manager Specification) compliance, EAPI 0-8 feature matrix, and direct mvdan.cc/sh integration for bash compatibility.
+
 ### Added
 
 #### PMS-Compliant Atom Parser (v0.3.0-001)
@@ -19,7 +33,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ParseAtom()` function with comprehensive validation
 - `Atom.Matches(*Package)` for package matching
 - `Atom.ToConstraint()` for solver integration
-- Full test coverage (30+ test cases)
 
 #### Full EAPI 8 Support (v0.3.0-002)
 - **REQUIRED_USE validator** - Full expression parsing (||, ^^, ??, flag?, !flag?, conditionals)
@@ -28,14 +41,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **EAPI 8 installation helpers** - `dosym -r` (relative symlinks), `dostrip`, `einstalldocs`
 - **New ebuild variables** - IDEPEND, PROPERTIES, RESTRICT parsing
 - **Atom parser integration** - `FindByAtom()` in Repository, `AddAtomConstraint()` in SAT solver
-- Full test coverage for all new features
 
-### Planned
-- GoSh integration for bash compatibility (v0.3.0-003)
-- CMake/Meson build systems
-- Performance optimization for large dependency graphs
-- Web UI for daemon management
-- Native GUI application ([gogpu/ui](https://github.com/gogpu/ui))
+#### EAPI Feature Matrix (v0.3.0-004)
+- `EAPIFeatures` struct with 30+ feature flags for EAPI-dependent behavior
+- `GetEAPIFeatures()`, `IsEAPISupported()`, `ValidateEAPI()` functions
+- Complete EAPI 0-8 coverage per PMS Appendix A
+- Feature flags: BDEPEND, IDEPEND, SlotOperators, Nonfatal, OffsetPrefix, etc.
+- Trailing slash behavior per EAPI (0-6 has trailing, 7+ doesn't)
+
+#### Version Manipulation Commands (v0.3.0-005)
+- `ver_test` - Version comparison per PMS Algorithm 3.2-3.7
+- `ver_cut` - Extract version components
+- `ver_rs` - Replace version separators
+
+#### PMS Environment Variables (v0.3.0-006)
+- `PVR` - Package version with revision (per PMS 11.1)
+- `ROOT`, `EROOT` - Target filesystem root with EAPI-specific trailing slash
+- `SYSROOT`, `ESYSROOT` - Cross-compilation support (EAPI 7+)
+- `BROOT` - Build dependencies root (EAPI 7+)
+- `EPREFIX` - Gentoo Prefix support (EAPI 3+)
+
+#### Error Handling Commands (v0.3.0-007, v0.3.0-008)
+- `assert` - Check PIPESTATUS array, die if non-zero (per PMS 12.3.6)
+- `nonfatal` - Suppress die in called command (EAPI 4+, per PMS 12.3.8)
+- Exit status tracking (`lastExitStatus`, `pipeStatus`)
+
+#### Missing Phase Functions (v0.3.0-009)
+- `pkg_pretend` - Pre-merge sanity checks (EAPI 4+)
+- `pkg_config` - Post-install configuration
+- `pkg_info` - Package information display
+- `pkg_nofetch` - Fetch restriction handling
+
+#### Installation Helpers (v0.3.0-011, v0.3.0-012, v0.3.0-013)
+- `into` - Set installation destination prefix
+- `doinfo` - Install GNU info files to `/usr/share/info`
+- `domo` - Install gettext message catalogs to `/usr/share/locale`
+
+#### Banned Command Validation (v0.3.0-014)
+- `IsBannedCommand()`, `GetBannedCommands()` for EAPI-specific validation
+- Stub implementations with deprecation warnings: `dohard`, `dosed`, `useq`, `einstall`, `dohtml`, `dolib`, `libopts`, `hasv`, `hasq`
+- EAPI-aware command availability per PMS Chapter 12
+
+#### Default Phase Functions (v0.3.0-015)
+- `default_src_unpack` - Default unpack implementation
+- `default_src_prepare` - Default prepare (eapply_user in EAPI 6+)
+- `default_src_configure` - Default configure (econf)
+- `default_src_compile` - Default compile (emake or nothing)
+- `default_src_test` - Default test (emake check/test)
+- `default_src_install` - Default install (emake DESTDIR or einstalldocs)
+- `default_pkg_nofetch` - Default fetch restriction message
+- `default` dispatcher function
+
+#### EAPI Validation (v0.3.0-016)
+- `ValidateEAPI()` with detailed error messages
+- Pre-execution EAPI compatibility checks
+- Graceful degradation for unknown EAPIs
+
+#### PMS Compliance Test Suite (v0.3.0-017)
+- 1076 lines of comprehensive PMS compliance tests
+- Version comparison tests (40+ cases per PMS Algorithm 3.2-3.7)
+- Dependency atom parsing tests
+- EAPI feature availability tests
+- Located in `tests/pms_compliance_test.go`
+
+### Changed
+
+#### Bash Compatibility
+- **mvdan.cc/sh direct integration** - GoSh wrapper NOT needed
+- Direct use of mvdan.cc/sh/v3 for bash parsing and execution
+- Full compatibility with Portage bash requirements (EAPI 0-6: Bash 3.2, EAPI 7: Bash 4.2, EAPI 8: Bash 5.0)
+
+#### Test Infrastructure
+- Split `helpers_test.go` (4717 lines) into 12 focused test files
+- Improved test organization and maintainability
+- Shared test utilities in `helpers_test.go`
+
+### Documentation
+
+- Added PMS Chapter 6 - Ebuild File Format (`docs/pms/chapter6-ebuild-format.md`)
+- Updated PMS documentation index
 
 ---
 
@@ -279,6 +363,9 @@ GRPM (Go Resource Package Manager) is a modern reimplementation of Gentoo's Port
 - **Issues**: https://github.com/grpmsoft/grpm/issues
 - **License**: [Apache-2.0](LICENSE)
 
-[Unreleased]: https://github.com/grpmsoft/grpm/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/grpmsoft/grpm/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/grpmsoft/grpm/compare/v0.2.1...v0.3.0
+[0.2.1]: https://github.com/grpmsoft/grpm/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/grpmsoft/grpm/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/grpmsoft/grpm/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/grpmsoft/grpm/releases/tag/v0.1.0

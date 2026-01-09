@@ -21,7 +21,7 @@
 
 GRPM (Go Resource Package Manager) is a modern source-based package manager written in Go, inspired by and fully compatible with **Gentoo's Portage**. It brings SAT-based dependency resolution, transactional updates with filesystem snapshots, and binary package support. While rooted in the Gentoo ecosystem, GRPM is designed to be distribution-agnostic and extensible for any Linux distribution.
 
-**Current Version:** v0.2.1 (January 2026)
+**Current Version:** v0.3.0 (January 2026)
 
 ---
 
@@ -163,12 +163,19 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidelines and [AGENTS.md
 
 ## Roadmap
 
-**v0.2.0** (Released) — Ebuild parser improvements, variable expansion, xargs helper.
+**v0.3.0** (Released) — PMS compliance:
+- ✅ PMS-compliant atom parser (Section 8.3)
+- ✅ Full EAPI 0-8 feature matrix with 30+ feature flags
+- ✅ Version manipulation commands (ver_test, ver_cut, ver_rs)
+- ✅ PMS environment variables (PVR, ROOT, EROOT, SYSROOT, BROOT)
+- ✅ Error handling (assert, nonfatal)
+- ✅ Default phase functions (default_src_*)
+- ✅ Direct mvdan.cc/sh integration (GoSh wrapper not needed)
 
-**v0.3.0** (In Progress) — PMS compliance:
-- ✅ PMS-compliant atom parser
-- ✅ Full EAPI 8 support (REQUIRED_USE, SRC_URI arrow, IDEPEND, use_enable/use_with, dosym -r)
-- ⏸️ GoSh integration (blocked, waiting for gosh library)
+**v0.4.0** (Planned) — Extended features:
+- CMake/Meson build system support
+- Performance optimization for large dependency graphs
+- Extended eclass support
 
 **v1.0.0** — Production ready after community validation (no fixed date).
 
