@@ -213,6 +213,7 @@ func (i *Interpreter) buildCommandMap() map[string]helperFunc {
 		"doman":  i.helpers.Doman,
 		"newman": i.helpers.Newman,
 		"doinfo": i.helpers.Doinfo,
+		"domo":   i.helpers.Domo, // PMS Section 12.3.9 - gettext .mo files
 
 		// Library/header installation functions
 		"dolib":    i.helpers.Dolib,

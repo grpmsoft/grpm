@@ -2134,6 +2134,187 @@ func TestHelpers_Doinfo_NilEnv(t *testing.T) {
 }
 
 // ============================================================================
+// Domo (gettext .mo files) Tests - PMS Section 12.3.9
+// ============================================================================
+
+func TestHelpers_Domo(t *testing.T) {
+	helpers, tmpDir := createInstallTestHelpers(t)
+	helpers.env.EAPI = "8"
+
+	moPath := createTestFile(t, tmpDir, "de.mo", "German translations")
+
+	err := helpers.Domo([]string{moPath})
+	if err != nil {
+		t.Fatalf("Domo failed: %v", err)
+	}
+
+	// Check installed path: /usr/share/locale/de/LC_MESSAGES/${PN}.mo
+	installedPath := filepath.Join(helpers.env.D, "usr", "share", "locale", "de", "LC_MESSAGES", "zlib.mo")
+	if _, err := os.Stat(installedPath); os.IsNotExist(err) {
+		t.Errorf("expected file at %s", installedPath)
+	}
+
+	// Check file mode (skip on Windows - permissions work differently)
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(installedPath)
+		if err != nil {
+			t.Fatalf("failed to stat installed file: %v", err)
+		}
+		if info.Mode().Perm() != 0644 {
+			t.Errorf("expected mode 0644, got %o", info.Mode().Perm())
+		}
+	}
+}
+
+func TestHelpers_Domo_LocaleWithCountry(t *testing.T) {
+	helpers, tmpDir := createInstallTestHelpers(t)
+	helpers.env.EAPI = "8"
+
+	// Test locale with country code (e.g., fr_FR, pt_BR)
+	moPath := createTestFile(t, tmpDir, "fr_FR.mo", "French translations")
+
+	err := helpers.Domo([]string{moPath})
+	if err != nil {
+		t.Fatalf("Domo failed: %v", err)
+	}
+
+	// Check installed path: /usr/share/locale/fr_FR/LC_MESSAGES/${PN}.mo
+	installedPath := filepath.Join(helpers.env.D, "usr", "share", "locale", "fr_FR", "LC_MESSAGES", "zlib.mo")
+	if _, err := os.Stat(installedPath); os.IsNotExist(err) {
+		t.Errorf("expected file at %s", installedPath)
+	}
+}
+
+func TestHelpers_Domo_MultipleFiles(t *testing.T) {
+	helpers, tmpDir := createInstallTestHelpers(t)
+	helpers.env.EAPI = "8"
+
+	de := createTestFile(t, tmpDir, "de.mo", "German")
+	fr := createTestFile(t, tmpDir, "fr.mo", "French")
+	es := createTestFile(t, tmpDir, "es.mo", "Spanish")
+
+	err := helpers.Domo([]string{de, fr, es})
+	if err != nil {
+		t.Fatalf("Domo failed: %v", err)
+	}
+
+	for _, locale := range []string{"de", "fr", "es"} {
+		installedPath := filepath.Join(helpers.env.D, "usr", "share", "locale", locale, "LC_MESSAGES", "zlib.mo")
+		if _, err := os.Stat(installedPath); os.IsNotExist(err) {
+			t.Errorf("expected file at %s", installedPath)
+		}
+	}
+}
+
+func TestHelpers_Domo_EAPI6_UsesDestTree(t *testing.T) {
+	helpers, tmpDir := createInstallTestHelpers(t)
+	helpers.env.EAPI = "6"
+
+	// Set custom DESTTREE (simulates "into /opt/myapp")
+	helpers.destTree = "/opt/myapp"
+
+	moPath := createTestFile(t, tmpDir, "de.mo", "German translations")
+
+	err := helpers.Domo([]string{moPath})
+	if err != nil {
+		t.Fatalf("Domo failed: %v", err)
+	}
+
+	// EAPI 6: Should use ${DESTTREE}/share/locale
+	installedPath := filepath.Join(helpers.env.D, "opt", "myapp", "share", "locale", "de", "LC_MESSAGES", "zlib.mo")
+	if _, err := os.Stat(installedPath); os.IsNotExist(err) {
+		t.Errorf("EAPI 6 should use DESTTREE, expected file at %s", installedPath)
+	}
+}
+
+func TestHelpers_Domo_EAPI7_IgnoresDestTree(t *testing.T) {
+	helpers, tmpDir := createInstallTestHelpers(t)
+	helpers.env.EAPI = "7"
+
+	// Set custom DESTTREE - should be ignored in EAPI 7+
+	helpers.destTree = "/opt/myapp"
+
+	moPath := createTestFile(t, tmpDir, "de.mo", "German translations")
+
+	err := helpers.Domo([]string{moPath})
+	if err != nil {
+		t.Fatalf("Domo failed: %v", err)
+	}
+
+	// EAPI 7+: Should always use /usr/share/locale (fixed)
+	installedPath := filepath.Join(helpers.env.D, "usr", "share", "locale", "de", "LC_MESSAGES", "zlib.mo")
+	if _, err := os.Stat(installedPath); os.IsNotExist(err) {
+		t.Errorf("EAPI 7+ should use fixed /usr/share/locale, expected file at %s", installedPath)
+	}
+
+	// Verify it's NOT in the DESTTREE path
+	wrongPath := filepath.Join(helpers.env.D, "opt", "myapp", "share", "locale", "de", "LC_MESSAGES", "zlib.mo")
+	if _, err := os.Stat(wrongPath); err == nil {
+		t.Errorf("EAPI 7+ should NOT use DESTTREE, but file found at %s", wrongPath)
+	}
+}
+
+func TestHelpers_Domo_NoArgs(t *testing.T) {
+	helpers, _ := createInstallTestHelpers(t)
+
+	err := helpers.Domo([]string{})
+	if err == nil {
+		t.Error("expected error with no arguments")
+	}
+}
+
+func TestHelpers_Domo_Directory(t *testing.T) {
+	helpers, tmpDir := createInstallTestHelpers(t)
+
+	subDir := filepath.Join(tmpDir, "locales")
+	if err := os.MkdirAll(subDir, 0755); err != nil {
+		t.Fatalf("failed to create subdir: %v", err)
+	}
+
+	err := helpers.Domo([]string{subDir})
+	if err == nil {
+		t.Error("expected error when passing directory to domo")
+	}
+}
+
+func TestHelpers_Domo_NonExistent(t *testing.T) {
+	helpers, tmpDir := createInstallTestHelpers(t)
+
+	err := helpers.Domo([]string{filepath.Join(tmpDir, "nonexistent.mo")})
+	if err == nil {
+		t.Error("expected error for non-existent file")
+	}
+}
+
+func TestHelpers_Domo_NilEnv(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	helpers := NewHelpers(nil, &stdout, &stderr)
+
+	err := helpers.Domo([]string{"/some/file.mo"})
+	if err == nil {
+		t.Error("expected error with nil environment")
+	}
+}
+
+func TestHelpers_Domo_SubdirectoryFile(t *testing.T) {
+	helpers, tmpDir := createInstallTestHelpers(t)
+	helpers.env.EAPI = "8"
+
+	// Create .mo file in a po/ subdirectory
+	moPath := createTestFile(t, filepath.Join(tmpDir, "po"), "ja.mo", "Japanese translations")
+
+	err := helpers.Domo([]string{moPath})
+	if err != nil {
+		t.Fatalf("Domo failed: %v", err)
+	}
+
+	installedPath := filepath.Join(helpers.env.D, "usr", "share", "locale", "ja", "LC_MESSAGES", "zlib.mo")
+	if _, err := os.Stat(installedPath); os.IsNotExist(err) {
+		t.Errorf("expected file at %s", installedPath)
+	}
+}
+
+// ============================================================================
 // Library/Header Tests
 // ============================================================================
 
