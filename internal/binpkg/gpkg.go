@@ -2,15 +2,167 @@ package binpkg
 
 import (
 	"archive/tar"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/grpmsoft/grpm/internal/pkg"
 )
+
+// gpkgPackageInfo contains extended package information from GPKG metadata.
+//
+// This is an internal structure used during GPKG loading to hold both
+// the standard BuildMetadata and Gentoo-specific package identifiers
+// (CATEGORY, PF, SLOT) that don't belong in the BuildMetadata struct.
+type gpkgPackageInfo struct {
+	metadata *BuildMetadata
+	category string // CATEGORY: e.g., "sys-libs"
+	pf       string // PF: package-version[-revision], e.g., "zlib-1.2.13-r1"
+	slot     string // SLOT: e.g., "0/1"
+}
+
+// getGPKGPackageInfo extracts extended package info from a GPKG file.
+//
+// This function reads the metadata.tar and extracts:
+//   - BuildMetadata (standard fields)
+//   - CATEGORY, PF, SLOT (Gentoo package identifiers)
+func getGPKGPackageInfo(path string) (*gpkgPackageInfo, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = file.Close() }()
+
+	// Open tar archive
+	tr := tar.NewReader(file)
+
+	// Look for metadata.tar member
+	for {
+		header, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+
+		// Found metadata
+		if header.Name == "metadata.tar" || strings.HasPrefix(header.Name, "metadata.tar.") {
+			return parseGPKGExtendedMetadata(tr)
+		}
+	}
+
+	// No metadata found - return default
+	return &gpkgPackageInfo{
+		metadata: &BuildMetadata{
+			BuildDate: time.Now(),
+			EAPI:      "8",
+		},
+	}, nil
+}
+
+// parseGPKGExtendedMetadata parses metadata.tar and extracts both BuildMetadata
+// and Gentoo-specific package identifiers.
+func parseGPKGExtendedMetadata(r io.Reader) (*gpkgPackageInfo, error) {
+	tr := tar.NewReader(r)
+
+	// Metadata fields collected from tar entries
+	metaFiles := make(map[string]string)
+
+	// Read all metadata files from the nested tar
+	for {
+		header, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("reading metadata.tar: %w", err)
+		}
+
+		// Skip directories
+		if header.Typeflag == tar.TypeDir {
+			continue
+		}
+
+		// Read file content
+		content, err := io.ReadAll(tr)
+		if err != nil {
+			return nil, fmt.Errorf("reading metadata file %s: %w", header.Name, err)
+		}
+
+		// Store with base name (strip any path prefix)
+		fileName := filepath.Base(header.Name)
+		metaFiles[fileName] = strings.TrimSpace(string(content))
+	}
+
+	// Build metadata from collected files
+	metadata := &BuildMetadata{
+		BuildDate:  time.Now(),
+		EAPI:       "8",
+		USE:        []string{},
+		Features:   []string{},
+		Repository: "gentoo",
+	}
+
+	// Parse BUILD_TIME (unix timestamp)
+	if buildTime, ok := metaFiles["BUILD_TIME"]; ok {
+		if timestamp, err := strconv.ParseInt(buildTime, 10, 64); err == nil {
+			metadata.BuildDate = time.Unix(timestamp, 0)
+		}
+	}
+
+	// Parse SIZE (installed size in bytes)
+	if sizeStr, ok := metaFiles["SIZE"]; ok {
+		if size, err := strconv.ParseInt(sizeStr, 10, 64); err == nil {
+			metadata.Size = size
+		}
+	}
+
+	// Parse simple string fields
+	if cflags, ok := metaFiles["CFLAGS"]; ok {
+		metadata.CFLAGS = cflags
+	}
+	if cxxflags, ok := metaFiles["CXXFLAGS"]; ok {
+		metadata.CXXFLAGS = cxxflags
+	}
+	if ldflags, ok := metaFiles["LDFLAGS"]; ok {
+		metadata.LDFLAGS = ldflags
+	}
+	if eapi, ok := metaFiles["EAPI"]; ok {
+		metadata.EAPI = eapi
+	}
+	if repo, ok := metaFiles["REPOSITORY"]; ok {
+		metadata.Repository = repo
+	}
+	if buildHost, ok := metaFiles["BUILD_HOST"]; ok {
+		metadata.BuildHost = buildHost
+	}
+
+	// Parse USE flags (space-separated)
+	if useFlags, ok := metaFiles["USE"]; ok && useFlags != "" {
+		metadata.USE = strings.Fields(useFlags)
+	}
+
+	// Parse FEATURES (space-separated)
+	if features, ok := metaFiles["FEATURES"]; ok && features != "" {
+		metadata.Features = strings.Fields(features)
+	}
+
+	// Build extended package info
+	pkgInfo := &gpkgPackageInfo{
+		metadata: metadata,
+		category: metaFiles["CATEGORY"],
+		pf:       metaFiles["PF"],
+		slot:     metaFiles["SLOT"],
+	}
+
+	return pkgInfo, nil
+}
 
 // LoadGPKG loads a GPKG format binary package.
 //
@@ -26,27 +178,31 @@ func LoadGPKG(path string) (*BinaryPackage, error) {
 		return nil, fmt.Errorf("failed to stat file: %w", err)
 	}
 
-	// Parse package name from filename
+	// Parse package name from filename as fallback
 	// Example: sys-libs/zlib-1.2.13.gpkg.tar -> zlib-1.2.13
 	basename := filepath.Base(path)
 	basename = strings.TrimSuffix(basename, ".gpkg.tar")
 
-	// Extract metadata
-	metadata, err := GetGPKGMetadata(path)
+	// Extract extended package info (metadata + CATEGORY/PF/SLOT)
+	pkgInfo, err := getGPKGPackageInfo(path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read metadata: %w", err)
+		return nil, fmt.Errorf("failed to read package info: %w", err)
 	}
 
-	// Parse package name and version from basename
-	// TODO: Proper parsing - for now, stub
-	pkgName := basename
-	pkgVersion := "1.0"
+	// Determine package name and version from metadata or filename
+	pkgName, pkgVersion := parseGPKGPackageInfo(pkgInfo, basename)
+
+	// Parse slot from metadata
+	slot := pkg.Slot{Name: "0"}
+	if pkgInfo.slot != "" {
+		slot = pkg.ParseSlot(pkgInfo.slot)
+	}
 
 	// Create package
 	p := &pkg.Package{
 		Name:    pkgName,
 		Version: pkgVersion,
-		Slot:    pkg.Slot{Name: "0"},
+		Slot:    slot,
 	}
 
 	return &BinaryPackage{
@@ -54,7 +210,7 @@ func LoadGPKG(path string) (*BinaryPackage, error) {
 		Format:    FormatGPKG,
 		Path:      path,
 		Size:      info.Size(),
-		BuildInfo: metadata,
+		BuildInfo: pkgInfo.metadata,
 	}, nil
 }
 
@@ -65,60 +221,81 @@ func LoadGPKG(path string) (*BinaryPackage, error) {
 //   - metadata.tar: Package metadata (compressed tar)
 //   - image.tar.{compression}: Installed files
 func GetGPKGMetadata(path string) (*BuildMetadata, error) {
-	file, err := os.Open(path)
+	pkgInfo, err := getGPKGPackageInfo(path)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = file.Close() }()
+	return pkgInfo.metadata, nil
+}
 
-	// Open tar archive
-	tr := tar.NewReader(file)
-
-	// Look for metadata.tar member
-	for {
-		header, err := tr.Next()
-		if err == io.EOF {
-			break
+// parseGPKGPackageInfo extracts package name and version from metadata or basename.
+//
+// Metadata parsing order (preferred):
+//  1. CATEGORY + PF from metadata files
+//  2. Fallback: parse from filename basename
+//
+// PF format: name-version[-revision], e.g., "zlib-1.2.13-r1" or "hello-2.10"
+func parseGPKGPackageInfo(pkgInfo *gpkgPackageInfo, basename string) (name, version string) {
+	// Prefer CATEGORY + PF from metadata if available
+	if pkgInfo != nil && pkgInfo.pf != "" {
+		pkgName, pkgVersion := splitPkgNameVersion(pkgInfo.pf)
+		// If CATEGORY is available, prepend it to the package name
+		if pkgInfo.category != "" {
+			pkgName = pkgInfo.category + "/" + pkgName
 		}
-		if err != nil {
-			return nil, err
-		}
+		return pkgName, pkgVersion
+	}
 
-		// Found metadata
-		if header.Name == "metadata.tar" || strings.HasPrefix(header.Name, "metadata.tar.") {
-			return parseGPKGMetadata(tr)
+	// Fallback: parse from basename
+	// Basename format: "category--name-version" or "name-version"
+	// Examples:
+	//   - "sys-libs--zlib-1.2.13" (GPKG format with category)
+	//   - "zlib-1.2.13" (simple format)
+
+	// Try to extract from GPKG naming convention (category--name-version)
+	category := ""
+	if idx := strings.Index(basename, "--"); idx != -1 {
+		// Has category prefix: "sys-libs--zlib-1.2.13"
+		category = basename[:idx]
+		basename = basename[idx+2:]
+	}
+
+	// Parse name-version using Gentoo convention
+	pkgName, pkgVersion := splitPkgNameVersion(basename)
+
+	// Prepend category if available
+	if category != "" {
+		pkgName = category + "/" + pkgName
+	}
+
+	return pkgName, pkgVersion
+}
+
+// splitPkgNameVersion splits "name-version" into name and version.
+//
+// Uses Gentoo convention: version starts at last hyphen followed by digit.
+// Examples:
+//   - "zlib-1.2.13" -> ("zlib", "1.2.13")
+//   - "hello-2.10-r1" -> ("hello", "2.10-r1")
+//   - "gtk+-3.24.38" -> ("gtk+", "3.24.38")
+func splitPkgNameVersion(s string) (name, version string) {
+	lastHyphen := -1
+	for i := len(s) - 1; i >= 0; i-- {
+		if s[i] == '-' {
+			// Check if next char is a digit (start of version)
+			if i+1 < len(s) && s[i+1] >= '0' && s[i+1] <= '9' {
+				lastHyphen = i
+				break
+			}
 		}
 	}
 
-	// No metadata found - return default
-	return &BuildMetadata{
-		BuildDate: time.Now(),
-		EAPI:      "8",
-	}, nil
-}
+	if lastHyphen == -1 {
+		// No version found, return whole string as name
+		return s, ""
+	}
 
-// parseGPKGMetadata parses metadata from metadata.tar member.
-func parseGPKGMetadata(r io.Reader) (*BuildMetadata, error) {
-	// metadata.tar is itself a tar archive containing files like:
-	// - CFLAGS
-	// - CXXFLAGS
-	// - LDFLAGS
-	// - USE
-	// - BUILD_TIME
-	// - SIZE
-	// etc.
-
-	// For now, return stub metadata
-	// TODO: Implement full metadata parsing
-	return &BuildMetadata{
-		BuildDate:  time.Now(),
-		BuildHost:  "unknown",
-		CFLAGS:     "-O2 -pipe",
-		EAPI:       "8",
-		USE:        []string{},
-		Features:   []string{"sandbox"},
-		Repository: "gentoo",
-	}, nil
+	return s[:lastHyphen], s[lastHyphen+1:]
 }
 
 // ExtractGPKG extracts GPKG package contents to destination directory.
@@ -137,7 +314,7 @@ func ExtractGPKG(packagePath, destDir string) error {
 	// Find image.tar member
 	for {
 		header, err := tr.Next()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -160,7 +337,7 @@ func extractImageTar(r io.Reader, destDir string) error {
 
 	for {
 		header, err := tr.Next()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {

@@ -262,22 +262,24 @@ func (l *EclassLoader) loadEclass(ctx context.Context, name string) error {
 		return nil
 	}
 
-	// Find eclass file
-	path, err := l.registry.FindEclass(name)
-	if err != nil {
-		return err
-	}
-
 	l.writeStdout(fmt.Sprintf(">>> Inheriting eclass: %s\n", name))
 
 	// Set current eclass for EXPORT_FUNCTIONS
 	l.registry.SetCurrentEclass(name)
 	defer l.registry.SetCurrentEclass("")
 
-	// Check for built-in eclass implementations
+	// Check for built-in eclass implementations FIRST
+	// This allows common eclasses (toolchain-funcs, eutils, etc.) to work
+	// without requiring the actual eclass files to be present
 	if handled := l.handleBuiltinEclass(name); handled {
-		l.registry.MarkLoaded(name, path)
+		l.registry.MarkLoaded(name, "(builtin)")
 		return nil
+	}
+
+	// Find eclass file
+	path, err := l.registry.FindEclass(name)
+	if err != nil {
+		return err
 	}
 
 	// Read and execute eclass file

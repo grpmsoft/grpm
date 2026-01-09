@@ -12,6 +12,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/grpmsoft/grpm/internal/state"
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/syntax"
@@ -45,7 +46,21 @@ func NewInterpreter(env *Environment, stdout, stderr io.Writer) *Interpreter {
 		stderr: stderr,
 	}
 	i.helpers = NewHelpers(env, stdout, stderr)
+
+	// Wire up the eclass loader to resolve circular dependency.
+	// EclassLoader needs Interpreter, and Helpers.Inherit needs EclassLoader.
+	eclassLoader := NewEclassLoader(i.helpers.eclassRegistry, i)
+	i.helpers.SetEclassLoader(eclassLoader)
+
 	return i
+}
+
+// SetPackageDatabase sets the package database for has_version/best_version queries.
+//
+// This allows the interpreter to query the system's installed package database (VarDB)
+// when ebuilds use has_version or best_version commands.
+func (i *Interpreter) SetPackageDatabase(db *state.PackageDatabase) {
+	i.helpers.SetPackageDatabase(db)
 }
 
 // Run executes a bash script string.

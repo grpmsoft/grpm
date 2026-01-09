@@ -8,6 +8,43 @@ import (
 	"testing"
 )
 
+// createValidMetadataTar creates a valid metadata.tar archive with proper Gentoo metadata files.
+func createValidMetadataTar(t testing.TB) []byte {
+	t.Helper()
+
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+
+	// Standard Gentoo metadata files
+	metadataFiles := map[string]string{
+		"PF":       "test-1.0",
+		"CATEGORY": "app-test",
+		"SLOT":     "0",
+		"EAPI":     "8",
+		"LICENSE":  "MIT",
+	}
+
+	for name, content := range metadataFiles {
+		data := []byte(content)
+		if err := tw.WriteHeader(&tar.Header{
+			Name: name,
+			Mode: 0644,
+			Size: int64(len(data)),
+		}); err != nil {
+			t.Fatalf("Failed to write metadata header for %s: %v", name, err)
+		}
+		if _, err := tw.Write(data); err != nil {
+			t.Fatalf("Failed to write metadata data for %s: %v", name, err)
+		}
+	}
+
+	if err := tw.Close(); err != nil {
+		t.Fatalf("Failed to close metadata tar: %v", err)
+	}
+
+	return buf.Bytes()
+}
+
 // createTestGPKG creates a valid GPKG archive for testing.
 func createTestGPKG(t *testing.T, destPath string, contents map[string][]byte) {
 	t.Helper()
@@ -103,9 +140,9 @@ func TestLoadGPKG(t *testing.T) {
 	tmpDir := t.TempDir()
 	gpkgPath := filepath.Join(tmpDir, "test-package-1.0.gpkg.tar")
 
-	// Create test GPKG
+	// Create test GPKG with valid nested metadata.tar
 	createTestGPKG(t, gpkgPath, map[string][]byte{
-		"metadata.tar": []byte("test metadata"),
+		"metadata.tar": createValidMetadataTar(t),
 	})
 
 	// Test loading
@@ -142,9 +179,9 @@ func TestGetGPKGMetadata(t *testing.T) {
 	tmpDir := t.TempDir()
 	gpkgPath := filepath.Join(tmpDir, "test-1.0.gpkg.tar")
 
-	// Create test GPKG with metadata
+	// Create test GPKG with valid nested metadata.tar
 	createTestGPKG(t, gpkgPath, map[string][]byte{
-		"metadata.tar": []byte("test metadata content"),
+		"metadata.tar": createValidMetadataTar(t),
 	})
 
 	metadata, err := GetGPKGMetadata(gpkgPath)
@@ -239,9 +276,9 @@ func TestExtractGPKG_NoImageTar(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Create test GPKG without image.tar
+	// Create test GPKG without image.tar (only valid metadata.tar)
 	createTestGPKG(t, gpkgPath, map[string][]byte{
-		"metadata.tar": []byte("metadata only"),
+		"metadata.tar": createValidMetadataTar(t),
 	})
 
 	err := ExtractGPKG(gpkgPath, destDir)
@@ -292,12 +329,14 @@ func BenchmarkLoadGPKG(b *testing.B) {
 	tmpDir := b.TempDir()
 	gpkgPath := filepath.Join(tmpDir, "bench-1.0.gpkg.tar")
 
-	// Create test GPKG
+	// Create test GPKG with valid metadata.tar
+	metadataTar := createValidMetadataTar(b)
+
 	file, _ := os.Create(gpkgPath)
 	tw := tar.NewWriter(file)
 	_ = tw.WriteHeader(&tar.Header{Name: "gpkg-1", Mode: 0644, Size: 0})
-	_ = tw.WriteHeader(&tar.Header{Name: "metadata.tar", Mode: 0644, Size: 4})
-	_, _ = tw.Write([]byte("test"))
+	_ = tw.WriteHeader(&tar.Header{Name: "metadata.tar", Mode: 0644, Size: int64(len(metadataTar))})
+	_, _ = tw.Write(metadataTar)
 	_ = tw.Close()
 	_ = file.Close()
 
@@ -311,12 +350,14 @@ func BenchmarkGetGPKGMetadata(b *testing.B) {
 	tmpDir := b.TempDir()
 	gpkgPath := filepath.Join(tmpDir, "bench-1.0.gpkg.tar")
 
-	// Create test GPKG
+	// Create test GPKG with valid metadata.tar
+	metadataTar := createValidMetadataTar(b)
+
 	file, _ := os.Create(gpkgPath)
 	tw := tar.NewWriter(file)
 	_ = tw.WriteHeader(&tar.Header{Name: "gpkg-1", Mode: 0644, Size: 0})
-	_ = tw.WriteHeader(&tar.Header{Name: "metadata.tar", Mode: 0644, Size: 4})
-	_, _ = tw.Write([]byte("test"))
+	_ = tw.WriteHeader(&tar.Header{Name: "metadata.tar", Mode: 0644, Size: int64(len(metadataTar))})
+	_, _ = tw.Write(metadataTar)
 	_ = tw.Close()
 	_ = file.Close()
 

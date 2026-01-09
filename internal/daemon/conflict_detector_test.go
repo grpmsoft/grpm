@@ -10,7 +10,7 @@ import (
 // TestConflictDetector_SamePackage tests same package conflict detection
 func TestConflictDetector_SamePackage(t *testing.T) {
 	mockRepo := repo.NewMockRepository()
-	pkgService := application.NewPackageService(mockRepo)
+	pkgService := application.NewPackageService(mockRepo, nil)
 	detector := NewConflictDetector(pkgService)
 
 	// Create first job (running)
@@ -41,7 +41,7 @@ func TestConflictDetector_SamePackage(t *testing.T) {
 // TestConflictDetector_SamePackageWithVersion tests version handling
 func TestConflictDetector_SamePackageWithVersion(t *testing.T) {
 	mockRepo := repo.NewMockRepository()
-	pkgService := application.NewPackageService(mockRepo)
+	pkgService := application.NewPackageService(mockRepo, nil)
 	detector := NewConflictDetector(pkgService)
 
 	// Create first job with version
@@ -68,7 +68,7 @@ func TestConflictDetector_SamePackageWithVersion(t *testing.T) {
 // TestConflictDetector_DifferentPackagesNoConflict tests no conflict
 func TestConflictDetector_DifferentPackagesNoConflict(t *testing.T) {
 	mockRepo := repo.NewMockRepository()
-	pkgService := application.NewPackageService(mockRepo)
+	pkgService := application.NewPackageService(mockRepo, nil)
 	detector := NewConflictDetector(pkgService)
 
 	// Create first job
@@ -91,7 +91,7 @@ func TestConflictDetector_DifferentPackagesNoConflict(t *testing.T) {
 // TestConflictDetector_CompletedJobNoConflict tests completed jobs don't conflict
 func TestConflictDetector_CompletedJobNoConflict(t *testing.T) {
 	mockRepo := repo.NewMockRepository()
-	pkgService := application.NewPackageService(mockRepo)
+	pkgService := application.NewPackageService(mockRepo, nil)
 	detector := NewConflictDetector(pkgService)
 
 	// Create completed job (same package)
@@ -114,7 +114,7 @@ func TestConflictDetector_CompletedJobNoConflict(t *testing.T) {
 // TestConflictDetector_MultipleActiveJobs tests multiple running jobs
 func TestConflictDetector_MultipleActiveJobs(t *testing.T) {
 	mockRepo := repo.NewMockRepository()
-	pkgService := application.NewPackageService(mockRepo)
+	pkgService := application.NewPackageService(mockRepo, nil)
 	detector := NewConflictDetector(pkgService)
 
 	// Create multiple active jobs

@@ -10,9 +10,17 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
+
+	"github.com/grpmsoft/grpm/internal/pkg"
+	"github.com/grpmsoft/grpm/internal/state"
 )
+
+// stateInstalledPackage is a type alias to avoid import cycles.
+// Used by findBestVersion to return package information.
+type stateInstalledPackage = state.InstalledPackage
 
 // ============================================================================
 // eutils.eclass Functions
@@ -719,28 +727,214 @@ func (h *Helpers) Edosym(args []string) error {
 //
 // Usage: has_version ">=sys-libs/zlib-1.2" && echo "zlib installed"
 //
-// Note: This is a stub - would need to query the package database.
+// Queries the package database (VarDB) to check if a package matching
+// the given atom is installed. Supports version operators (>=, <=, >, <, =).
+//
+// Returns exit code 0 (nil) if found, exit code 1 (exitFalse) if not found.
 func (h *Helpers) HasVersion(args []string) error {
 	if len(args) < 1 {
 		return exitFalse()
 	}
 
-	// Stub implementation - in production would check /var/db/pkg
-	h.writeStderr(">>> has_version: stub implementation (assuming not installed)\n")
-	return exitFalse()
+	atom := args[0]
+
+	// Check if package database is available
+	if h.pkgDB == nil {
+		// No database available - cannot query, assume not installed
+		return exitFalse()
+	}
+
+	// Parse the atom and check against installed packages
+	found := h.checkPackageInstalled(atom)
+	if found {
+		return nil // Exit code 0 - found
+	}
+	return exitFalse() // Exit code 1 - not found
 }
 
 // BestVersion returns the best installed version of a package.
 //
 // Usage: best=$(best_version sys-libs/zlib)
 //
-// Note: This is a stub - would need to query the package database.
+// Queries the package database (VarDB) and outputs the best (highest)
+// installed version of the specified package to stdout.
+//
+// Output format: category/package-version (e.g., "sys-libs/zlib-1.2.13")
+// If no matching package is installed, outputs nothing.
 func (h *Helpers) BestVersion(args []string) error {
 	if len(args) < 1 {
 		return nil
 	}
 
-	// Stub implementation
-	h.writeStderr(">>> best_version: stub implementation\n")
+	atom := args[0]
+
+	// Check if package database is available
+	if h.pkgDB == nil {
+		// No database available - output nothing
+		return nil
+	}
+
+	// Find the best version
+	bestPkg := h.findBestVersion(atom)
+	if bestPkg != nil {
+		// Output the full package atom (category/name-version)
+		h.writeStdout(bestPkg.Package.ID())
+	}
+
 	return nil
+}
+
+// atomPattern matches Portage atom specifications.
+// Examples: sys-libs/zlib, >=sys-libs/zlib-1.2, =app-misc/hello-2.10
+var atomPattern = regexp.MustCompile(`^([<>=!~]*)([a-zA-Z0-9]+-[a-zA-Z0-9]+/[a-zA-Z0-9_+-]+)(?:-([0-9].*))?$`)
+
+// parseAtom parses a Portage atom specification into its components.
+//
+// Atom format: [operator]category/name[-version]
+// Examples:
+//   - sys-libs/zlib -> (none, sys-libs/zlib, "")
+//   - >=sys-libs/zlib-1.2 -> (>=, sys-libs/zlib, 1.2)
+//   - =app-misc/hello-2.10 -> (=, app-misc/hello, 2.10)
+//
+// Returns operator (>=, <=, >, <, =, or ""), package name, and version.
+func parseAtom(atom string) (operator, name, version string) {
+	// Remove any slot specification (:slot)
+	if idx := strings.Index(atom, ":"); idx != -1 {
+		atom = atom[:idx]
+	}
+
+	// Remove any USE flag requirements ([use])
+	if idx := strings.Index(atom, "["); idx != -1 {
+		atom = atom[:idx]
+	}
+
+	// Extract operator prefix
+	for _, op := range []string{">=", "<=", ">", "<", "=", "~", "!"} {
+		if strings.HasPrefix(atom, op) {
+			operator = op
+			atom = strings.TrimPrefix(atom, op)
+			break
+		}
+	}
+
+	// Match the remaining atom
+	matches := atomPattern.FindStringSubmatch(atom)
+	if matches == nil {
+		// Try simpler parsing for atoms without version
+		// Format: category/name
+		if strings.Contains(atom, "/") && !strings.Contains(atom, "-") {
+			return operator, atom, ""
+		}
+
+		// Try to extract version from end
+		// Find last dash followed by a digit
+		lastDash := -1
+		for i := len(atom) - 1; i >= 0; i-- {
+			if atom[i] == '-' && i+1 < len(atom) && atom[i+1] >= '0' && atom[i+1] <= '9' {
+				lastDash = i
+				break
+			}
+		}
+
+		if lastDash != -1 {
+			return operator, atom[:lastDash], atom[lastDash+1:]
+		}
+
+		return operator, atom, ""
+	}
+
+	// matches[1] = any operator in the middle (should be empty after prefix extraction)
+	// matches[2] = category/name
+	// matches[3] = version (optional)
+	name = matches[2]
+	if len(matches) > 3 {
+		version = matches[3]
+	}
+
+	return operator, name, version
+}
+
+// checkPackageInstalled checks if a package matching the atom is installed.
+func (h *Helpers) checkPackageInstalled(atom string) bool {
+	operator, name, version := parseAtom(atom)
+
+	// Get all installed packages matching the name pattern
+	packages := h.pkgDB.List()
+
+	for _, installed := range packages {
+		if installed.Package == nil {
+			continue
+		}
+
+		// Check if package name matches
+		if installed.Package.Name != name {
+			continue
+		}
+
+		// If no version specified, any version matches
+		if version == "" {
+			return true
+		}
+
+		// Check version constraint
+		constraint := buildConstraint(operator, version)
+		if constraint != nil && constraint.Satisfies(installed.Package.Version) {
+			return true
+		}
+
+		// If no operator, require exact match
+		if operator == "" && installed.Package.Version == version {
+			return true
+		}
+	}
+
+	return false
+}
+
+// findBestVersion finds the highest installed version of a package.
+func (h *Helpers) findBestVersion(atom string) *stateInstalledPackage {
+	_, name, _ := parseAtom(atom)
+
+	// Get all installed packages
+	packages := h.pkgDB.List()
+
+	var bestPkg *stateInstalledPackage
+	var bestVersion string
+
+	for _, installed := range packages {
+		if installed.Package == nil {
+			continue
+		}
+
+		// Check if package name matches
+		if installed.Package.Name != name {
+			continue
+		}
+
+		// Compare versions - keep the highest
+		if bestPkg == nil || pkg.CompareVersions(installed.Package.Version, bestVersion) > 0 {
+			bestPkg = installed
+			bestVersion = installed.Package.Version
+		}
+	}
+
+	return bestPkg
+}
+
+// buildConstraint creates a version constraint from operator and version string.
+func buildConstraint(operator, version string) *pkg.VersionConstraint {
+	switch operator {
+	case ">=":
+		return pkg.NewMinVersionConstraint(version)
+	case "<=":
+		return pkg.NewMaxVersionConstraint(version)
+	case ">":
+		return pkg.NewVersionConstraint(pkg.OpGreater, version)
+	case "<":
+		return pkg.NewVersionConstraint(pkg.OpLess, version)
+	case "=", "~":
+		return pkg.NewExactVersionConstraint(version)
+	default:
+		return nil
+	}
 }

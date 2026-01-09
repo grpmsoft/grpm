@@ -93,6 +93,17 @@ type Environment struct {
 	// A = space-separated list of source archives to unpack
 	// Populated by fetch phase from Manifest DIST entries
 	A string
+
+	// EBUILD_PHASE = current ebuild phase being executed
+	// Set by Executor during phase dispatch
+	EBUILD_PHASE string
+
+	// FILESDIR = directory containing ebuild support files (patches, etc.)
+	// Usually ${PORTDIR}/${CATEGORY}/${PN}/files
+	FILESDIR string
+
+	// EBUILD = path to the ebuild file being executed
+	EBUILD string
 }
 
 // NewEnvironment creates a new ebuild execution environment.
@@ -147,6 +158,9 @@ func NewEnvironment(pkg *pkg.Package, tmpDir, portDir, distDir string) (*Environ
 		}
 	}
 
+	// FILESDIR = files directory for patches and support files
+	filesDir := filepath.Join(portDir, category, packageName, "files")
+
 	return &Environment{
 		Package:  pkg,
 		P:        p,
@@ -165,6 +179,7 @@ func NewEnvironment(pkg *pkg.Package, tmpDir, portDir, distDir string) (*Environ
 		ED:             imageDir + "/",
 		T:              tempDir,
 		HOME:           filepath.Join(tempDir, "homedir"),
+		FILESDIR:       filesDir,
 
 		CFLAGS:   os.Getenv("CFLAGS"),
 		CXXFLAGS: os.Getenv("CXXFLAGS"),
@@ -204,6 +219,9 @@ func (env *Environment) ToMap() map[string]string {
 		"EAPI":           env.EAPI,
 		"SLOT":           env.SLOT,
 		"A":              env.A,
+		"EBUILD_PHASE":   env.EBUILD_PHASE,
+		"FILESDIR":       env.FILESDIR,
+		"EBUILD":         env.EBUILD,
 	}
 }
 

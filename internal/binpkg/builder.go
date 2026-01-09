@@ -2,6 +2,7 @@
 package binpkg
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"os"
@@ -366,10 +367,23 @@ func (b *BinaryPackageBuilder) collectMetadata() (*BuildMetadata, error) {
 }
 
 // generateChecksum generates SHA256 checksum for package file.
-func (b *BinaryPackageBuilder) generateChecksum(path string) (string, error) {
-	// TODO: Implement SHA256 checksum generation
-	// For now, return placeholder
-	return "sha256:placeholder", nil
+func (b *BinaryPackageBuilder) generateChecksum(path string) (checksum string, err error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("failed to open file for checksum: %w", err)
+	}
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("failed to close file: %w", closeErr)
+		}
+	}()
+
+	h := sha256.New()
+	if _, err = io.Copy(h, f); err != nil {
+		return "", fmt.Errorf("failed to read file for checksum: %w", err)
+	}
+
+	return fmt.Sprintf("sha256:%x", h.Sum(nil)), nil
 }
 
 // buildGPKG builds a GPKG format package.

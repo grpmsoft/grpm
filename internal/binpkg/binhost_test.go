@@ -91,10 +91,10 @@ func TestDetectBinhostType(t *testing.T) {
 func TestBinhost_SyncLocal(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	// Create some test packages
+	// Create test package with valid nested metadata.tar
 	gpkgPath := filepath.Join(tmpDir, "test-1.0.gpkg.tar")
 	createTestGPKG(t, gpkgPath, map[string][]byte{
-		"metadata.tar": []byte("test"),
+		"metadata.tar": createValidMetadataTar(t),
 	})
 
 	binhost, _ := NewBinhost(tmpDir)

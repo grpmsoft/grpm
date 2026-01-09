@@ -367,7 +367,7 @@ func TestJobQueue_GracefulShutdown(t *testing.T) {
 func TestJobQueue_ConflictDetection(t *testing.T) {
 	// Create mock repository and service for conflict detection
 	mockRepo := repo.NewMockRepository()
-	pkgService := application.NewPackageService(mockRepo)
+	pkgService := application.NewPackageService(mockRepo, nil)
 	detector := NewConflictDetector(pkgService)
 
 	// Create job queue with conflict detection
@@ -429,7 +429,7 @@ func TestJobQueue_ConflictDetection(t *testing.T) {
 func TestJobQueue_DifferentPackagesNoConflict(t *testing.T) {
 	// Create mock repository and service for conflict detection
 	mockRepo := repo.NewMockRepository()
-	pkgService := application.NewPackageService(mockRepo)
+	pkgService := application.NewPackageService(mockRepo, nil)
 	detector := NewConflictDetector(pkgService)
 
 	// Create job queue with conflict detection
