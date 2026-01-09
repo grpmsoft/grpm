@@ -66,6 +66,30 @@ func TestNewVersion_ValidVersions(t *testing.T) {
 			expectedRaw: "1.2.3.4.5.6",
 			shouldError: false,
 		},
+		{
+			name:        "Version with letter suffix",
+			versionStr:  "1.0a",
+			expectedRaw: "1.0a",
+			shouldError: false,
+		},
+		{
+			name:        "Version with letter and _suffix",
+			versionStr:  "1.0a_alpha1",
+			expectedRaw: "1.0a_alpha1",
+			shouldError: false,
+		},
+		{
+			name:        "Version with patchlevel",
+			versionStr:  "1.0_p1",
+			expectedRaw: "1.0_p1",
+			shouldError: false,
+		},
+		{
+			name:        "Version with leading zeros",
+			versionStr:  "1.01.002",
+			expectedRaw: "1.01.002",
+			shouldError: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -270,21 +294,144 @@ func TestVersion_CompareTo(t *testing.T) {
 			expected: 1,
 		},
 
-		// Alpha/Beta/RC comparisons (alphabetical string comparison)
+		// ========================================
+		// v0.2.1-001: Suffix Ordering (PMS 3.5-3.6)
+		// CRITICAL: _alpha < _beta < _pre < _rc < (release) < _p
+		// ========================================
 		{
-			name:     "Alpha before beta (1.0_alpha < 1.0_beta)",
+			name:     "v0.2.1-001: alpha < beta",
+			v1:       "1.0_alpha",
+			v2:       "1.0_beta",
+			expected: -1,
+		},
+		{
+			name:     "v0.2.1-001: alpha1 < beta1",
 			v1:       "1.0_alpha1",
 			v2:       "1.0_beta1",
 			expected: -1,
 		},
 		{
-			name:     "Beta before rc (1.0_beta < 1.0_rc)",
-			v1:       "1.0_beta1",
-			v2:       "1.0_rc1",
+			name:     "v0.2.1-001: beta < pre",
+			v1:       "1.0_beta",
+			v2:       "1.0_pre",
 			expected: -1,
 		},
 		{
-			name:     "Different alpha numbers (alpha1 < alpha2)",
+			name:     "v0.2.1-001: pre < rc",
+			v1:       "1.0_pre",
+			v2:       "1.0_rc",
+			expected: -1,
+		},
+		{
+			name:     "v0.2.1-001: rc < release (no suffix)",
+			v1:       "1.0_rc1",
+			v2:       "1.0",
+			expected: -1,
+		},
+		{
+			name:     "v0.2.1-001: release < patchlevel",
+			v1:       "1.0",
+			v2:       "1.0_p1",
+			expected: -1,
+		},
+		{
+			name:     "v0.2.1-001: CRITICAL - rc1 < p1 (was bug: p < rc alphabetically)",
+			v1:       "1.0_rc1",
+			v2:       "1.0_p1",
+			expected: -1,
+		},
+		{
+			name:     "v0.2.1-001: alpha < p (full chain)",
+			v1:       "1.0_alpha1",
+			v2:       "1.0_p1",
+			expected: -1,
+		},
+		{
+			name:     "v0.2.1-001: pre release before stable",
+			v1:       "1.0_pre20231201",
+			v2:       "1.0",
+			expected: -1,
+		},
+
+		// ========================================
+		// v0.2.1-003: Letter Suffix (PMS 3.4)
+		// CRITICAL: 1.0a < 1.0b < ... < 1.0z < 1.0 (no letter is newest)
+		// ========================================
+		{
+			name:     "v0.2.1-003: 1.0a < 1.0b",
+			v1:       "1.0a",
+			v2:       "1.0b",
+			expected: -1,
+		},
+		{
+			name:     "v0.2.1-003: 1.0y < 1.0z",
+			v1:       "1.0y",
+			v2:       "1.0z",
+			expected: -1,
+		},
+		{
+			name:     "v0.2.1-003: letter < no letter (1.0z < 1.0)",
+			v1:       "1.0z",
+			v2:       "1.0",
+			expected: -1,
+		},
+		{
+			name:     "v0.2.1-003: no letter > letter (1.0 > 1.0a)",
+			v1:       "1.0",
+			v2:       "1.0a",
+			expected: 1,
+		},
+		{
+			name:     "v0.2.1-003: letter with suffix (1.0a_alpha < 1.0a_beta)",
+			v1:       "1.0a_alpha",
+			v2:       "1.0a_beta",
+			expected: -1,
+		},
+		{
+			name:     "v0.2.1-003: 1.0a < 1.0b_alpha (letter takes precedence)",
+			v1:       "1.0a",
+			v2:       "1.0b_alpha",
+			expected: -1,
+		},
+
+		// ========================================
+		// v0.2.1-002: Leading Zeros (PMS 3.3)
+		// CRITICAL: strip trailing zeros, compare lexicographically
+		// ========================================
+		{
+			name:     "v0.2.1-002: 1.01 < 1.1 (leading zero lexicographic)",
+			v1:       "1.01",
+			v2:       "1.1",
+			expected: -1,
+		},
+		{
+			name:     "v0.2.1-002: 1.010 vs 1.01 (trailing zeros stripped)",
+			v1:       "1.010",
+			v2:       "1.01",
+			expected: 0,
+		},
+		{
+			name:     "v0.2.1-002: 1.001 < 1.01",
+			v1:       "1.001",
+			v2:       "1.01",
+			expected: -1,
+		},
+		{
+			name:     "v0.2.1-002: 1.02 > 1.01",
+			v1:       "1.02",
+			v2:       "1.01",
+			expected: 1,
+		},
+
+		// Combined scenarios
+		{
+			name:     "Combined: letter + suffix (1.0a_alpha < 1.0a_beta)",
+			v1:       "1.0a_alpha",
+			v2:       "1.0a_beta",
+			expected: -1,
+		},
+		{
+			name:     "Combined: different alpha numbers (alpha1 < alpha2)",
 			v1:       "1.0_alpha1",
 			v2:       "1.0_alpha2",
 			expected: -1,
@@ -303,31 +450,25 @@ func TestVersion_CompareTo(t *testing.T) {
 			v2:       "1.0-r1",
 			expected: -1,
 		},
+		{
+			name:     "Revision with patchlevel (1.0_p1-r1 < 1.0_p1-r2)",
+			v1:       "1.0_p1-r1",
+			v2:       "1.0_p1-r2",
+			expected: -1,
+		},
 
 		// Complex Gentoo-specific versions
-		// TODO: Known Issue - Pre-release semantics not yet implemented
-		// In Gentoo: 1.0_pre < 1.0_alpha < 1.0_beta < 1.0_rc < 1.0 (stable)
-		// Current implementation treats longer version as greater (incorrect for pre/alpha/beta/rc)
-		// Will fix in separate commit after implementing proper Gentoo version semantics
-		// {
-		// 	name:     "Pre-release before stable (1.0_pre < 1.0)",
-		// 	v1:       "1.0_pre20231201",
-		// 	v2:       "1.0",
-		// 	expected: -1,
-		// },
 		{
 			name:     "Complex comparison with all components",
 			v1:       "1.2.3_alpha4-r5",
 			v2:       "1.2.3_alpha5-r1",
 			expected: -1,
 		},
-
-		// Edge cases: numbers vs strings
 		{
-			name:     "Number component > string component",
-			v1:       "1.2.3",
-			v2:       "1.2.alpha",
-			expected: 1,
+			name:     "Complex: same base, different suffix type",
+			v1:       "1.2.3_beta1",
+			v2:       "1.2.3_rc1",
+			expected: -1,
 		},
 	}
 
@@ -347,7 +488,8 @@ func TestVersion_CompareTo(t *testing.T) {
 			}
 
 			if normalizedResult != tt.expected {
-				t.Errorf("Version(%q).CompareTo(%q) = %d, expected %d", tt.v1, tt.v2, normalizedResult, tt.expected)
+				t.Errorf("Version(%q).CompareTo(%q) = %d (raw: %d), expected %d",
+					tt.v1, tt.v2, normalizedResult, result, tt.expected)
 			}
 
 			// Test anti-symmetry: v1.CompareTo(v2) == -v2.CompareTo(v1)
@@ -355,6 +497,166 @@ func TestVersion_CompareTo(t *testing.T) {
 			if result != -reverse {
 				t.Errorf("CompareTo() not anti-symmetric: %q.CompareTo(%q)=%d, but %q.CompareTo(%q)=%d",
 					tt.v1, tt.v2, result, tt.v2, tt.v1, reverse)
+			}
+		})
+	}
+}
+
+// TestCompareVersions_PMSCompliance tests CompareVersions function directly
+// to ensure PMS Chapter 3.2-3.3 compliance
+func TestCompareVersions_PMSCompliance(t *testing.T) {
+	tests := []struct {
+		name     string
+		v1       string
+		v2       string
+		expected int
+	}{
+		// v0.2.1-001: Suffix ordering
+		{"suffix: alpha < beta", "1.0_alpha", "1.0_beta", -1},
+		{"suffix: beta < pre", "1.0_beta", "1.0_pre", -1},
+		{"suffix: pre < rc", "1.0_pre", "1.0_rc", -1},
+		{"suffix: rc < release", "1.0_rc", "1.0", -1},
+		{"suffix: release < p", "1.0", "1.0_p", -1},
+		{"suffix: CRITICAL rc < p", "1.0_rc1", "1.0_p1", -1},
+
+		// v0.2.1-002: Leading zeros (not currently triggered in test versions)
+		// Note: PMS says leading zero comparison is lexicographic after stripping trailing zeros
+
+		// v0.2.1-003: Letter suffix
+		{"letter: a < b", "1.0a", "1.0b", -1},
+		{"letter: z < (none)", "1.0z", "1.0", -1},
+		{"letter: (none) > a", "1.0", "1.0a", 1},
+
+		// Revisions
+		{"revision: r0 == no revision", "1.0-r0", "1.0", 0},
+		{"revision: r1 < r2", "1.0-r1", "1.0-r2", -1},
+
+		// Complex combinations
+		{"complex: 1.2.3_alpha < 1.2.3", "1.2.3_alpha", "1.2.3", -1},
+		{"complex: 1.2.3 < 1.2.3_p1", "1.2.3", "1.2.3_p1", -1},
+		{"complex: full chain", "1.0_alpha1", "1.0_p1", -1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := CompareVersions(tt.v1, tt.v2)
+
+			// Normalize to -1, 0, 1
+			normalized := 0
+			if result < 0 {
+				normalized = -1
+			} else if result > 0 {
+				normalized = 1
+			}
+
+			if normalized != tt.expected {
+				t.Errorf("CompareVersions(%q, %q) = %d, expected %d",
+					tt.v1, tt.v2, normalized, tt.expected)
+			}
+		})
+	}
+}
+
+// TestVersion_SuffixOrdering_Comprehensive tests all suffix orderings exhaustively
+func TestVersion_SuffixOrdering_Comprehensive(t *testing.T) {
+	// Define the correct order per PMS Algorithm 3.5-3.6
+	// _alpha < _beta < _pre < _rc < (no suffix) < _p
+	orderedVersions := []string{
+		"1.0_alpha",
+		"1.0_alpha1",
+		"1.0_alpha2",
+		"1.0_beta",
+		"1.0_beta1",
+		"1.0_pre",
+		"1.0_pre1",
+		"1.0_rc",
+		"1.0_rc1",
+		"1.0_rc2",
+		"1.0", // release
+		"1.0_p",
+		"1.0_p1",
+		"1.0_p2",
+	}
+
+	for i := 0; i < len(orderedVersions)-1; i++ {
+		for j := i + 1; j < len(orderedVersions); j++ {
+			v1 := MustNewVersion(orderedVersions[i])
+			v2 := MustNewVersion(orderedVersions[j])
+
+			result := v1.CompareTo(v2)
+			if result >= 0 {
+				t.Errorf("Expected %q < %q, but CompareTo returned %d",
+					orderedVersions[i], orderedVersions[j], result)
+			}
+
+			// Also test reverse
+			reverseResult := v2.CompareTo(v1)
+			if reverseResult <= 0 {
+				t.Errorf("Expected %q > %q, but CompareTo returned %d",
+					orderedVersions[j], orderedVersions[i], reverseResult)
+			}
+		}
+	}
+}
+
+// TestVersion_LetterSuffix_Comprehensive tests letter suffix ordering
+func TestVersion_LetterSuffix_Comprehensive(t *testing.T) {
+	// Per PMS 3.4: 1.0a < 1.0b < ... < 1.0z < 1.0 (no letter)
+	letters := "abcdefghijklmnopqrstuvwxyz"
+	versions := make([]string, len(letters)+1)
+
+	for i, ch := range letters {
+		versions[i] = "1.0" + string(ch)
+	}
+	versions[len(letters)] = "1.0" // no letter is last (highest)
+
+	for i := 0; i < len(versions)-1; i++ {
+		for j := i + 1; j < len(versions); j++ {
+			v1 := MustNewVersion(versions[i])
+			v2 := MustNewVersion(versions[j])
+
+			result := v1.CompareTo(v2)
+			if result >= 0 {
+				t.Errorf("Expected %q < %q, but CompareTo returned %d",
+					versions[i], versions[j], result)
+			}
+		}
+	}
+}
+
+// TestVersion_LeadingZeros tests PMS Algorithm 3.3 leading zero comparison
+func TestVersion_LeadingZeros(t *testing.T) {
+	tests := []struct {
+		name     string
+		v1       string
+		v2       string
+		expected int
+	}{
+		// Leading zero triggers lexicographic comparison after stripping trailing zeros
+		{"01 vs 1: leading zero triggers special comparison", "1.01", "1.1", -1},
+		{"010 vs 01: trailing zeros stripped, equal", "1.010", "1.01", 0},
+		{"001 vs 01: lexicographic 001 < 01", "1.001", "1.01", -1},
+		{"02 vs 01: 02 > 01", "1.02", "1.01", 1},
+		{"0 vs 00: both normalize to same", "1.0", "1.00", 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			v1 := MustNewVersion(tt.v1)
+			v2 := MustNewVersion(tt.v2)
+
+			result := v1.CompareTo(v2)
+
+			normalized := 0
+			if result < 0 {
+				normalized = -1
+			} else if result > 0 {
+				normalized = 1
+			}
+
+			if normalized != tt.expected {
+				t.Errorf("Version(%q).CompareTo(%q) = %d, expected %d",
+					tt.v1, tt.v2, normalized, tt.expected)
 			}
 		})
 	}
@@ -385,6 +687,18 @@ func TestVersion_IsGreaterThan(t *testing.T) {
 			v1:       "1.0.0",
 			v2:       "1.0.0",
 			expected: false,
+		},
+		{
+			name:     "1.0_p1 > 1.0 (patchlevel > release)",
+			v1:       "1.0_p1",
+			v2:       "1.0",
+			expected: true,
+		},
+		{
+			name:     "1.0 > 1.0_rc1 (release > rc)",
+			v1:       "1.0",
+			v2:       "1.0_rc1",
+			expected: true,
 		},
 	}
 
@@ -426,6 +740,12 @@ func TestVersion_IsLessThan(t *testing.T) {
 			v1:       "1.0.0",
 			v2:       "1.0.0",
 			expected: false,
+		},
+		{
+			name:     "1.0_rc1 < 1.0_p1 (rc < patchlevel)",
+			v1:       "1.0_rc1",
+			v2:       "1.0_p1",
+			expected: true,
 		},
 	}
 
@@ -547,6 +867,50 @@ func TestVersion_Immutability(t *testing.T) {
 	}
 }
 
+// TestVersionConstraint_Satisfies_PMS tests the Satisfies method with PMS-compliant versions
+func TestVersionConstraint_Satisfies_PMS(t *testing.T) {
+	tests := []struct {
+		name       string
+		constraint string
+		version    string
+		expected   bool
+	}{
+		// Basic version constraints
+		{"exact match", "1.0", "1.0", true},
+		{"exact no match", "1.0", "1.1", false},
+		{"greater equal pass", ">=1.0", "1.1", true},
+		{"greater equal exact", ">=1.0", "1.0", true},
+		{"greater equal fail", ">=1.0", "0.9", false},
+
+		// PMS suffix ordering in constraints
+		{"rc satisfies >= alpha", ">=1.0_alpha", "1.0_rc1", true},
+		{"p satisfies >= rc", ">=1.0_rc1", "1.0_p1", true},
+		{"alpha does not satisfy >= rc", ">=1.0_rc1", "1.0_alpha1", false},
+		{"release satisfies >= rc", ">=1.0_rc1", "1.0", true},
+		{"rc does not satisfy >= release", ">=1.0", "1.0_rc1", false},
+
+		// Letter suffix in constraints
+		{"1.0b satisfies >= 1.0a", ">=1.0a", "1.0b", true},
+		{"1.0 satisfies >= 1.0z", ">=1.0z", "1.0", true},
+		{"1.0a does not satisfy >= 1.0", ">=1.0", "1.0a", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			vc, err := ParseVersionConstraint(tt.constraint)
+			if err != nil {
+				t.Fatalf("ParseVersionConstraint(%q) error: %v", tt.constraint, err)
+			}
+
+			result := vc.Satisfies(tt.version)
+			if result != tt.expected {
+				t.Errorf("VersionConstraint(%q).Satisfies(%q) = %v, expected %v",
+					tt.constraint, tt.version, result, tt.expected)
+			}
+		})
+	}
+}
+
 // BenchmarkNewVersion benchmarks version creation
 func BenchmarkNewVersion(b *testing.B) {
 	for i := 0; i < b.N; i++ {
@@ -562,5 +926,13 @@ func BenchmarkVersionCompareTo(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_ = v1.CompareTo(v2)
+	}
+}
+
+// BenchmarkCompareVersions_PMS benchmarks the direct comparison function
+func BenchmarkCompareVersions_PMS(b *testing.B) {
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = CompareVersions("1.2.3_alpha4-r5", "1.2.3_beta1-r3")
 	}
 }
