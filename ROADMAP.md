@@ -1,7 +1,8 @@
 # GRPM Roadmap
 
-> **Last Updated:** 2026-01-08
-> **Current Version:** v0.1.0
+> **Last Updated:** 2026-01-09
+> **Current Version:** v0.2.0
+> **In Development:** v0.3.0 (PMS Compliance + GoSh)
 
 ---
 
@@ -16,9 +17,37 @@ GRPM aims to be a modern, reliable package manager for Gentoo Linux with:
 
 ---
 
-## Current Release
+## Current Development
 
-### v0.1.0 — Initial Public Release (January 2026)
+### v0.3.0 — PMS Compliance + GoSh (In Progress)
+
+**Focus:** Full PMS compliance and bash compatibility
+
+| Task | Status | Description |
+|------|--------|-------------|
+| Atom Parser | ✅ Done | PMS Section 8.3 compliant parser |
+| EAPI 8 | 🔲 TODO | Full EAPI 8 feature support |
+| GoSh Integration | 🔲 TODO | Replace mvdan.cc/sh with GoSh |
+
+---
+
+## Recent Releases
+
+### v0.2.0 — Ebuild Parser Improvements (2026-01-09)
+
+- Package variable expansion (${P}, ${PN}, ${PV}, ${PVR}, ${PF}, ${CATEGORY})
+- Removed builtin eclass handling (all eclasses from repository)
+- REST API socket improvements
+- Native xargs helper implementation
+
+### v0.1.1 — Module Architecture (2026-01-09)
+
+- Real eclass `inherit` with `EXPORT_FUNCTIONS`
+- Proper phase dispatch to custom functions
+- Hook phases working correctly
+- Enhanced `has_version`/`best_version`
+
+### v0.1.0 — Initial Public Release (2026-01-08)
 
 First public release with core functionality:
 
@@ -60,16 +89,18 @@ No fixed timeline for v1.0.0 — quality and stability over deadlines.
 
 ## Planned Features (v0.x.x)
 
-### Near-term
+### Near-term (v0.3.0)
 
+- [x] PMS-compliant atom parser (Section 8.3)
 - [ ] Full EAPI 8 support
+- [ ] GoSh integration (bash compatibility)
+- [ ] Improved error messages and diagnostics
+
+### Medium-term (v0.4.0+)
+
 - [ ] CMake/Meson build system support
 - [ ] Extended eclass support
-- [ ] Improved error messages and diagnostics
 - [ ] Performance optimization for large dependency graphs
-
-### Medium-term
-
 - [ ] Web UI for daemon management
 - [ ] Parallel package builds
 - [ ] Distributed build support
