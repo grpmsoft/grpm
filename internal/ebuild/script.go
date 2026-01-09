@@ -166,8 +166,13 @@ func (s *EbuildScript) HasPhaseFunction(phase Phase) bool {
 }
 
 // phaseFunctionName returns the bash function name for a phase.
+// Per PMS Chapter 9, ebuild phase function names follow these conventions:
+// - src_* phases: operate on sources (unpack, prepare, configure, compile, test, install)
+// - pkg_* phases: operate on packages (setup, preinst, postinst, prerm, postrm, config, info, nofetch, pretend)
 func phaseFunctionName(phase Phase) string {
 	switch phase {
+	case PhasePretend:
+		return "pkg_pretend"
 	case PhaseSetup:
 		return "pkg_setup"
 	case PhaseUnpack:
@@ -190,6 +195,12 @@ func phaseFunctionName(phase Phase) string {
 		return "pkg_prerm"
 	case PhasePostrm:
 		return "pkg_postrm"
+	case PhaseConfig:
+		return "pkg_config"
+	case PhaseInfo:
+		return "pkg_info"
+	case PhaseNofetch:
+		return "pkg_nofetch"
 	default:
 		return ""
 	}
@@ -232,9 +243,12 @@ func getWordValue(word *syntax.Word) string {
 // FindDefinedPhases returns a list of phases that have custom functions defined.
 //
 // This is similar to Portage's DEFINED_PHASES metadata.
+// Per PMS Chapter 9: Includes all phase functions that an ebuild may define.
 func (s *EbuildScript) FindDefinedPhases() []Phase {
 	defined := make([]Phase, 0)
+	// All possible phases per PMS Chapter 9
 	phases := []Phase{
+		PhasePretend, // EAPI 4+
 		PhaseSetup,
 		PhaseUnpack,
 		PhasePrepare,
@@ -246,6 +260,9 @@ func (s *EbuildScript) FindDefinedPhases() []Phase {
 		PhasePostinst,
 		PhasePrerem,
 		PhasePostrm,
+		PhaseConfig,
+		PhaseInfo,
+		PhaseNofetch,
 	}
 
 	for _, phase := range phases {

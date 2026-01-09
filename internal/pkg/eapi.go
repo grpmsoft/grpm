@@ -86,6 +86,14 @@ type EAPIFeatures struct {
 
 	// --- Phase Functions (PMS Section 9) ---
 
+	// HasPkgPretend indicates if pkg_pretend phase is supported.
+	// EAPI 4+: Pre-fetch sanity checks.
+	HasPkgPretend bool
+
+	// HasPkgInfoNonInstalled indicates if pkg_info can be called on non-installed packages.
+	// EAPI 4+: pkg_info works for non-installed packages.
+	HasPkgInfoNonInstalled bool
+
 	// HasSrcPrepare indicates if src_prepare phase is supported.
 	// EAPI 2+: Explicit preparation phase.
 	HasSrcPrepare bool
@@ -300,6 +308,8 @@ var supportedEAPIs = map[string]EAPIFeatures{
 		UseDeps:                 true,
 		UseDepDefaults:          true,
 		SrcURIArrows:            true,
+		HasPkgPretend:           true, // EAPI 4+ supports pkg_pretend
+		HasPkgInfoNonInstalled:  true, // EAPI 4+ pkg_info on non-installed
 		HasSrcPrepare:           true,
 		HasSrcConfigure:         true,
 		DefaultSrcPrepareFormat: 2,
@@ -326,6 +336,8 @@ var supportedEAPIs = map[string]EAPIFeatures{
 		UseDeps:                 true,
 		UseDepDefaults:          true,
 		SrcURIArrows:            true,
+		HasPkgPretend:           true, // EAPI 4+ supports pkg_pretend
+		HasPkgInfoNonInstalled:  true, // EAPI 4+ pkg_info on non-installed
 		HasSrcPrepare:           true,
 		HasSrcConfigure:         true,
 		DefaultSrcPrepareFormat: 2,
@@ -356,6 +368,8 @@ var supportedEAPIs = map[string]EAPIFeatures{
 		UseDeps:                 true,
 		UseDepDefaults:          true,
 		SrcURIArrows:            true,
+		HasPkgPretend:           true, // EAPI 4+ supports pkg_pretend
+		HasPkgInfoNonInstalled:  true, // EAPI 4+ pkg_info on non-installed
 		HasSrcPrepare:           true,
 		HasSrcConfigure:         true,
 		DefaultSrcPrepareFormat: 6,
@@ -391,6 +405,8 @@ var supportedEAPIs = map[string]EAPIFeatures{
 		UseDeps:                 true,
 		UseDepDefaults:          true,
 		SrcURIArrows:            true,
+		HasPkgPretend:           true, // EAPI 4+ supports pkg_pretend
+		HasPkgInfoNonInstalled:  true, // EAPI 4+ pkg_info on non-installed
 		HasSrcPrepare:           true,
 		HasSrcConfigure:         true,
 		DefaultSrcPrepareFormat: 6,
@@ -435,6 +451,8 @@ var supportedEAPIs = map[string]EAPIFeatures{
 		UseDepDefaults:              true,
 		SrcURIArrows:                true,
 		SrcURISelectiveRestrictions: true,
+		HasPkgPretend:               true, // EAPI 4+ supports pkg_pretend
+		HasPkgInfoNonInstalled:      true, // EAPI 4+ pkg_info on non-installed
 		HasSrcPrepare:               true,
 		HasSrcConfigure:             true,
 		DefaultSrcPrepareFormat:     8,
@@ -625,4 +643,21 @@ func (e EAPIFeatures) SupportsNonfatal() bool {
 // EAPI 7+: nonfatal must be callable from xargs, so needs external command form.
 func (e EAPIFeatures) NonfatalIsExternalCommand() bool {
 	return e.NonfatalIsExternal
+}
+
+// SupportsPkgPretend returns true if the EAPI supports pkg_pretend phase.
+// EAPI 4+: Pre-fetch sanity checks.
+// Per PMS Section 9.1.2: pkg_pretend may be used to carry out sanity checks early
+// in the install process (before fetching sources).
+func (e EAPIFeatures) SupportsPkgPretend() bool {
+	return e.HasPkgPretend
+}
+
+// SupportsPkgInfoNonInstalled returns true if the EAPI supports calling
+// pkg_info on non-installed packages.
+// EAPI 4+: pkg_info can be called for non-installed packages.
+// Per PMS Section 9.1.15: In EAPIs supporting this, pkg_info may also be called
+// when displaying information about a non-installed package.
+func (e EAPIFeatures) SupportsPkgInfoNonInstalled() bool {
+	return e.HasPkgInfoNonInstalled
 }

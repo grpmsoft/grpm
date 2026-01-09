@@ -323,6 +323,7 @@ func TestDispatchPhaseFunctionName(t *testing.T) {
 		phase    Phase
 		expected string
 	}{
+		{PhasePretend, "pkg_pretend"},
 		{PhaseSetup, "pkg_setup"},
 		{PhaseUnpack, "src_unpack"},
 		{PhasePrepare, "src_prepare"},
@@ -334,6 +335,9 @@ func TestDispatchPhaseFunctionName(t *testing.T) {
 		{PhasePostinst, "pkg_postinst"},
 		{PhasePrerem, "pkg_prerm"},
 		{PhasePostrm, "pkg_postrm"},
+		{PhaseConfig, "pkg_config"},
+		{PhaseInfo, "pkg_info"},
+		{PhaseNofetch, "pkg_nofetch"},
 	}
 
 	for _, tt := range tests {

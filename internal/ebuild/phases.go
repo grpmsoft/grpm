@@ -4,6 +4,11 @@ package ebuild
 type Phase string
 
 const (
+	// PhasePretend performs pre-fetch sanity checks (EAPI 4+)
+	// This phase runs before fetching sources and must not modify the filesystem.
+	// Per PMS Section 9.1.2: Used for sanity checks like kernel config, system requirements.
+	PhasePretend Phase = "pretend"
+
 	// PhaseFetch downloads source tarballs
 	// This phase runs automatically before unpack when a Fetcher is configured
 	PhaseFetch Phase = "fetch"
@@ -40,6 +45,21 @@ const (
 
 	// PhasePostrm runs after package removal
 	PhasePostrm Phase = "postrm"
+
+	// PhaseConfig performs post-install configuration
+	// Per PMS Section 9.1.14: Interactive configuration after package installation.
+	// Run manually via `grpm config category/package`.
+	PhaseConfig Phase = "config"
+
+	// PhaseInfo displays information about an installed package
+	// Per PMS Section 9.1.15: Called when displaying package information.
+	// EAPI 4+: Can also be called for non-installed packages.
+	PhaseInfo Phase = "info"
+
+	// PhaseNofetch handles fetch-restricted packages
+	// Per PMS Section 9.1.16: Called when RESTRICT=fetch and files are unavailable.
+	// Should print instructions for manual download.
+	PhaseNofetch Phase = "nofetch"
 )
 
 // String returns string representation of phase.
@@ -118,4 +138,49 @@ func (p Phase) IsHookPhase() bool {
 		PhasePostrm:   true,
 	}
 	return hookPhases[p]
+}
+
+// IsPretendPhase returns true if this is the pretend phase.
+func (p Phase) IsPretendPhase() bool {
+	return p == PhasePretend
+}
+
+// IsConfigPhase returns true if this is the config phase.
+func (p Phase) IsConfigPhase() bool {
+	return p == PhaseConfig
+}
+
+// IsInfoPhase returns true if this is the info phase.
+func (p Phase) IsInfoPhase() bool {
+	return p == PhaseInfo
+}
+
+// IsNofetchPhase returns true if this is the nofetch phase.
+func (p Phase) IsNofetchPhase() bool {
+	return p == PhaseNofetch
+}
+
+// IsOutOfSequencePhase returns true if this phase runs outside normal build sequence.
+// Per PMS Section 9.2: pkg_config, pkg_info, and pkg_nofetch are not called in normal sequence.
+// pkg_pretend is called before the normal sequence (before fetch).
+func (p Phase) IsOutOfSequencePhase() bool {
+	outOfSequencePhases := map[Phase]bool{
+		PhasePretend: true,
+		PhaseConfig:  true,
+		PhaseInfo:    true,
+		PhaseNofetch: true,
+	}
+	return outOfSequencePhases[p]
+}
+
+// IsReadOnlyPhase returns true if this phase must not write to the filesystem.
+// Per PMS Section 9.1.2, 9.1.15, 9.1.16: pkg_pretend, pkg_info, and pkg_nofetch
+// must not modify the filesystem.
+func (p Phase) IsReadOnlyPhase() bool {
+	readOnlyPhases := map[Phase]bool{
+		PhasePretend: true,
+		PhaseInfo:    true,
+		PhaseNofetch: true,
+	}
+	return readOnlyPhases[p]
 }

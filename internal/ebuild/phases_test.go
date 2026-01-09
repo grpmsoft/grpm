@@ -9,6 +9,7 @@ func TestPhaseString(t *testing.T) {
 		phase    Phase
 		expected string
 	}{
+		{PhasePretend, "pretend"},
 		{PhaseSetup, "setup"},
 		{PhaseUnpack, "unpack"},
 		{PhasePrepare, "prepare"},
@@ -20,6 +21,9 @@ func TestPhaseString(t *testing.T) {
 		{PhasePostinst, "postinst"},
 		{PhasePrerem, "prerm"},
 		{PhasePostrm, "postrm"},
+		{PhaseConfig, "config"},
+		{PhaseInfo, "info"},
+		{PhaseNofetch, "nofetch"},
 	}
 
 	for _, tt := range tests {
@@ -103,6 +107,109 @@ func TestPhaseIsHookPhase(t *testing.T) {
 	// Build phases should not be hook phases
 	if PhaseCompile.IsHookPhase() {
 		t.Error("PhaseCompile should not be a hook phase")
+	}
+}
+
+func TestPhaseIsPretendPhase(t *testing.T) {
+	if !PhasePretend.IsPretendPhase() {
+		t.Error("PhasePretend.IsPretendPhase() should return true")
+	}
+
+	if PhaseSetup.IsPretendPhase() {
+		t.Error("PhaseSetup.IsPretendPhase() should return false")
+	}
+}
+
+func TestPhaseIsConfigPhase(t *testing.T) {
+	if !PhaseConfig.IsConfigPhase() {
+		t.Error("PhaseConfig.IsConfigPhase() should return true")
+	}
+
+	if PhaseInstall.IsConfigPhase() {
+		t.Error("PhaseInstall.IsConfigPhase() should return false")
+	}
+}
+
+func TestPhaseIsInfoPhase(t *testing.T) {
+	if !PhaseInfo.IsInfoPhase() {
+		t.Error("PhaseInfo.IsInfoPhase() should return true")
+	}
+
+	if PhaseSetup.IsInfoPhase() {
+		t.Error("PhaseSetup.IsInfoPhase() should return false")
+	}
+}
+
+func TestPhaseIsNofetchPhase(t *testing.T) {
+	if !PhaseNofetch.IsNofetchPhase() {
+		t.Error("PhaseNofetch.IsNofetchPhase() should return true")
+	}
+
+	if PhaseFetch.IsNofetchPhase() {
+		t.Error("PhaseFetch.IsNofetchPhase() should return false")
+	}
+}
+
+func TestPhaseIsOutOfSequencePhase(t *testing.T) {
+	outOfSequencePhases := []Phase{
+		PhasePretend,
+		PhaseConfig,
+		PhaseInfo,
+		PhaseNofetch,
+	}
+
+	for _, phase := range outOfSequencePhases {
+		if !phase.IsOutOfSequencePhase() {
+			t.Errorf("Phase %s should be out of sequence", phase)
+		}
+	}
+
+	// Normal phases should not be out of sequence
+	normalPhases := []Phase{
+		PhaseSetup,
+		PhaseUnpack,
+		PhasePrepare,
+		PhaseConfigure,
+		PhaseCompile,
+		PhaseTest,
+		PhaseInstall,
+	}
+
+	for _, phase := range normalPhases {
+		if phase.IsOutOfSequencePhase() {
+			t.Errorf("Phase %s should not be out of sequence", phase)
+		}
+	}
+}
+
+func TestPhaseIsReadOnlyPhase(t *testing.T) {
+	readOnlyPhases := []Phase{
+		PhasePretend,
+		PhaseInfo,
+		PhaseNofetch,
+	}
+
+	for _, phase := range readOnlyPhases {
+		if !phase.IsReadOnlyPhase() {
+			t.Errorf("Phase %s should be read-only", phase)
+		}
+	}
+
+	// Phases that can write
+	writablePhases := []Phase{
+		PhaseSetup,
+		PhaseUnpack,
+		PhasePrepare,
+		PhaseConfigure,
+		PhaseCompile,
+		PhaseInstall,
+		PhaseConfig,
+	}
+
+	for _, phase := range writablePhases {
+		if phase.IsReadOnlyPhase() {
+			t.Errorf("Phase %s should not be read-only", phase)
+		}
 	}
 }
 

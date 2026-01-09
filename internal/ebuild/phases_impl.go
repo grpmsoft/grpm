@@ -39,6 +39,9 @@ func (e *Executor) ExecutePhaseReal(phase Phase) PhaseResult {
 	var output string
 
 	switch phase {
+	case PhasePretend:
+		output, err = e.dispatchPhase(phase, e.phasePretend)
+
 	case PhaseSetup:
 		output, err = e.dispatchPhase(phase, e.phaseSetup)
 
@@ -65,6 +68,15 @@ func (e *Executor) ExecutePhaseReal(phase Phase) PhaseResult {
 		output, err = e.dispatchPhase(phase, func() (string, error) {
 			return fmt.Sprintf("%s completed (default)", phase), nil
 		})
+
+	case PhaseConfig:
+		output, err = e.dispatchPhase(phase, e.phaseConfig)
+
+	case PhaseInfo:
+		output, err = e.dispatchPhase(phase, e.phaseInfo)
+
+	case PhaseNofetch:
+		output, err = e.dispatchPhase(phase, e.phaseNofetch)
 
 	default:
 		err = fmt.Errorf("unknown phase: %s", phase)
@@ -279,6 +291,85 @@ func (e *Executor) phaseInstall() (string, error) {
 	}
 
 	return fmt.Sprintf("Installed %d top-level entries to ${D}", len(entries)), nil
+}
+
+// phasePretend performs pkg_pretend phase - pre-fetch sanity checks.
+//
+// Per PMS Section 9.1.2:
+//   - Only available in EAPI 4+
+//   - Runs BEFORE fetching sources
+//   - Must NOT write to the filesystem
+//   - Used for sanity checks (kernel config, system requirements)
+//   - No guarantee dependencies are installed
+//
+// The default implementation is a no-op (returns success).
+func (e *Executor) phasePretend() (string, error) {
+	// Check EAPI support
+	if !e.EAPIFeatures.SupportsPkgPretend() {
+		return "pkg_pretend not supported in this EAPI (requires EAPI 4+)", nil
+	}
+
+	// Default implementation is a no-op per PMS
+	return "pkg_pretend completed (default no-op)", nil
+}
+
+// phaseConfig performs pkg_config phase - post-install configuration.
+//
+// Per PMS Section 9.1.14:
+//   - Run manually via `grpm config category/package`
+//   - Interactive configuration after package installation
+//   - May prompt for user input
+//   - Must have full access to ROOT
+//
+// The default implementation is a no-op (returns success).
+func (e *Executor) phaseConfig() (string, error) {
+	// Default implementation is a no-op per PMS
+	return "pkg_config completed (default no-op)", nil
+}
+
+// phaseInfo performs pkg_info phase - display package information.
+//
+// Per PMS Section 9.1.15:
+//   - Called when displaying information about an installed package
+//   - EAPI 4+: Can also be called for non-installed packages
+//   - Must NOT write to the filesystem
+//
+// The default implementation is a no-op (returns success).
+func (e *Executor) phaseInfo() (string, error) {
+	// Default implementation is a no-op per PMS
+	return "pkg_info completed (default no-op)", nil
+}
+
+// phaseNofetch performs pkg_nofetch phase - handle fetch-restricted packages.
+//
+// Per PMS Section 9.1.16:
+//   - Called when RESTRICT=fetch and source files are unavailable
+//   - Should print instructions for manual download
+//   - Must NOT write to the filesystem
+//
+// The default implementation prints a generic message.
+func (e *Executor) phaseNofetch() (string, error) {
+	// Default implementation prints a message per PMS
+	msg := fmt.Sprintf(`
+pkg_nofetch: This package has fetch restrictions.
+
+Package: %s/%s-%s
+
+The source files for this package cannot be automatically downloaded.
+Please obtain the following files manually and place them in:
+  %s
+
+Required files (A variable):
+  %s
+
+After downloading, re-run the installation.
+`,
+		e.Env.CATEGORY, e.Env.PN, e.Env.PV,
+		e.Env.DISTDIR,
+		e.Env.A)
+
+	log.Printf("[ebuild] %s", msg)
+	return msg, nil
 }
 
 // extractTarball extracts a tarball to the destination directory.
