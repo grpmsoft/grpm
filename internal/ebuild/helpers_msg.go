@@ -107,3 +107,39 @@ func (h *Helpers) Eend(args []string) error {
 	}
 	return nil
 }
+
+// Assert checks the shell's pipe status and dies if any element is non-zero.
+//
+// Usage: assert [message]
+//
+// Per PMS Section 12.3.6, assert checks the shell's pipe status array
+// (PIPESTATUS), and if any element is non-zero (indicating failure),
+// calls die with the optional message.
+//
+// Available in EAPIs 0-8. Banned in EAPI 9 per PMS Table 12.3.
+//
+// Example:
+//
+//	./configure && make || assert "Build failed"
+//	some_command | other_command
+//	assert "Pipeline failed"
+func (h *Helpers) Assert(args []string) error {
+	// Get pipe status - if not set, use last exit status
+	pipeStatus := h.GetPipeStatus()
+
+	// Check if any element in pipe status is non-zero
+	for _, status := range pipeStatus {
+		if status != 0 {
+			// Build the error message
+			msg := "assert: command failed"
+			if len(args) > 0 {
+				msg = strings.Join(args, " ")
+			}
+			// Call die with the message
+			return h.Die([]string{msg})
+		}
+	}
+
+	// All commands succeeded
+	return nil
+}

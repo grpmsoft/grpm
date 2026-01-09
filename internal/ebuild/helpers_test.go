@@ -278,6 +278,167 @@ func TestHelpers_Eend_NoArgs(t *testing.T) {
 }
 
 // ============================================================================
+// Assert Tests (PMS Section 12.3.6)
+// ============================================================================
+
+func TestHelpers_Assert_Success_ExitStatusZero(t *testing.T) {
+	helpers, _, _ := createTestHelpers(t)
+
+	// Set exit status to 0 (success)
+	helpers.SetLastExitStatus(0)
+
+	err := helpers.Assert([]string{})
+	if err != nil {
+		t.Errorf("expected no error when exit status is 0, got: %v", err)
+	}
+}
+
+func TestHelpers_Assert_Failure_ExitStatusNonZero(t *testing.T) {
+	helpers, _, stderr := createTestHelpers(t)
+
+	// Set exit status to 1 (failure)
+	helpers.SetLastExitStatus(1)
+
+	err := helpers.Assert([]string{})
+	if err == nil {
+		t.Fatal("expected error when exit status is non-zero")
+	}
+
+	var dieErr *DieError
+	if !errors.As(err, &dieErr) {
+		t.Errorf("expected DieError, got: %T", err)
+	}
+
+	// Default message should be "assert: command failed"
+	if !strings.Contains(dieErr.Message, "assert: command failed") {
+		t.Errorf("expected default assert message, got: %s", dieErr.Message)
+	}
+
+	// Check stderr output
+	errOutput := stderr.String()
+	if !strings.Contains(errOutput, "assert: command failed") {
+		t.Errorf("expected assert message in stderr, got: %s", errOutput)
+	}
+}
+
+func TestHelpers_Assert_Failure_WithCustomMessage(t *testing.T) {
+	helpers, _, stderr := createTestHelpers(t)
+
+	// Set exit status to 2 (failure)
+	helpers.SetLastExitStatus(2)
+
+	err := helpers.Assert([]string{"Build", "failed"})
+	if err == nil {
+		t.Fatal("expected error when exit status is non-zero")
+	}
+
+	var dieErr *DieError
+	if !errors.As(err, &dieErr) {
+		t.Errorf("expected DieError, got: %T", err)
+	}
+
+	// Custom message should be used
+	if dieErr.Message != "Build failed" {
+		t.Errorf("expected 'Build failed', got: %s", dieErr.Message)
+	}
+
+	// Check stderr output
+	errOutput := stderr.String()
+	if !strings.Contains(errOutput, "Build failed") {
+		t.Errorf("expected 'Build failed' in stderr, got: %s", errOutput)
+	}
+}
+
+func TestHelpers_Assert_PipeStatus_AllSuccess(t *testing.T) {
+	helpers, _, _ := createTestHelpers(t)
+
+	// Set pipe status with all zeros (all commands succeeded)
+	helpers.SetPipeStatus([]int{0, 0, 0})
+
+	err := helpers.Assert([]string{})
+	if err != nil {
+		t.Errorf("expected no error when all pipe statuses are 0, got: %v", err)
+	}
+}
+
+func TestHelpers_Assert_PipeStatus_FirstFailed(t *testing.T) {
+	helpers, _, _ := createTestHelpers(t)
+
+	// Set pipe status with first command failed
+	helpers.SetPipeStatus([]int{1, 0, 0})
+
+	err := helpers.Assert([]string{"Pipeline failed"})
+	if err == nil {
+		t.Fatal("expected error when first pipe status is non-zero")
+	}
+
+	var dieErr *DieError
+	if !errors.As(err, &dieErr) {
+		t.Errorf("expected DieError, got: %T", err)
+	}
+}
+
+func TestHelpers_Assert_PipeStatus_MiddleFailed(t *testing.T) {
+	helpers, _, _ := createTestHelpers(t)
+
+	// Set pipe status with middle command failed
+	helpers.SetPipeStatus([]int{0, 2, 0})
+
+	err := helpers.Assert([]string{})
+	if err == nil {
+		t.Fatal("expected error when middle pipe status is non-zero")
+	}
+}
+
+func TestHelpers_Assert_PipeStatus_LastFailed(t *testing.T) {
+	helpers, _, _ := createTestHelpers(t)
+
+	// Set pipe status with last command failed
+	helpers.SetPipeStatus([]int{0, 0, 3})
+
+	err := helpers.Assert([]string{})
+	if err == nil {
+		t.Fatal("expected error when last pipe status is non-zero")
+	}
+}
+
+func TestHelpers_Assert_GetPipeStatus_FallbackToExitStatus(t *testing.T) {
+	helpers, _, _ := createTestHelpers(t)
+
+	// Don't set pipe status, only exit status
+	helpers.SetLastExitStatus(5)
+
+	// GetPipeStatus should return lastExitStatus as single element
+	pipeStatus := helpers.GetPipeStatus()
+	if len(pipeStatus) != 1 {
+		t.Errorf("expected single element, got: %d", len(pipeStatus))
+	}
+	if pipeStatus[0] != 5 {
+		t.Errorf("expected exit status 5, got: %d", pipeStatus[0])
+	}
+}
+
+func TestHelpers_Assert_SetPipeStatus_CopiesSlice(t *testing.T) {
+	helpers, _, _ := createTestHelpers(t)
+
+	// Create original slice
+	original := []int{1, 2, 3}
+	helpers.SetPipeStatus(original)
+
+	// Modify original
+	original[0] = 99
+
+	// GetPipeStatus should return a copy, not affected by modification
+	pipeStatus := helpers.GetPipeStatus()
+	if pipeStatus[0] == 99 {
+		t.Error("SetPipeStatus should copy the slice, not reference it")
+	}
+	if pipeStatus[0] != 1 {
+		t.Errorf("expected 1, got: %d", pipeStatus[0])
+	}
+}
+
+// ============================================================================
 // Has Tests
 // ============================================================================
 

@@ -156,6 +156,7 @@ func (i *Interpreter) buildCommandMap() map[string]helperFunc {
 	return map[string]helperFunc{
 		// Messaging functions
 		"die":    i.helpers.Die,
+		"assert": i.helpers.Assert, // PMS Section 12.3.6 - error handling
 		"einfo":  i.helpers.Einfo,
 		"ewarn":  i.helpers.Ewarn,
 		"eerror": i.helpers.Eerror,
@@ -321,7 +322,7 @@ func (i *Interpreter) buildCommandMap() map[string]helperFunc {
 // execHandler intercepts Portage commands and delegates to Go implementations.
 //
 // Commands handled:
-//   - die, einfo, ewarn, eerror, elog, ebegin, eend, eqawarn (messaging)
+//   - die, assert, einfo, ewarn, eerror, elog, ebegin, eend, eqawarn (messaging)
 //   - has, use, usev, usex, in_iuse, use_enable, use_with (USE flags)
 //   - tc-getCC, tc-getCXX, tc-getLD, tc-arch (toolchain-funcs)
 //   - tc-is-gcc, tc-is-clang, tc-export, tc-getAR, etc. (toolchain-funcs)
