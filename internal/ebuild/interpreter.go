@@ -233,9 +233,10 @@ func (i *Interpreter) buildCommandMap() map[string]helperFunc {
 		"default_src_test":      i.helpers.DefaultSrcTest,
 		"default_src_install":   i.helpers.DefaultSrcInstall,
 
-		// Version manipulation functions
-		"ver_cut": i.helpers.VerCut,
-		"ver_rs":  i.helpers.VerRs,
+		// Version manipulation functions (EAPI 7+)
+		"ver_cut":  i.helpers.VerCut,
+		"ver_rs":   i.helpers.VerRs,
+		"ver_test": i.helpers.VerTest,
 
 		// Additional installation helpers
 		"dosym":        i.helpers.Dosym,
@@ -333,7 +334,7 @@ func (i *Interpreter) buildCommandMap() map[string]helperFunc {
 //   - dodir, keepdir (directory creation)
 //   - emake, econf, unpack, eapply, eapply_user (build helpers)
 //   - default, default_src_* (default phase implementations)
-//   - ver_cut, ver_rs (version manipulation)
+//   - ver_cut, ver_rs, ver_test (version manipulation)
 //   - dosym, edosym, fperms, fowners, doconfd, doinitd, doenvd (installation)
 //   - sed, cat, mkdir, rm, cp, mv, chmod, ln, find, grep, xargs, etc. (utilities)
 //   - epatch, eshopts_push, eshopts_pop, estack_push, estack_pop (eutils)
