@@ -7,9 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+#### PMS-Compliant Atom Parser (v0.3.0-001)
+- Character-by-character parser for package atoms per PMS Section 8.3
+- All version operators: `=`, `>=`, `>`, `<=`, `<`, `~`, `=*` (glob)
+- Blocker support: `!` (weak), `!!` (strong)
+- Slot dependencies: `:slot`, `:slot/subslot`, `:*`, `:=`
+- Repository constraints: `::repo-name`
+- USE dependencies: `[flag,-flag,flag?,flag(+),flag(-)]`
+- `ParseAtom()` function with comprehensive validation
+- `Atom.Matches(*Package)` for package matching
+- `Atom.ToConstraint()` for solver integration
+- Full test coverage (30+ test cases)
+
 ### Planned
-- Full EAPI 8 support
-- PMS-compliant atom parser
+- Full EAPI 8 support (v0.3.0-002)
+- GoSh integration for bash compatibility (v0.3.0-003)
 - CMake/Meson build systems
 - Performance optimization for large dependency graphs
 - Web UI for daemon management

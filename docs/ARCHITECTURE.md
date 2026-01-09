@@ -23,6 +23,7 @@ flowchart TB
     subgraph Domain["Domain Layer"]
         SOLVER[SAT Solver<br/>gophersat]
         PKG[Package Model<br/>Version, Slot, Constraint]
+        ATOM[Atom Parser<br/>PMS Section 8.3]
         DEP_SERVICE[Dependency Service]
     end
 
@@ -55,7 +56,10 @@ flowchart TB
     PKG_SERVICE --> SOLVER
     PKG_SERVICE --> DEP_SERVICE
     SOLVER --> PKG
+    SOLVER --> ATOM
     DEP_SERVICE --> PKG
+    DEP_SERVICE --> ATOM
+    ATOM --> PKG
 
     SOLVER --> REPO
     REPO --> CACHE
@@ -94,6 +98,7 @@ flowchart TB
 ### Domain Layer
 - **SAT Solver**: Boolean satisfiability for dependency resolution (gophersat)
 - **Package Model**: Core entities (Package, Version, Slot, Constraint)
+- **Atom Parser**: PMS-compliant package atom parser (Section 8.3)
 - **Dependency Service**: Domain logic for dependency handling
 
 ### Infrastructure Layer
