@@ -395,15 +395,15 @@ func TestEnvironmentToMapEAPIVariables(t *testing.T) {
 	}
 
 	tests := []struct {
-		name            string
-		eapi            string
-		expectPORTDIR   bool
-		expectEPREFIX   bool
-		expectEROOT     bool
-		expectED        bool
-		expectSYSROOT   bool
-		expectESYSROOT  bool
-		expectBROOT     bool
+		name           string
+		eapi           string
+		expectPORTDIR  bool
+		expectEPREFIX  bool
+		expectEROOT    bool
+		expectED       bool
+		expectSYSROOT  bool
+		expectESYSROOT bool
+		expectBROOT    bool
 	}{
 		{
 			name:          "EAPI 0 - no offset-prefix vars",
@@ -492,10 +492,10 @@ func TestEnvironmentToMapEAPIVariables(t *testing.T) {
 
 func TestTrailingSlashHelpers(t *testing.T) {
 	tests := []struct {
-		name           string
-		input          string
-		withSlash      string
-		withoutSlash   string
+		name         string
+		input        string
+		withSlash    string
+		withoutSlash string
 	}{
 		{
 			name:         "empty string",

@@ -439,6 +439,279 @@ func TestHelpers_Assert_SetPipeStatus_CopiesSlice(t *testing.T) {
 }
 
 // ============================================================================
+// Nonfatal Tests
+// ============================================================================
+
+// createTestHelpersWithEAPI creates a Helpers instance with a specific EAPI for testing.
+func createTestHelpersWithEAPI(t *testing.T, eapi string) (*Helpers, *bytes.Buffer, *bytes.Buffer) {
+	t.Helper()
+
+	testPkg := &pkg.Package{
+		Name:    "sys-libs/zlib",
+		Version: "1.2.13",
+		UseFlags: map[string]bool{
+			"ssl":     true,
+			"zlib":    true,
+			"doc":     false,
+			"static":  false,
+			"minizip": true,
+		},
+	}
+
+	env, err := NewEnvironmentWithEAPI(testPkg, "/var/tmp/portage", "/var/db/repos/gentoo", "/var/cache/distfiles", eapi)
+	if err != nil {
+		t.Fatalf("failed to create environment: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	helpers := NewHelpers(env, &stdout, &stderr)
+
+	return helpers, &stdout, &stderr
+}
+
+func TestHelpers_Nonfatal_EAPI_Check_UnsupportedEAPI(t *testing.T) {
+	// Test that nonfatal is not available in EAPI 0-3
+	for _, eapi := range []string{"0", "1", "2", "3"} {
+		t.Run("EAPI_"+eapi, func(t *testing.T) {
+			helpers, _, _ := createTestHelpersWithEAPI(t, eapi)
+
+			// Set a dummy command dispatcher
+			helpers.SetCommandDispatcher(func(cmd string, args []string) error {
+				return nil
+			})
+
+			err := helpers.Nonfatal([]string{"die", "test"})
+			if err == nil {
+				t.Errorf("EAPI %s: expected error for nonfatal in unsupported EAPI", eapi)
+			}
+			if !strings.Contains(err.Error(), "requires EAPI 4+") {
+				t.Errorf("EAPI %s: expected EAPI error, got: %v", eapi, err)
+			}
+		})
+	}
+}
+
+func TestHelpers_Nonfatal_EAPI_Check_SupportedEAPI(t *testing.T) {
+	// Test that nonfatal works in EAPI 4+
+	for _, eapi := range []string{"4", "5", "6", "7", "8"} {
+		t.Run("EAPI_"+eapi, func(t *testing.T) {
+			helpers, _, _ := createTestHelpersWithEAPI(t, eapi)
+
+			// Set a command dispatcher that succeeds
+			helpers.SetCommandDispatcher(func(cmd string, args []string) error {
+				return nil
+			})
+
+			err := helpers.Nonfatal([]string{"einfo", "test"})
+			if err != nil {
+				t.Errorf("EAPI %s: unexpected error for nonfatal: %v", eapi, err)
+			}
+		})
+	}
+}
+
+func TestHelpers_Nonfatal_RequiresCommand(t *testing.T) {
+	helpers, _, _ := createTestHelpersWithEAPI(t, "8")
+
+	helpers.SetCommandDispatcher(func(cmd string, args []string) error {
+		return nil
+	})
+
+	err := helpers.Nonfatal([]string{})
+	if err == nil {
+		t.Error("expected error when no command provided")
+	}
+	if !strings.Contains(err.Error(), "requires a command") {
+		t.Errorf("expected 'requires a command' error, got: %v", err)
+	}
+}
+
+func TestHelpers_Nonfatal_RequiresDispatcher(t *testing.T) {
+	helpers, _, _ := createTestHelpersWithEAPI(t, "8")
+
+	// Don't set command dispatcher
+	err := helpers.Nonfatal([]string{"die", "test"})
+	if err == nil {
+		t.Error("expected error when dispatcher not set")
+	}
+	if !strings.Contains(err.Error(), "command dispatcher not configured") {
+		t.Errorf("expected dispatcher error, got: %v", err)
+	}
+}
+
+func TestHelpers_Nonfatal_CatchesDie(t *testing.T) {
+	helpers, _, stderr := createTestHelpersWithEAPI(t, "8")
+
+	// Set dispatcher that calls die through helpers
+	helpers.SetCommandDispatcher(func(cmd string, args []string) error {
+		if cmd == "die" {
+			return helpers.Die(args)
+		}
+		return nil
+	})
+
+	// Call nonfatal die - should catch the DieError and return exit status
+	err := helpers.Nonfatal([]string{"die", "test error"})
+
+	// Should return an exit status error, not a DieError
+	var exitErr interp.ExitStatus
+	if !errors.As(err, &exitErr) {
+		t.Errorf("expected ExitStatus error, got: %T - %v", err, err)
+	}
+
+	// Exit status should be 1
+	if int(exitErr) != 1 {
+		t.Errorf("expected exit status 1, got: %d", int(exitErr))
+	}
+
+	// Last exit status should be set
+	if helpers.GetLastExitStatus() != 1 {
+		t.Errorf("expected lastExitStatus 1, got: %d", helpers.GetLastExitStatus())
+	}
+
+	// Error message should still be in stderr (die prints before returning)
+	errOutput := stderr.String()
+	if !strings.Contains(errOutput, "test error") {
+		t.Errorf("expected error message in stderr, got: %s", errOutput)
+	}
+}
+
+func TestHelpers_Nonfatal_SuccessfulCommand(t *testing.T) {
+	helpers, _, _ := createTestHelpersWithEAPI(t, "8")
+
+	commandCalled := false
+	helpers.SetCommandDispatcher(func(cmd string, args []string) error {
+		if cmd == "einfo" {
+			commandCalled = true
+		}
+		return nil
+	})
+
+	err := helpers.Nonfatal([]string{"einfo", "Test message"})
+	if err != nil {
+		t.Errorf("expected no error for successful command, got: %v", err)
+	}
+
+	if !commandCalled {
+		t.Error("expected command to be called")
+	}
+
+	if helpers.GetLastExitStatus() != 0 {
+		t.Errorf("expected lastExitStatus 0, got: %d", helpers.GetLastExitStatus())
+	}
+}
+
+func TestHelpers_Nonfatal_SetsNonfatalMode(t *testing.T) {
+	helpers, _, _ := createTestHelpersWithEAPI(t, "8")
+
+	// Track whether nonfatal mode was set during command execution
+	modeWasSet := false
+
+	helpers.SetCommandDispatcher(func(cmd string, args []string) error {
+		modeWasSet = helpers.IsNonfatalMode()
+		return nil
+	})
+
+	// Before call, nonfatal mode should be false
+	if helpers.IsNonfatalMode() {
+		t.Error("nonfatal mode should be false before call")
+	}
+
+	err := helpers.Nonfatal([]string{"test", "command"})
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	// During execution, nonfatal mode should have been true
+	if !modeWasSet {
+		t.Error("nonfatal mode should have been true during command execution")
+	}
+
+	// After call, nonfatal mode should be false again
+	if helpers.IsNonfatalMode() {
+		t.Error("nonfatal mode should be false after call")
+	}
+}
+
+func TestHelpers_Nonfatal_RestoresNonfatalModeOnError(t *testing.T) {
+	helpers, _, _ := createTestHelpersWithEAPI(t, "8")
+
+	helpers.SetCommandDispatcher(func(cmd string, args []string) error {
+		return &DieError{Message: "test"}
+	})
+
+	// Before call
+	if helpers.IsNonfatalMode() {
+		t.Error("nonfatal mode should be false before call")
+	}
+
+	_ = helpers.Nonfatal([]string{"die", "test"})
+
+	// After call (even with error), nonfatal mode should be restored
+	if helpers.IsNonfatalMode() {
+		t.Error("nonfatal mode should be false after call, even on error")
+	}
+}
+
+func TestHelpers_Nonfatal_PassesExitStatus(t *testing.T) {
+	helpers, _, _ := createTestHelpersWithEAPI(t, "8")
+
+	helpers.SetCommandDispatcher(func(cmd string, args []string) error {
+		return interp.ExitStatus(42)
+	})
+
+	err := helpers.Nonfatal([]string{"test"})
+
+	var exitErr interp.ExitStatus
+	if !errors.As(err, &exitErr) {
+		t.Errorf("expected ExitStatus error, got: %T", err)
+	}
+	if int(exitErr) != 42 {
+		t.Errorf("expected exit status 42, got: %d", int(exitErr))
+	}
+	if helpers.GetLastExitStatus() != 42 {
+		t.Errorf("expected lastExitStatus 42, got: %d", helpers.GetLastExitStatus())
+	}
+}
+
+func TestHelpers_Die_InNonfatalMode(t *testing.T) {
+	helpers, _, stderr := createTestHelpersWithEAPI(t, "8")
+
+	// Enable nonfatal mode
+	helpers.SetNonfatalMode(true)
+
+	err := helpers.Die([]string{"test error"})
+
+	// Should return exit status, not DieError
+	var exitErr interp.ExitStatus
+	if !errors.As(err, &exitErr) {
+		t.Errorf("expected ExitStatus in nonfatal mode, got: %T", err)
+	}
+	if int(exitErr) != 1 {
+		t.Errorf("expected exit status 1, got: %d", int(exitErr))
+	}
+
+	// Error message should still be output
+	errOutput := stderr.String()
+	if !strings.Contains(errOutput, "test error") {
+		t.Errorf("expected error message in stderr, got: %s", errOutput)
+	}
+}
+
+func TestHelpers_Die_NotInNonfatalMode(t *testing.T) {
+	helpers, _, _ := createTestHelpersWithEAPI(t, "8")
+
+	// Nonfatal mode is false by default
+	err := helpers.Die([]string{"test error"})
+
+	// Should return DieError
+	var dieErr *DieError
+	if !errors.As(err, &dieErr) {
+		t.Errorf("expected DieError, got: %T", err)
+	}
+}
+
+// ============================================================================
 // Has Tests
 // ============================================================================
 

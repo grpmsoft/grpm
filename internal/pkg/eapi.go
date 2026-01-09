@@ -217,6 +217,16 @@ type EAPIFeatures struct {
 	// Restrict indicates if RESTRICT variable is fully supported.
 	// All EAPIs: RESTRICT is supported, but behaviors vary.
 	Restrict bool
+
+	// --- Failure Behavior (PMS Section 12.3.1) ---
+
+	// Nonfatal indicates if nonfatal command is supported.
+	// EAPI 4+: nonfatal prevents die from aborting the build.
+	Nonfatal bool
+
+	// NonfatalIsExternal indicates if nonfatal is both a shell function and external command.
+	// EAPI 7+: nonfatal must be available as both for xargs compatibility.
+	NonfatalIsExternal bool
 }
 
 // supportedEAPIs holds the feature matrix for all supported EAPI versions.
@@ -300,6 +310,7 @@ var supportedEAPIs = map[string]EAPIFeatures{
 		RdependDefaultsToDepend: false, // Removed in EAPI 4
 		TrailingSlash:           true,
 		OffsetPrefix:            true,
+		Nonfatal:                true, // EAPI 4+ supports nonfatal
 	},
 	"5": {
 		Version:                 "5",
@@ -328,6 +339,7 @@ var supportedEAPIs = map[string]EAPIFeatures{
 		RdependDefaultsToDepend: false,
 		TrailingSlash:           true,
 		OffsetPrefix:            true,
+		Nonfatal:                true, // EAPI 4+ supports nonfatal
 	},
 	"6": {
 		Version:                 "6",
@@ -362,6 +374,7 @@ var supportedEAPIs = map[string]EAPIFeatures{
 		RdependDefaultsToDepend: false,
 		TrailingSlash:           true,
 		OffsetPrefix:            true,
+		Nonfatal:                true, // EAPI 4+ supports nonfatal
 	},
 	"7": {
 		Version:                 "7",
@@ -403,6 +416,8 @@ var supportedEAPIs = map[string]EAPIFeatures{
 		SYSROOTSupported:        true, // EAPI 7+ cross-compilation
 		ESYSROOTSupported:       true,
 		BROOTSupported:          true,
+		Nonfatal:                true, // EAPI 4+ supports nonfatal
+		NonfatalIsExternal:      true, // EAPI 7+ nonfatal is both function and external command
 	},
 	"8": {
 		Version:                     "8",
@@ -447,6 +462,8 @@ var supportedEAPIs = map[string]EAPIFeatures{
 		SYSROOTSupported:            true, // EAPI 7+ cross-compilation
 		ESYSROOTSupported:           true,
 		BROOTSupported:              true,
+		Nonfatal:                    true, // EAPI 4+ supports nonfatal
+		NonfatalIsExternal:          true, // EAPI 7+ nonfatal is both function and external command
 	},
 }
 
@@ -591,4 +608,21 @@ func (e EAPIFeatures) SupportsBROOT() bool {
 // EAPI 7+: These variables never have trailing slashes.
 func (e EAPIFeatures) HasTrailingSlash() bool {
 	return e.TrailingSlash
+}
+
+// SupportsNonfatal returns true if the EAPI supports nonfatal command.
+// EAPI 4+: nonfatal prevents die from aborting the build.
+// Per PMS Section 12.3.1: nonfatal takes one or more arguments and executes
+// them as a command, preserving the exit status. If this results in a command
+// being called that would normally abort the build process due to a failure,
+// instead a non-zero exit status shall be returned.
+func (e EAPIFeatures) SupportsNonfatal() bool {
+	return e.Nonfatal
+}
+
+// NonfatalIsExternalCommand returns true if nonfatal must be available as
+// both a shell function and an external command.
+// EAPI 7+: nonfatal must be callable from xargs, so needs external command form.
+func (e EAPIFeatures) NonfatalIsExternalCommand() bool {
+	return e.NonfatalIsExternal
 }

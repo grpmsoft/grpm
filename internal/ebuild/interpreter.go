@@ -52,6 +52,10 @@ func NewInterpreter(env *Environment, stdout, stderr io.Writer) *Interpreter {
 	eclassLoader := NewEclassLoader(i.helpers.eclassRegistry, i)
 	i.helpers.SetEclassLoader(eclassLoader)
 
+	// Wire up the command dispatcher for nonfatal support.
+	// This allows nonfatal to execute helper commands through the interpreter.
+	i.helpers.SetCommandDispatcher(i.dispatchCommand)
+
 	return i
 }
 
@@ -155,14 +159,16 @@ type helperFunc func(args []string) error
 func (i *Interpreter) buildCommandMap() map[string]helperFunc {
 	return map[string]helperFunc{
 		// Messaging functions
-		"die":    i.helpers.Die,
-		"assert": i.helpers.Assert, // PMS Section 12.3.6 - error handling
-		"einfo":  i.helpers.Einfo,
-		"ewarn":  i.helpers.Ewarn,
-		"eerror": i.helpers.Eerror,
-		"elog":   i.helpers.Elog,
-		"ebegin": i.helpers.Ebegin,
-		"eend":   i.helpers.Eend,
+		"die":      i.helpers.Die,
+		"assert":   i.helpers.Assert, // PMS Section 12.3.6 - error handling
+		"einfo":    i.helpers.Einfo,
+		"einfon":   i.helpers.Einfon, // PMS Section 12.3.5 - no trailing newline
+		"ewarn":    i.helpers.Ewarn,
+		"eerror":   i.helpers.Eerror,
+		"elog":     i.helpers.Elog,
+		"ebegin":   i.helpers.Ebegin,
+		"eend":     i.helpers.Eend,
+		"nonfatal": i.helpers.Nonfatal, // PMS Section 12.3.1 - EAPI 4+
 
 		// USE flag functions
 		"has":        i.helpers.Has,
@@ -380,6 +386,31 @@ func (i *Interpreter) execHandler(next interp.ExecHandlerFunc) interp.ExecHandle
 // going through the interpreter.
 func (i *Interpreter) GetHelpers() *Helpers {
 	return i.helpers
+}
+
+// dispatchCommand executes a helper command by name.
+//
+// This is used by the nonfatal helper to execute commands through the
+// interpreter's command dispatch mechanism. It looks up the command in
+// the command map and executes it.
+func (i *Interpreter) dispatchCommand(cmd string, args []string) error {
+	commands := i.buildCommandMap()
+
+	// Skip nonfatal itself to avoid recursion
+	if cmd == "nonfatal" {
+		return fmt.Errorf("nonfatal: cannot call nonfatal recursively")
+	}
+
+	// Look up the command
+	handler, ok := commands[cmd]
+	if !ok {
+		// Command not found in our handlers - return exit status 127
+		// This matches shell behavior for command not found
+		return interp.ExitStatus(127)
+	}
+
+	// Execute the command
+	return handler(args)
 }
 
 // Eval evaluates a bash expression and returns its output.
