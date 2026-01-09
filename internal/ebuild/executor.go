@@ -68,6 +68,10 @@ type Executor struct {
 	// Populated by ParseEbuild() for phase dispatch decisions
 	ParsedEbuild *EbuildScript
 
+	// EAPIFeatures contains the EAPI feature set for the ebuild
+	// Populated by ParseEbuild() based on EAPI version
+	EAPIFeatures pkg.EAPIFeatures
+
 	// interpreter is the bash interpreter for executing ebuild functions
 	interpreter *Interpreter
 
@@ -430,6 +434,17 @@ func (e *Executor) ParseEbuild() error {
 		e.Env.EAPI = parsed.EAPI
 	}
 
+	// Validate and store EAPI features
+	eapiFeatures, err := pkg.GetEAPIFeatures(e.Env.EAPI)
+	if err != nil {
+		return fmt.Errorf("ebuild %s has %w", e.EbuildPath, err)
+	}
+	e.EAPIFeatures = eapiFeatures
+
+	log.Printf("[ebuild] EAPI %s: bash %s, features: BDEPEND=%v, IDEPEND=%v, SlotOperators=%v",
+		eapiFeatures.Version, eapiFeatures.BashVersion,
+		eapiFeatures.BDEPEND, eapiFeatures.IDEPEND, eapiFeatures.SlotOperators)
+
 	// Log discovered phase functions
 	if len(parsed.DefinedFunctions) > 0 {
 		log.Printf("[ebuild] discovered %d functions in %s", len(parsed.DefinedFunctions), filepath.Base(e.EbuildPath))
@@ -690,4 +705,67 @@ func (e *Executor) GetInterpreter() *Interpreter {
 		_ = e.initInterpreter()
 	}
 	return e.interpreter
+}
+
+// GetEAPIFeatures returns the EAPI feature set for this ebuild.
+//
+// If ParseEbuild() hasn't been called, this returns features for the default EAPI
+// (set in the environment, typically EAPI 8).
+func (e *Executor) GetEAPIFeatures() pkg.EAPIFeatures {
+	// Return cached features if available
+	if e.EAPIFeatures.IsValid() {
+		return e.EAPIFeatures
+	}
+
+	// Otherwise look up from current EAPI
+	features, err := pkg.GetEAPIFeatures(e.Env.EAPI)
+	if err != nil {
+		// Return default EAPI features on error
+		return pkg.MustGetEAPIFeatures(pkg.DefaultEAPI())
+	}
+	return features
+}
+
+// SupportsFeature checks if the ebuild's EAPI supports a specific feature.
+//
+// Available feature checks:
+//   - "bdepend": BDEPEND variable (EAPI 7+)
+//   - "idepend": IDEPEND variable (EAPI 8+)
+//   - "slot_operators": := and :* operators (EAPI 5+)
+//   - "subslots": Subslot support (EAPI 5+)
+//   - "required_use": REQUIRED_USE validation (EAPI 4+)
+//   - "dosym_relative": dosym -r flag (EAPI 8+)
+//   - "eapply": eapply helper (EAPI 6+)
+//   - "src_uri_arrows": SRC_URI -> rename syntax (EAPI 2+)
+//
+// Returns false for unknown feature names.
+func (e *Executor) SupportsFeature(feature string) bool {
+	f := e.GetEAPIFeatures()
+
+	switch feature {
+	case "bdepend":
+		return f.BDEPEND
+	case "idepend":
+		return f.IDEPEND
+	case "slot_operators":
+		return f.SlotOperators
+	case "subslots":
+		return f.SubSlots
+	case "required_use":
+		return f.RequiredUse
+	case "dosym_relative":
+		return f.DosymRelative
+	case "eapply":
+		return f.Eapply
+	case "src_uri_arrows":
+		return f.SrcURIArrows
+	case "failglob":
+		return f.Failglob
+	case "use_deps":
+		return f.UseDeps
+	case "iuse_defaults":
+		return f.IUSEDefaults
+	default:
+		return false
+	}
 }
