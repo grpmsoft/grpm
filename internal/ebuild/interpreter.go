@@ -325,6 +325,17 @@ func (i *Interpreter) buildCommandMap() map[string]helperFunc {
 		"edosym":           i.helpers.Edosym,
 		"has_version":      i.helpers.HasVersion,
 		"best_version":     i.helpers.BestVersion,
+
+		// Banned commands (PMS Section 12.3.2 / Table 12.3)
+		// These stubs check EAPI and return appropriate errors.
+		"dohard":   i.helpers.Dohard,   // Banned in EAPI 4+
+		"dosed":    i.helpers.Dosed,    // Banned in EAPI 4+
+		"useq":     i.helpers.Useq,     // Banned in EAPI 5+
+		"einstall": i.helpers.Einstall, // Banned in EAPI 6+
+		"dohtml":   i.helpers.Dohtml,   // Banned in EAPI 7+
+		"libopts":  i.helpers.Libopts,  // Banned in EAPI 7+
+		"hasv":     i.helpers.Hasv,     // Banned in EAPI 8+
+		"hasq":     i.helpers.Hasq,     // Banned in EAPI 8+
 	}
 }
 
