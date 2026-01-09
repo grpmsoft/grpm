@@ -2973,19 +2973,24 @@ func TestHelpers_DefaultSrcInstall_NoEnv(t *testing.T) {
 func TestHelpers_DefaultSrcInstall_NoMakefile(t *testing.T) {
 	helpers, _, _, _ := createBuildTestHelpers(t)
 
+	// Per PMS Section 9.1.9: default_src_install in EAPI 6+ runs emake install
+	// only IF a Makefile exists, then calls einstalldocs.
+	// With no Makefile, it should still succeed (just calls einstalldocs).
 	err := helpers.DefaultSrcInstall([]string{})
-	if err == nil {
-		t.Error("expected error with no Makefile")
+	if err != nil {
+		t.Errorf("default_src_install should succeed with no Makefile (EAPI 6+ format): %v", err)
 	}
 }
 
 func TestHelpers_Default_UnknownPhase(t *testing.T) {
 	helpers, _, _, _ := createBuildTestHelpers(t)
+	helpers.env.EBUILD_PHASE = "unknownphase"
 
-	// Unknown phase should succeed (do nothing)
+	// Per PMS Section 12.3.15: default must not be called if no default_
+	// function exists for the current phase. Unknown phases should error.
 	err := helpers.Default([]string{})
-	if err != nil {
-		t.Errorf("Default should succeed for unknown phase: %v", err)
+	if err == nil {
+		t.Error("Default should fail for unknown phase")
 	}
 }
 

@@ -234,8 +234,9 @@ func (i *Interpreter) buildCommandMap() map[string]helperFunc {
 		// User patch function
 		"eapply_user": i.helpers.EapplyUser,
 
-		// Default phase functions
+		// Default phase functions (PMS Section 9.1.17 / 12.3.15)
 		"default":               i.helpers.Default,
+		"default_pkg_nofetch":   i.helpers.DefaultPkgNofetch,
 		"default_src_unpack":    i.helpers.DefaultSrcUnpack,
 		"default_src_prepare":   i.helpers.DefaultSrcPrepare,
 		"default_src_configure": i.helpers.DefaultSrcConfigure,
