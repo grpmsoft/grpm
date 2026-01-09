@@ -1,6 +1,6 @@
 // Package ebuild implements ebuild execution engine.
 //
-// This file provides EAPI 8 documentation functions (dodoc, doman, newdoc, newman).
+// This file provides EAPI 8 documentation functions (dodoc, doman, newdoc, newman, einstalldocs).
 package ebuild
 
 import (
@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // ============================================================================
@@ -199,4 +200,164 @@ func (h *Helpers) Newman(args []string) error {
 	}
 
 	return nil
+}
+
+// ============================================================================
+// EAPI 8 Standard Documentation Installation
+// ============================================================================
+
+// standardDocPatterns contains the standard documentation file patterns
+// that einstalldocs looks for. Per PMS Section 11.3.3.20.
+var standardDocPatterns = []string{
+	"README",
+	"README.*",
+	"README.md",
+	"README.rst",
+	"README.txt",
+	"CHANGELOG",
+	"CHANGELOG.*",
+	"ChangeLog",
+	"ChangeLog.*",
+	"CHANGES",
+	"CHANGES.*",
+	"AUTHORS",
+	"AUTHORS.*",
+	"NEWS",
+	"NEWS.*",
+	"TODO",
+	"TODO.*",
+	"COPYING",
+	"COPYING.*",
+	"LICENSE",
+	"LICENSE.*",
+	"LICENSE-*",
+	"HACKING",
+	"HACKING.*",
+	"MAINTAINERS",
+}
+
+// installDocFiles installs a space-separated list of doc files from a variable.
+// workdir is the base directory for relative paths.
+func (h *Helpers) installDocFiles(docsVar, workdir string) error {
+	for _, f := range strings.Fields(docsVar) {
+		// Handle paths that might be relative or absolute
+		var fullPath string
+		if filepath.IsAbs(f) {
+			fullPath = f
+		} else {
+			fullPath = filepath.Join(workdir, f)
+		}
+
+		// Check if file/directory exists
+		info, err := os.Stat(fullPath)
+		if err != nil {
+			// Skip missing files silently (per Portage behavior)
+			continue
+		}
+
+		if info.IsDir() {
+			// Install directory recursively
+			if err := h.Dodoc([]string{"-r", fullPath}); err != nil {
+				return err
+			}
+		} else {
+			if err := h.Dodoc([]string{fullPath}); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// installStandardDocs installs documentation files matching standard patterns.
+func (h *Helpers) installStandardDocs(workdir string) {
+	for _, pattern := range standardDocPatterns {
+		matches, err := filepath.Glob(filepath.Join(workdir, pattern))
+		if err != nil {
+			// Invalid pattern - skip
+			continue
+		}
+
+		for _, match := range matches {
+			info, err := os.Stat(match)
+			if err != nil {
+				continue
+			}
+
+			// Skip directories for simple patterns
+			if info.IsDir() {
+				continue
+			}
+
+			// Install the file
+			if err := h.Dodoc([]string{match}); err != nil {
+				// Log warning but continue with other files
+				h.writeStderr(fmt.Sprintf(">>> einstalldocs: warning: failed to install %s: %v\n",
+					filepath.Base(match), err))
+			}
+		}
+	}
+}
+
+// Einstalldocs installs standard documentation files.
+//
+// Per PMS Section 11.3.3.20 (EAPI 8):
+//   - Looks for standard documentation files in ${S} (source directory)
+//   - Installs found files to ${ED}/usr/share/doc/${PF}/
+//   - Respects the DOCS environment variable if set
+//   - Respects the HTML_DOCS environment variable for HTML documentation
+//
+// Standard files searched:
+//
+//	README*, CHANGELOG*, ChangeLog*, AUTHORS*, NEWS*, TODO*,
+//	COPYING*, LICENSE*, HACKING*, MAINTAINERS
+//
+// Usage: einstalldocs (no arguments)
+//
+// Returns nil on success. Missing files are silently skipped.
+func (h *Helpers) Einstalldocs(args []string) error {
+	// Get the source directory (S)
+	workdir := h.getSourceDir()
+	if workdir == "" {
+		return &DieError{Message: "einstalldocs: S (source directory) not set"}
+	}
+
+	// Install files from DOCS variable if set
+	if h.env != nil {
+		if docsVar := h.env.GetVar("DOCS"); docsVar != "" {
+			if err := h.installDocFiles(docsVar, workdir); err != nil {
+				return err
+			}
+		}
+	}
+
+	// Install standard documentation files
+	h.installStandardDocs(workdir)
+
+	// Handle HTML_DOCS
+	if h.env != nil {
+		if htmlDocsVar := h.env.GetVar("HTML_DOCS"); htmlDocsVar != "" {
+			// Save current docDestTree and set to html/
+			oldDocDestTree := h.docDestTree
+			h.docDestTree = "html"
+			err := h.installDocFiles(htmlDocsVar, workdir)
+			h.docDestTree = oldDocDestTree
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+// getSourceDir returns the source directory (S or WORKDIR).
+func (h *Helpers) getSourceDir() string {
+	if h.env == nil {
+		return ""
+	}
+	if h.env.S != "" {
+		return h.env.S
+	}
+	return h.env.WORKDIR
 }

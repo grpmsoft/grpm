@@ -16,6 +16,11 @@ type Repository interface {
 	// FindBySpecification finds all packages matching the specification
 	FindBySpecification(spec Specification) ([]*pkg.Package, error)
 
+	// FindByAtom finds all packages matching a PMS-compliant atom.
+	// Supports version constraints, slots, and USE flags.
+	// Example atoms: ">=sys-libs/glibc-2.38", "dev-lang/python:3.12"
+	FindByAtom(atom *pkg.Atom) ([]*pkg.Package, error)
+
 	// GetAllVersions returns all versions of a given package
 	GetAllVersions(packageName string) ([]*pkg.Package, error)
 

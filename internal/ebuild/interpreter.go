@@ -164,11 +164,13 @@ func (i *Interpreter) buildCommandMap() map[string]helperFunc {
 		"eend":   i.helpers.Eend,
 
 		// USE flag functions
-		"has":     i.helpers.Has,
-		"use":     i.helpers.Use,
-		"usev":    i.helpers.Usev,
-		"usex":    i.helpers.Usex,
-		"in_iuse": i.helpers.InIuse,
+		"has":        i.helpers.Has,
+		"use":        i.helpers.Use,
+		"usev":       i.helpers.Usev,
+		"usex":       i.helpers.Usex,
+		"in_iuse":    i.helpers.InIuse,
+		"use_enable": i.helpers.UseEnable,
+		"use_with":   i.helpers.UseWith,
 
 		// Toolchain functions
 		"tc-getCC":  i.helpers.TcGetCC,
@@ -236,13 +238,15 @@ func (i *Interpreter) buildCommandMap() map[string]helperFunc {
 		"ver_rs":  i.helpers.VerRs,
 
 		// Additional installation helpers
-		"dosym":   i.helpers.Dosym,
-		"fperms":  i.helpers.Fperms,
-		"fowners": i.helpers.Fowners,
-		"doconfd": i.helpers.Doconfd,
-		"doinitd": i.helpers.Doinitd,
-		"doenvd":  i.helpers.Doenvd,
-		"inherit": i.helpers.Inherit,
+		"dosym":        i.helpers.Dosym,
+		"fperms":       i.helpers.Fperms,
+		"fowners":      i.helpers.Fowners,
+		"doconfd":      i.helpers.Doconfd,
+		"doinitd":      i.helpers.Doinitd,
+		"doenvd":       i.helpers.Doenvd,
+		"dostrip":      i.helpers.Dostrip,
+		"einstalldocs": i.helpers.Einstalldocs,
+		"inherit":      i.helpers.Inherit,
 
 		// File system utilities (common in ebuilds)
 		"sed":        i.helpers.Sed,
@@ -317,7 +321,7 @@ func (i *Interpreter) buildCommandMap() map[string]helperFunc {
 //
 // Commands handled:
 //   - die, einfo, ewarn, eerror, elog, ebegin, eend, eqawarn (messaging)
-//   - has, use, usev, usex, in_iuse (USE flags)
+//   - has, use, usev, usex, in_iuse, use_enable, use_with (USE flags)
 //   - tc-getCC, tc-getCXX, tc-getLD, tc-arch (toolchain-funcs)
 //   - tc-is-gcc, tc-is-clang, tc-export, tc-getAR, etc. (toolchain-funcs)
 //   - insinto, exeinto, docinto (directory setting)

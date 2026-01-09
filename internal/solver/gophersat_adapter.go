@@ -95,6 +95,40 @@ func (g *GophersatAdapter) AddConstraint(c pkg.Constraint) error {
 	}
 }
 
+// AddAtomConstraint adds a constraint from a PMS-compliant Atom.
+// Uses Atom.Matches() for more accurate version/slot matching.
+func (g *GophersatAdapter) AddAtomConstraint(atom *pkg.Atom) error {
+	if atom == nil {
+		return fmt.Errorf("atom is nil")
+	}
+
+	pkgName := atom.CP()
+	log.Printf("Processing atom constraint: %s", atom.String())
+
+	// Collect all packages that match this atom
+	var satisfiedVars []int
+	for _, p := range g.packages[pkgName] {
+		if atom.Matches(p) {
+			key := p.Name + "@" + p.Version
+			varID := g.getVarID(key)
+			satisfiedVars = append(satisfiedVars, varID)
+			log.Printf("Package %s satisfies atom %s", key, atom.String())
+		} else {
+			log.Printf("Package %s does NOT satisfy atom %s",
+				p.Name+"@"+p.Version, atom.String())
+		}
+	}
+
+	if len(satisfiedVars) == 0 {
+		log.Printf("Warning: no package satisfies atom %s", atom.String())
+		return nil
+	}
+
+	// Add clause: at least one of the satisfying packages must be selected
+	g.addClause(satisfiedVars)
+	return nil
+}
+
 // AddOrGroupConstraint adds an OR-group constraint (at-least-one alternative)
 // For example: || ( mysql postgresql ) means "pick mysql OR postgresql"
 func (g *GophersatAdapter) AddOrGroupConstraint(alternatives []pkg.Constraint) error {

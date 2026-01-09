@@ -319,6 +319,158 @@ func TestInterpreter_Run_Has_NotFound(t *testing.T) {
 	}
 }
 
+func TestInterpreter_Run_UseEnable(t *testing.T) {
+	env := createTestEnvironment(t)
+	var stdout, stderr bytes.Buffer
+
+	interp := NewInterpreter(env, &stdout, &stderr)
+
+	// use_enable with enabled flag (ssl)
+	err := interp.Run(context.Background(), `use_enable ssl`)
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+
+	output := stdout.String()
+	if !strings.Contains(output, "--enable-ssl") {
+		t.Errorf("expected '--enable-ssl', got: %s", output)
+	}
+}
+
+func TestInterpreter_Run_UseEnable_Disabled(t *testing.T) {
+	env := createTestEnvironment(t)
+	var stdout, stderr bytes.Buffer
+
+	interp := NewInterpreter(env, &stdout, &stderr)
+
+	// use_enable with disabled flag (doc)
+	err := interp.Run(context.Background(), `use_enable doc`)
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+
+	output := stdout.String()
+	if !strings.Contains(output, "--disable-doc") {
+		t.Errorf("expected '--disable-doc', got: %s", output)
+	}
+}
+
+func TestInterpreter_Run_UseEnable_CustomOption(t *testing.T) {
+	env := createTestEnvironment(t)
+	var stdout, stderr bytes.Buffer
+
+	interp := NewInterpreter(env, &stdout, &stderr)
+
+	// use_enable with custom option name
+	err := interp.Run(context.Background(), `use_enable ssl openssl`)
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+
+	output := stdout.String()
+	if !strings.Contains(output, "--enable-openssl") {
+		t.Errorf("expected '--enable-openssl', got: %s", output)
+	}
+}
+
+func TestInterpreter_Run_UseEnable_FourArgs(t *testing.T) {
+	env := createTestEnvironment(t)
+	var stdout, stderr bytes.Buffer
+
+	interp := NewInterpreter(env, &stdout, &stderr)
+
+	// use_enable with 4 args: flag opt val_true val_false
+	err := interp.Run(context.Background(), `use_enable ssl openssl yes no`)
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+
+	output := stdout.String()
+	if !strings.Contains(output, "--openssl=yes") {
+		t.Errorf("expected '--openssl=yes', got: %s", output)
+	}
+}
+
+func TestInterpreter_Run_UseWith(t *testing.T) {
+	env := createTestEnvironment(t)
+	var stdout, stderr bytes.Buffer
+
+	interp := NewInterpreter(env, &stdout, &stderr)
+
+	// use_with with enabled flag (ssl)
+	err := interp.Run(context.Background(), `use_with ssl`)
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+
+	output := stdout.String()
+	if !strings.Contains(output, "--with-ssl") {
+		t.Errorf("expected '--with-ssl', got: %s", output)
+	}
+}
+
+func TestInterpreter_Run_UseWith_Disabled(t *testing.T) {
+	env := createTestEnvironment(t)
+	var stdout, stderr bytes.Buffer
+
+	interp := NewInterpreter(env, &stdout, &stderr)
+
+	// use_with with disabled flag (doc)
+	err := interp.Run(context.Background(), `use_with doc`)
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+
+	output := stdout.String()
+	if !strings.Contains(output, "--without-doc") {
+		t.Errorf("expected '--without-doc', got: %s", output)
+	}
+}
+
+func TestInterpreter_Run_UseWith_FourArgs(t *testing.T) {
+	env := createTestEnvironment(t)
+	var stdout, stderr bytes.Buffer
+
+	interp := NewInterpreter(env, &stdout, &stderr)
+
+	// use_with with 4 args: flag opt val_true val_false
+	err := interp.Run(context.Background(), `use_with doc docs /path /none`)
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+
+	output := stdout.String()
+	if !strings.Contains(output, "--docs=/none") {
+		t.Errorf("expected '--docs=/none', got: %s", output)
+	}
+}
+
+func TestInterpreter_Run_UseEnable_InScript(t *testing.T) {
+	env := createTestEnvironment(t)
+	var stdout, stderr bytes.Buffer
+
+	interp := NewInterpreter(env, &stdout, &stderr)
+
+	// Typical ebuild usage: building configure args with use_enable
+	err := interp.Run(context.Background(), `
+		args=""
+		args="$args $(use_enable ssl)"
+		args="$args $(use_enable doc)"
+		echo "CONFIGURE_ARGS:$args"
+	`)
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+
+	output := stdout.String()
+	if !strings.Contains(output, "--enable-ssl") {
+		t.Errorf("expected '--enable-ssl' in output, got: %s", output)
+	}
+	if !strings.Contains(output, "--disable-doc") {
+		t.Errorf("expected '--disable-doc' in output, got: %s", output)
+	}
+}
+
 func TestInterpreter_Run_TcGetCC(t *testing.T) {
 	env := createTestEnvironment(t)
 	var stdout, stderr bytes.Buffer

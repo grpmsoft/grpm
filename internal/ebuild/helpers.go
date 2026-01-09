@@ -73,6 +73,10 @@ type Helpers struct {
 
 	// Package database for has_version/best_version queries
 	pkgDB *state.PackageDatabase
+
+	// Strip control (EAPI 8)
+	stripInclude []string // Paths to include in stripping
+	stripExclude []string // Paths to exclude from stripping (-x flag)
 }
 
 // NewHelpers creates helpers instance with default settings.
