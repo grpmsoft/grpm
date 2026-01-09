@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/grpmsoft/grpm/internal/pkg"
 )
 
 // Binhost represents a binary package repository.
@@ -316,19 +318,116 @@ func packageFromIndexEntry(entry map[string]string, baseURL string) (*BinaryPack
 
 // Find searches for packages matching the given atom.
 //
+// Supports Gentoo atom format with version operators:
+//   - sys-libs/zlib (any version)
+//   - =sys-libs/zlib-1.2.13 (exact version)
+//   - >=sys-libs/zlib-1.2 (version >= 1.2)
+//   - <=sys-libs/zlib-1.3 (version <= 1.3)
+//   - >sys-libs/zlib-1.2 (version > 1.2)
+//   - <sys-libs/zlib-1.3 (version < 1.3)
+//
 // Returns all matching packages, sorted by version (newest first).
 func (b *Binhost) Find(atom string) []*BinaryPackage {
 	matches := []*BinaryPackage{}
 
-	// Simple substring matching for now
-	// TODO: Implement proper atom matching
-	for _, pkg := range b.Packages {
-		if pkg.Package != nil && strings.Contains(pkg.Package.Name, atom) {
-			matches = append(matches, pkg)
+	// Parse atom: ">=sys-libs/zlib-1.2" -> (>=, sys-libs/zlib, 1.2)
+	operator, pkgName, version := parseAtomSimple(atom)
+
+	for _, binPkg := range b.Packages {
+		if binPkg.Package == nil {
+			continue
 		}
+
+		// Check name match (exact match on category/name)
+		if binPkg.Package.Name != pkgName {
+			// Also try substring match for atoms without category
+			if !strings.Contains(binPkg.Package.Name, pkgName) {
+				continue
+			}
+		}
+
+		// If version specified, check constraint
+		if version != "" {
+			if !matchVersion(binPkg.Package.Version, operator, version) {
+				continue
+			}
+		}
+
+		matches = append(matches, binPkg)
 	}
 
 	return matches
+}
+
+// parseAtomSimple parses a Portage atom into operator, package name, and version.
+//
+// Atom format: [operator]category/name[-version]
+// Examples:
+//   - sys-libs/zlib -> ("", "sys-libs/zlib", "")
+//   - >=sys-libs/zlib-1.2 -> (">=", "sys-libs/zlib", "1.2")
+//   - =app-misc/hello-2.10 -> ("=", "app-misc/hello", "2.10")
+func parseAtomSimple(atom string) (operator, name, version string) {
+	// Remove any slot specification (:slot)
+	if idx := strings.Index(atom, ":"); idx != -1 {
+		atom = atom[:idx]
+	}
+
+	// Remove any USE flag requirements ([use])
+	if idx := strings.Index(atom, "["); idx != -1 {
+		atom = atom[:idx]
+	}
+
+	// Extract operator prefix
+	for _, op := range []string{">=", "<=", ">", "<", "=", "~", "!"} {
+		if strings.HasPrefix(atom, op) {
+			operator = op
+			atom = strings.TrimPrefix(atom, op)
+			break
+		}
+	}
+
+	// Find version by looking for last dash followed by a digit
+	// Example: sys-libs/zlib-1.2.13 -> name="sys-libs/zlib", version="1.2.13"
+	lastDash := -1
+	for i := len(atom) - 1; i >= 0; i-- {
+		if atom[i] == '-' && i+1 < len(atom) && atom[i+1] >= '0' && atom[i+1] <= '9' {
+			lastDash = i
+			break
+		}
+	}
+
+	if lastDash != -1 {
+		name = atom[:lastDash]
+		version = atom[lastDash+1:]
+	} else {
+		name = atom
+		version = ""
+	}
+
+	return operator, name, version
+}
+
+// matchVersion checks if pkgVersion satisfies the version constraint.
+func matchVersion(pkgVersion, operator, constraintVersion string) bool {
+	switch operator {
+	case ">=":
+		return pkg.CompareVersions(pkgVersion, constraintVersion) >= 0
+	case "<=":
+		return pkg.CompareVersions(pkgVersion, constraintVersion) <= 0
+	case ">":
+		return pkg.CompareVersions(pkgVersion, constraintVersion) > 0
+	case "<":
+		return pkg.CompareVersions(pkgVersion, constraintVersion) < 0
+	case "=", "~":
+		// Exact match (~ is "any revision" but we treat as exact for simplicity)
+		return pkgVersion == constraintVersion
+	default:
+		// No operator - match any version, or exact if version given
+		if constraintVersion != "" {
+			return pkgVersion == constraintVersion
+		}
+		return true
+	}
 }
 
 // Download downloads a binary package from the binhost to local path.

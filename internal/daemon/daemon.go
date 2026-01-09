@@ -89,7 +89,9 @@ func New(config *Config) *Daemon {
 	}
 
 	// Initialize application services
-	packageService := application.NewPackageService(portageRepo)
+	// Note: pkgDB is nil here as daemon manages its own state
+	// VarDB integration will be added when state persistence is implemented
+	packageService := application.NewPackageService(portageRepo, nil)
 
 	// Initialize conflict detector for safe concurrent package operations
 	conflictDetector := NewConflictDetector(packageService)

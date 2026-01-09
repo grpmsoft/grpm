@@ -10,10 +10,12 @@
 package ebuild
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
 	"path/filepath"
 
@@ -61,6 +63,16 @@ type Executor struct {
 
 	// DenyNetwork blocks network access during build
 	DenyNetwork bool
+
+	// ParsedEbuild contains the parsed ebuild script with function definitions
+	// Populated by ParseEbuild() for phase dispatch decisions
+	ParsedEbuild *EbuildScript
+
+	// interpreter is the bash interpreter for executing ebuild functions
+	interpreter *Interpreter
+
+	// currentPhase tracks the currently executing phase for EBUILD_PHASE
+	currentPhase Phase
 }
 
 // ExecutorOptions configures ebuild execution.
@@ -378,17 +390,15 @@ func (e *Executor) progress(phase Phase, status string) {
 
 // ParseEbuild parses an ebuild file and extracts metadata.
 //
-// This is a stub - actual implementation would parse bash ebuild syntax.
+// Parses the ebuild to extract:
+//   - Function definitions (src_configure, src_compile, etc.)
+//   - Inherited eclasses
+//   - EAPI version
+//
+// This information is used for phase dispatch decisions.
 func (e *Executor) ParseEbuild() error {
-	// TODO: Parse ebuild file
-	// - Extract DESCRIPTION, HOMEPAGE, SRC_URI, LICENSE
-	// - Parse DEPEND, RDEPEND, BDEPEND
-	// - Extract USE flags
-	// - Find phase functions (src_configure, src_compile, etc)
-
-	// Check if ebuild exists
+	// Construct ebuild path if not set
 	if e.EbuildPath == "" {
-		// Try to construct default path
 		e.EbuildPath = filepath.Join(
 			e.Env.PORTDIR,
 			e.Env.CATEGORY,
@@ -397,7 +407,42 @@ func (e *Executor) ParseEbuild() error {
 		)
 	}
 
-	// For now, just return success
+	// Check if ebuild file exists
+	if _, err := os.Stat(e.EbuildPath); err != nil {
+		if os.IsNotExist(err) {
+			// No ebuild file - this is OK, use defaults
+			log.Printf("[ebuild] no ebuild file found at %s, using defaults", e.EbuildPath)
+			return nil
+		}
+		return fmt.Errorf("checking ebuild file: %w", err)
+	}
+
+	// Parse the ebuild script
+	parsed, err := ParseEbuildScript(e.EbuildPath)
+	if err != nil {
+		return fmt.Errorf("parsing ebuild: %w", err)
+	}
+
+	e.ParsedEbuild = parsed
+
+	// Update EAPI in environment if specified in ebuild
+	if parsed.EAPI != "" && parsed.EAPI != "0" {
+		e.Env.EAPI = parsed.EAPI
+	}
+
+	// Log discovered phase functions
+	if len(parsed.DefinedFunctions) > 0 {
+		log.Printf("[ebuild] discovered %d functions in %s", len(parsed.DefinedFunctions), filepath.Base(e.EbuildPath))
+		for name := range parsed.DefinedFunctions {
+			log.Printf("[ebuild]   - %s", name)
+		}
+	}
+
+	// Log inherited eclasses
+	if len(parsed.InheritedEclasses) > 0 {
+		log.Printf("[ebuild] inherits: %v", parsed.InheritedEclasses)
+	}
+
 	return nil
 }
 
@@ -466,4 +511,183 @@ func (e *Executor) SandboxViolations() []sandbox.Violation {
 // IsSandboxEnabled returns true if sandbox isolation is active.
 func (e *Executor) IsSandboxEnabled() bool {
 	return e.EnableSandbox && e.Sandbox != nil
+}
+
+// ============================================================================
+// Phase Dispatch Methods
+// ============================================================================
+
+// HasPhaseFunction checks if the ebuild defines a custom phase function.
+//
+// Per PMS Section 8, ebuilds can override default phase implementations by
+// defining functions like src_configure(), src_compile(), etc.
+//
+// This method checks:
+//  1. If ebuild defines the function directly
+//  2. If an inherited eclass exports the function via EXPORT_FUNCTIONS
+//
+// Returns true if custom function should be called instead of default.
+func (e *Executor) HasPhaseFunction(phase Phase) bool {
+	funcName := phaseFunctionName(phase)
+	if funcName == "" {
+		return false
+	}
+
+	// Check parsed ebuild first
+	if e.ParsedEbuild != nil {
+		if e.ParsedEbuild.HasFunction(funcName) {
+			return true
+		}
+	}
+
+	// Check if an eclass exported this phase function
+	if e.interpreter != nil {
+		helpers := e.interpreter.GetHelpers()
+		if helpers != nil && helpers.eclassRegistry != nil {
+			if _, ok := helpers.eclassRegistry.GetExportedFunction(funcName); ok {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// RunPhaseFunction executes the ebuild's custom phase function.
+//
+// This method:
+//  1. Sets up the EBUILD_PHASE environment variable
+//  2. Sources the ebuild file
+//  3. Calls the phase function (e.g., src_configure)
+//  4. Returns output and any error
+//
+// Per PMS Section 8, the execution follows this pattern:
+//   - If ebuild defines the function directly -> call it
+//   - If eclass exported the function via EXPORT_FUNCTIONS -> call eclass version
+//   - The function can call `default` to invoke default_src_* implementation
+//
+// The function is executed through the embedded bash interpreter using a
+// combined script that sources the ebuild and calls the function in one pass.
+// This is necessary because mvdan.cc/sh doesn't persist function definitions
+// between runs.
+func (e *Executor) RunPhaseFunction(phase Phase) (string, error) {
+	funcName := phaseFunctionName(phase)
+	if funcName == "" {
+		return "", fmt.Errorf("unknown phase: %s", phase)
+	}
+
+	// Update current phase for EBUILD_PHASE
+	e.currentPhase = phase
+	e.Env.EBUILD_PHASE = string(phase)
+
+	// Set EBUILD_PHASE environment variable for subprocesses
+	if err := os.Setenv("EBUILD_PHASE", string(phase)); err != nil {
+		log.Printf("[ebuild] warning: failed to set EBUILD_PHASE: %v", err)
+	}
+	defer func() { _ = os.Unsetenv("EBUILD_PHASE") }()
+
+	// Initialize interpreter if needed
+	if e.interpreter == nil {
+		if err := e.initInterpreter(); err != nil {
+			return "", fmt.Errorf("initializing interpreter: %w", err)
+		}
+	}
+
+	// Check if we need to call an eclass function instead of ebuild's own
+	eclassName := ""
+	helpers := e.interpreter.GetHelpers()
+	if helpers != nil && helpers.eclassRegistry != nil {
+		if ec, ok := helpers.eclassRegistry.GetExportedFunction(funcName); ok {
+			eclassName = ec
+		}
+	}
+
+	// Build a combined script that:
+	// 1. Sets EBUILD_PHASE
+	// 2. Sources the ebuild (to define functions)
+	// 3. Calls the phase function
+	//
+	// This must be done in a single Run() call because mvdan.cc/sh
+	// doesn't persist function definitions between runs.
+	var combinedScript bytes.Buffer
+	combinedScript.WriteString("#!/bin/bash\n")
+	combinedScript.WriteString(fmt.Sprintf("EBUILD_PHASE=%s\n", phase))
+	combinedScript.WriteString(fmt.Sprintf("EBUILD_PHASE_FUNC=%s\n", funcName))
+
+	// Source the ebuild to define all functions
+	if e.EbuildPath != "" {
+		if _, err := os.Stat(e.EbuildPath); err == nil {
+			content, err := os.ReadFile(e.EbuildPath)
+			if err != nil {
+				return "", fmt.Errorf("reading ebuild: %w", err)
+			}
+			// Embed ebuild content directly in the script
+			// This ensures function definitions persist for the function call
+			combinedScript.WriteString("\n# --- BEGIN EBUILD SOURCE ---\n")
+			combinedScript.Write(content)
+			combinedScript.WriteString("\n# --- END EBUILD SOURCE ---\n\n")
+		}
+	}
+
+	// Determine which function to call
+	targetFunc := funcName
+	if eclassName != "" {
+		// Eclass exported this phase, call eclass's prefixed version
+		// e.g., cmake_src_configure instead of src_configure
+		targetFunc = fmt.Sprintf("%s_%s", eclassName, funcName)
+		log.Printf("[ebuild] calling eclass function: %s (from %s.eclass)", targetFunc, eclassName)
+	} else {
+		log.Printf("[ebuild] calling ebuild function: %s", funcName)
+	}
+
+	// Call the phase function
+	combinedScript.WriteString(fmt.Sprintf("%s\n", targetFunc))
+
+	// Execute through interpreter with output capture
+	var output bytes.Buffer
+	ctx := context.Background()
+
+	// Create interpreter with output capture
+	interp := NewInterpreter(e.Env, &output, &output)
+
+	// Execute the combined script
+	if err := interp.Run(ctx, combinedScript.String()); err != nil {
+		return output.String(), fmt.Errorf("executing %s: %w", funcName, err)
+	}
+
+	return output.String(), nil
+}
+
+// initInterpreter initializes the bash interpreter for the executor.
+func (e *Executor) initInterpreter() error {
+	e.interpreter = NewInterpreter(e.Env, os.Stdout, os.Stderr)
+	return nil
+}
+
+// GetCurrentPhase returns the currently executing phase.
+func (e *Executor) GetCurrentPhase() Phase {
+	return e.currentPhase
+}
+
+// SetCurrentPhase sets the current phase (for EBUILD_PHASE).
+func (e *Executor) SetCurrentPhase(phase Phase) {
+	e.currentPhase = phase
+
+	// Update environment struct
+	if e.Env != nil {
+		e.Env.EBUILD_PHASE = string(phase)
+	}
+
+	// Also set in OS environment for subprocesses
+	if err := os.Setenv("EBUILD_PHASE", string(phase)); err != nil {
+		log.Printf("[ebuild] warning: failed to set EBUILD_PHASE: %v", err)
+	}
+}
+
+// GetInterpreter returns the bash interpreter, creating one if needed.
+func (e *Executor) GetInterpreter() *Interpreter {
+	if e.interpreter == nil {
+		_ = e.initInterpreter()
+	}
+	return e.interpreter
 }

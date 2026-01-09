@@ -16,9 +16,14 @@ import (
 	"github.com/ulikunitz/xz"
 )
 
-// ExecutePhase executes a single ebuild phase with REAL implementation.
+// ExecutePhaseReal executes a single ebuild phase with proper dispatch.
 //
-// This replaces the stub implementation in executor.go.
+// Phase dispatch follows PMS Section 8:
+//  1. Check if ebuild defines custom phase function (e.g., src_configure)
+//  2. If yes -> execute ebuild's function via interpreter
+//  3. If no -> call default_src_* implementation
+//
+// This ensures ebuilds using cmake, meson, or custom build systems work correctly.
 func (e *Executor) ExecutePhaseReal(phase Phase) PhaseResult {
 	startTime := time.Now()
 
@@ -27,35 +32,39 @@ func (e *Executor) ExecutePhaseReal(phase Phase) PhaseResult {
 		Success: false,
 	}
 
+	// Set current phase for EBUILD_PHASE environment variable
+	e.SetCurrentPhase(phase)
+
 	var err error
 	var output string
 
 	switch phase {
 	case PhaseSetup:
-		output, err = e.phaseSetup()
+		output, err = e.dispatchPhase(phase, e.phaseSetup)
 
 	case PhaseUnpack:
-		output, err = e.phaseUnpack()
+		output, err = e.dispatchPhase(phase, e.phaseUnpack)
 
 	case PhasePrepare:
-		output, err = e.phasePrepare()
+		output, err = e.dispatchPhase(phase, e.phasePrepare)
 
 	case PhaseConfigure:
-		output, err = e.phaseConfigure()
+		output, err = e.dispatchPhase(phase, e.phaseConfigure)
 
 	case PhaseCompile:
-		output, err = e.phaseCompile()
+		output, err = e.dispatchPhase(phase, e.phaseCompile)
 
 	case PhaseTest:
-		output, err = e.phaseTest()
+		output, err = e.dispatchPhase(phase, e.phaseTest)
 
 	case PhaseInstall:
-		output, err = e.phaseInstall()
+		output, err = e.dispatchPhase(phase, e.phaseInstall)
 
 	case PhasePreinst, PhasePostinst, PhasePrerem, PhasePostrm:
-		// Hook phases - stub for now
-		output = fmt.Sprintf("%s completed (stub)", phase)
-		err = nil
+		// Hook phases use custom dispatch as well
+		output, err = e.dispatchPhase(phase, func() (string, error) {
+			return fmt.Sprintf("%s completed (default)", phase), nil
+		})
 
 	default:
 		err = fmt.Errorf("unknown phase: %s", phase)
@@ -72,6 +81,27 @@ func (e *Executor) ExecutePhaseReal(phase Phase) PhaseResult {
 
 	result.Duration = time.Since(startTime).Milliseconds()
 	return result
+}
+
+// dispatchPhase dispatches a phase to either custom or default implementation.
+//
+// Per PMS Section 8:
+//   - If ebuild defines the phase function (src_configure, etc.) -> call it
+//   - If eclass exports the function via EXPORT_FUNCTIONS -> call eclass version
+//   - Otherwise -> call the default implementation
+func (e *Executor) dispatchPhase(phase Phase, defaultImpl func() (string, error)) (string, error) {
+	funcName := phaseFunctionName(phase)
+	log.Printf("[ebuild] dispatching phase %s (function: %s)", phase, funcName)
+
+	// Check if custom phase function exists
+	if e.HasPhaseFunction(phase) {
+		log.Printf("[ebuild] found custom %s, executing ebuild function", funcName)
+		return e.RunPhaseFunction(phase)
+	}
+
+	// No custom function, use default implementation
+	log.Printf("[ebuild] no custom %s found, using default", funcName)
+	return defaultImpl()
 }
 
 // phaseSetup performs pkg_setup phase.

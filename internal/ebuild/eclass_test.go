@@ -7,7 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/grpmsoft/grpm/internal/pkg"
+	pkgdomain "github.com/grpmsoft/grpm/internal/pkg"
+	"github.com/grpmsoft/grpm/internal/state"
 )
 
 // TestEclassRegistry tests the EclassRegistry functionality.
@@ -181,7 +182,7 @@ func TestEclassStack(t *testing.T) {
 // TestEclassLoader tests the EclassLoader functionality.
 func TestEclassLoader(t *testing.T) {
 	t.Run("BuiltinEclass handling", func(t *testing.T) {
-		pkg := &pkg.Package{
+		pkg := &pkgdomain.Package{
 			Name:     "app-misc/test",
 			Version:  "1.0",
 			UseFlags: map[string]bool{"ssl": true},
@@ -209,7 +210,7 @@ func TestEclassLoader(t *testing.T) {
 
 // TestEutilsFunctions tests eutils eclass functions.
 func TestEutilsFunctions(t *testing.T) {
-	pkg := &pkg.Package{
+	pkg := &pkgdomain.Package{
 		Name:     "app-misc/test",
 		Version:  "1.0",
 		UseFlags: map[string]bool{"ssl": true},
@@ -315,7 +316,7 @@ func TestEutilsFunctions(t *testing.T) {
 
 // TestToolchainFuncs tests toolchain-funcs eclass functions.
 func TestToolchainFuncs(t *testing.T) {
-	pkg := &pkg.Package{
+	pkg := &pkgdomain.Package{
 		Name:    "app-misc/test",
 		Version: "1.0",
 	}
@@ -397,7 +398,7 @@ func TestToolchainFuncs(t *testing.T) {
 
 // TestMultilibFunctions tests multilib eclass functions.
 func TestMultilibFunctions(t *testing.T) {
-	pkg := &pkg.Package{
+	pkg := &pkgdomain.Package{
 		Name:     "app-misc/test",
 		Version:  "1.0",
 		UseFlags: map[string]bool{"ssl": true, "zlib": false},
@@ -474,7 +475,7 @@ func TestMultilibFunctions(t *testing.T) {
 
 // TestFlagOMatic tests flag-o-matic eclass functions.
 func TestFlagOMatic(t *testing.T) {
-	pkg := &pkg.Package{
+	pkg := &pkgdomain.Package{
 		Name:    "app-misc/test",
 		Version: "1.0",
 	}
@@ -571,7 +572,7 @@ func TestFlagOMatic(t *testing.T) {
 
 // TestLinuxInfoFunctions tests linux-info eclass functions.
 func TestLinuxInfoFunctions(t *testing.T) {
-	pkg := &pkg.Package{
+	pkg := &pkgdomain.Package{
 		Name:    "app-misc/test",
 		Version: "1.0",
 	}
@@ -610,7 +611,7 @@ func TestLinuxInfoFunctions(t *testing.T) {
 
 // TestExportFunctions tests the EXPORT_FUNCTIONS helper.
 func TestExportFunctions(t *testing.T) {
-	pkg := &pkg.Package{
+	pkg := &pkgdomain.Package{
 		Name:    "app-misc/test",
 		Version: "1.0",
 	}
@@ -655,7 +656,7 @@ func TestExportFunctions(t *testing.T) {
 
 // TestMiscEclassFunctions tests miscellaneous eclass functions.
 func TestMiscEclassFunctions(t *testing.T) {
-	pkg := &pkg.Package{
+	pkg := &pkgdomain.Package{
 		Name:    "app-misc/test",
 		Version: "1.0",
 	}
@@ -679,31 +680,192 @@ func TestMiscEclassFunctions(t *testing.T) {
 		}
 	})
 
-	t.Run("has_version stub", func(t *testing.T) {
+	t.Run("has_version without database", func(t *testing.T) {
 		var stdout, stderr bytes.Buffer
 		helpers := NewHelpers(env, &stdout, &stderr)
 
-		// Stub returns false (not installed)
+		// Without database, should return not found (exit code 1)
 		err := helpers.HasVersion([]string{">=sys-libs/zlib-1.2"})
 		if err == nil {
-			t.Error("has_version stub should return not found")
+			t.Error("has_version without database should return not found")
 		}
 	})
 
-	t.Run("best_version stub", func(t *testing.T) {
+	t.Run("has_version with database - package found", func(t *testing.T) {
 		var stdout, stderr bytes.Buffer
 		helpers := NewHelpers(env, &stdout, &stderr)
 
+		// Create mock package database
+		db := state.NewPackageDatabase("/var/db/pkg")
+		installedPkg := &state.InstalledPackage{
+			Package: &pkgdomain.Package{
+				Name:    "sys-libs/zlib",
+				Version: "1.2.13",
+			},
+		}
+		if err := db.Add(installedPkg); err != nil {
+			t.Fatalf("failed to add package: %v", err)
+		}
+		helpers.SetPackageDatabase(db)
+
+		// Should find installed package
+		err := helpers.HasVersion([]string{"sys-libs/zlib"})
+		if err != nil {
+			t.Error("has_version should find installed package")
+		}
+	})
+
+	t.Run("has_version with database - version constraint", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+		helpers := NewHelpers(env, &stdout, &stderr)
+
+		// Create mock package database
+		db := state.NewPackageDatabase("/var/db/pkg")
+		installedPkg := &state.InstalledPackage{
+			Package: &pkgdomain.Package{
+				Name:    "sys-libs/zlib",
+				Version: "1.2.13",
+			},
+		}
+		if err := db.Add(installedPkg); err != nil {
+			t.Fatalf("failed to add package: %v", err)
+		}
+		helpers.SetPackageDatabase(db)
+
+		// Should find package with >=1.2 constraint
+		err := helpers.HasVersion([]string{">=sys-libs/zlib-1.2"})
+		if err != nil {
+			t.Error("has_version should find package with >=1.2 constraint")
+		}
+
+		// Should NOT find package with >=2.0 constraint
+		err = helpers.HasVersion([]string{">=sys-libs/zlib-2.0"})
+		if err == nil {
+			t.Error("has_version should NOT find package with >=2.0 constraint")
+		}
+	})
+
+	t.Run("has_version with database - package not found", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+		helpers := NewHelpers(env, &stdout, &stderr)
+
+		// Create empty database
+		db := state.NewPackageDatabase("/var/db/pkg")
+		helpers.SetPackageDatabase(db)
+
+		// Should NOT find missing package
+		err := helpers.HasVersion([]string{"sys-libs/nonexistent"})
+		if err == nil {
+			t.Error("has_version should NOT find missing package")
+		}
+	})
+
+	t.Run("best_version without database", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+		helpers := NewHelpers(env, &stdout, &stderr)
+
+		// Without database, should return nothing (no error, no output)
 		err := helpers.BestVersion([]string{"sys-libs/zlib"})
 		if err != nil {
-			t.Errorf("best_version stub should not fail: %v", err)
+			t.Errorf("best_version without database should not fail: %v", err)
+		}
+		if stdout.Len() > 0 {
+			t.Error("best_version without database should not produce output")
+		}
+	})
+
+	t.Run("best_version with database - single version", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+		helpers := NewHelpers(env, &stdout, &stderr)
+
+		// Create mock package database
+		db := state.NewPackageDatabase("/var/db/pkg")
+		installedPkg := &state.InstalledPackage{
+			Package: &pkgdomain.Package{
+				Name:    "sys-libs/zlib",
+				Version: "1.2.13",
+			},
+		}
+		if err := db.Add(installedPkg); err != nil {
+			t.Fatalf("failed to add package: %v", err)
+		}
+		helpers.SetPackageDatabase(db)
+
+		err := helpers.BestVersion([]string{"sys-libs/zlib"})
+		if err != nil {
+			t.Errorf("best_version should not fail: %v", err)
+		}
+
+		output := stdout.String()
+		if output != "sys-libs/zlib-1.2.13" {
+			t.Errorf("best_version output = %q, want %q", output, "sys-libs/zlib-1.2.13")
+		}
+	})
+
+	t.Run("best_version with database - multiple versions", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+		helpers := NewHelpers(env, &stdout, &stderr)
+
+		// Create mock package database with multiple versions
+		db := state.NewPackageDatabase("/var/db/pkg")
+
+		// Add older version
+		oldPkg := &state.InstalledPackage{
+			Package: &pkgdomain.Package{
+				Name:    "sys-libs/zlib",
+				Version: "1.2.11",
+			},
+		}
+		if err := db.Add(oldPkg); err != nil {
+			t.Fatalf("failed to add old package: %v", err)
+		}
+
+		// Add newer version (overwrites due to same atom key)
+		newPkg := &state.InstalledPackage{
+			Package: &pkgdomain.Package{
+				Name:    "sys-libs/zlib",
+				Version: "1.2.13",
+			},
+		}
+		if err := db.Add(newPkg); err != nil {
+			t.Fatalf("failed to add new package: %v", err)
+		}
+
+		helpers.SetPackageDatabase(db)
+
+		err := helpers.BestVersion([]string{"sys-libs/zlib"})
+		if err != nil {
+			t.Errorf("best_version should not fail: %v", err)
+		}
+
+		output := stdout.String()
+		// Should return the highest version
+		if output != "sys-libs/zlib-1.2.13" {
+			t.Errorf("best_version output = %q, want %q", output, "sys-libs/zlib-1.2.13")
+		}
+	})
+
+	t.Run("best_version with database - package not found", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+		helpers := NewHelpers(env, &stdout, &stderr)
+
+		// Create empty database
+		db := state.NewPackageDatabase("/var/db/pkg")
+		helpers.SetPackageDatabase(db)
+
+		err := helpers.BestVersion([]string{"sys-libs/nonexistent"})
+		if err != nil {
+			t.Errorf("best_version should not fail even for missing package: %v", err)
+		}
+		if stdout.Len() > 0 {
+			t.Error("best_version should not produce output for missing package")
 		}
 	})
 }
 
 // TestInterpreterEclassIntegration tests eclass functions through the interpreter.
 func TestInterpreterEclassIntegration(t *testing.T) {
-	pkg := &pkg.Package{
+	pkg := &pkgdomain.Package{
 		Name:     "app-misc/test",
 		Version:  "1.0",
 		UseFlags: map[string]bool{"ssl": true},
@@ -768,6 +930,505 @@ fi
 		output := stdout.String()
 		if output != "lib" && output != "lib64" && !bytes.Contains([]byte(output), []byte("lib")) {
 			t.Errorf("get_libdir should return lib or lib64, got '%s'", output)
+		}
+	})
+}
+
+// TestParseAtom tests the parseAtom function.
+func TestParseAtom(t *testing.T) {
+	tests := []struct {
+		name         string
+		atom         string
+		wantOperator string
+		wantName     string
+		wantVersion  string
+	}{
+		{
+			name:         "simple package name",
+			atom:         "sys-libs/zlib",
+			wantOperator: "",
+			wantName:     "sys-libs/zlib",
+			wantVersion:  "",
+		},
+		{
+			name:         "package with exact version",
+			atom:         "=sys-libs/zlib-1.2.13",
+			wantOperator: "=",
+			wantName:     "sys-libs/zlib",
+			wantVersion:  "1.2.13",
+		},
+		{
+			name:         "package with >= constraint",
+			atom:         ">=sys-libs/zlib-1.2",
+			wantOperator: ">=",
+			wantName:     "sys-libs/zlib",
+			wantVersion:  "1.2",
+		},
+		{
+			name:         "package with <= constraint",
+			atom:         "<=sys-libs/zlib-1.3",
+			wantOperator: "<=",
+			wantName:     "sys-libs/zlib",
+			wantVersion:  "1.3",
+		},
+		{
+			name:         "package with > constraint",
+			atom:         ">sys-libs/zlib-1.2",
+			wantOperator: ">",
+			wantName:     "sys-libs/zlib",
+			wantVersion:  "1.2",
+		},
+		{
+			name:         "package with < constraint",
+			atom:         "<sys-libs/zlib-2.0",
+			wantOperator: "<",
+			wantName:     "sys-libs/zlib",
+			wantVersion:  "2.0",
+		},
+		{
+			name:         "package with slot",
+			atom:         "sys-libs/zlib:0",
+			wantOperator: "",
+			wantName:     "sys-libs/zlib",
+			wantVersion:  "",
+		},
+		{
+			name:         "package with USE flag",
+			atom:         "sys-libs/zlib[static-libs]",
+			wantOperator: "",
+			wantName:     "sys-libs/zlib",
+			wantVersion:  "",
+		},
+		{
+			name:         "complex atom with version, slot, and USE",
+			atom:         ">=dev-lang/python-3.10:3.10[ssl]",
+			wantOperator: ">=",
+			wantName:     "dev-lang/python",
+			wantVersion:  "3.10",
+		},
+		{
+			name:         "app-misc package",
+			atom:         "app-misc/hello",
+			wantOperator: "",
+			wantName:     "app-misc/hello",
+			wantVersion:  "",
+		},
+		{
+			name:         "package with revision",
+			atom:         "=sys-libs/zlib-1.2.13-r1",
+			wantOperator: "=",
+			wantName:     "sys-libs/zlib",
+			wantVersion:  "1.2.13-r1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotOperator, gotName, gotVersion := parseAtom(tt.atom)
+
+			if gotOperator != tt.wantOperator {
+				t.Errorf("parseAtom(%q) operator = %q, want %q", tt.atom, gotOperator, tt.wantOperator)
+			}
+			if gotName != tt.wantName {
+				t.Errorf("parseAtom(%q) name = %q, want %q", tt.atom, gotName, tt.wantName)
+			}
+			if gotVersion != tt.wantVersion {
+				t.Errorf("parseAtom(%q) version = %q, want %q", tt.atom, gotVersion, tt.wantVersion)
+			}
+		})
+	}
+}
+
+// TestInheritRealImplementation tests the real inherit functionality.
+func TestInheritRealImplementation(t *testing.T) {
+	t.Run("inherit with no eclassLoader falls back gracefully", func(t *testing.T) {
+		pkg := &pkgdomain.Package{
+			Name:    "app-misc/test",
+			Version: "1.0",
+		}
+
+		env, err := NewEnvironment(pkg, "/tmp/portage", "/var/db/repos/gentoo", "/var/cache/distfiles")
+		if err != nil {
+			t.Fatalf("NewEnvironment failed: %v", err)
+		}
+
+		var stdout, stderr bytes.Buffer
+		// Create helpers directly without going through interpreter
+		// This simulates the case where eclassLoader is not wired up
+		helpers := NewHelpers(env, &stdout, &stderr)
+
+		// Inherit should succeed but use fallback behavior
+		err = helpers.Inherit([]string{"toolchain-funcs"})
+		if err != nil {
+			t.Errorf("Inherit should not fail: %v", err)
+		}
+
+		// Should output fallback message
+		output := stdout.String()
+		if !bytes.Contains([]byte(output), []byte("no loader")) {
+			t.Errorf("expected fallback message, got: %s", output)
+		}
+	})
+
+	t.Run("inherit with eclassLoader uses real implementation", func(t *testing.T) {
+		pkg := &pkgdomain.Package{
+			Name:    "app-misc/test",
+			Version: "1.0",
+		}
+
+		env, err := NewEnvironment(pkg, "/tmp/portage", "/var/db/repos/gentoo", "/var/cache/distfiles")
+		if err != nil {
+			t.Fatalf("NewEnvironment failed: %v", err)
+		}
+
+		var stdout, stderr bytes.Buffer
+		// Create interpreter which wires up the eclassLoader
+		interp := NewInterpreter(env, &stdout, &stderr)
+		helpers := interp.GetHelpers()
+
+		// Verify eclassLoader is wired up
+		if helpers.GetEclassLoader() == nil {
+			t.Fatal("eclassLoader should be set when using Interpreter")
+		}
+
+		// Inherit a builtin eclass (toolchain-funcs)
+		err = helpers.Inherit([]string{"toolchain-funcs"})
+		if err != nil {
+			t.Errorf("Inherit should succeed for builtin eclass: %v", err)
+		}
+
+		// Check that INHERITED is populated
+		inherited := helpers.GetEclassRegistry().GetInherited()
+		if inherited != "toolchain-funcs" {
+			t.Errorf("INHERITED should be 'toolchain-funcs', got '%s'", inherited)
+		}
+	})
+
+	t.Run("inherit multiple builtin eclasses", func(t *testing.T) {
+		pkg := &pkgdomain.Package{
+			Name:    "app-misc/test",
+			Version: "1.0",
+		}
+
+		env, err := NewEnvironment(pkg, "/tmp/portage", "/var/db/repos/gentoo", "/var/cache/distfiles")
+		if err != nil {
+			t.Fatalf("NewEnvironment failed: %v", err)
+		}
+
+		var stdout, stderr bytes.Buffer
+		interp := NewInterpreter(env, &stdout, &stderr)
+		helpers := interp.GetHelpers()
+
+		// Inherit multiple builtin eclasses
+		err = helpers.Inherit([]string{"toolchain-funcs", "eutils", "multilib"})
+		if err != nil {
+			t.Errorf("Inherit should succeed: %v", err)
+		}
+
+		inherited := helpers.GetEclassRegistry().GetInherited()
+		if inherited != "toolchain-funcs eutils multilib" {
+			t.Errorf("INHERITED should be 'toolchain-funcs eutils multilib', got '%s'", inherited)
+		}
+	})
+
+	t.Run("inherit prevents double loading", func(t *testing.T) {
+		pkg := &pkgdomain.Package{
+			Name:    "app-misc/test",
+			Version: "1.0",
+		}
+
+		env, err := NewEnvironment(pkg, "/tmp/portage", "/var/db/repos/gentoo", "/var/cache/distfiles")
+		if err != nil {
+			t.Fatalf("NewEnvironment failed: %v", err)
+		}
+
+		var stdout, stderr bytes.Buffer
+		interp := NewInterpreter(env, &stdout, &stderr)
+		helpers := interp.GetHelpers()
+
+		// Inherit same eclass twice
+		err = helpers.Inherit([]string{"toolchain-funcs"})
+		if err != nil {
+			t.Fatalf("First inherit failed: %v", err)
+		}
+
+		stdout.Reset()
+		err = helpers.Inherit([]string{"toolchain-funcs"})
+		if err != nil {
+			t.Fatalf("Second inherit failed: %v", err)
+		}
+
+		// Should only appear once in INHERITED
+		inherited := helpers.GetEclassRegistry().GetInherited()
+		if inherited != "toolchain-funcs" {
+			t.Errorf("INHERITED should be 'toolchain-funcs' (no duplicates), got '%s'", inherited)
+		}
+
+		// Output should mention already inherited
+		output := stdout.String()
+		if !bytes.Contains([]byte(output), []byte("already inherited")) {
+			t.Logf("Note: output was '%s'", output)
+		}
+	})
+
+	t.Run("inherit empty args does nothing", func(t *testing.T) {
+		pkg := &pkgdomain.Package{
+			Name:    "app-misc/test",
+			Version: "1.0",
+		}
+
+		env, err := NewEnvironment(pkg, "/tmp/portage", "/var/db/repos/gentoo", "/var/cache/distfiles")
+		if err != nil {
+			t.Fatalf("NewEnvironment failed: %v", err)
+		}
+
+		var stdout, stderr bytes.Buffer
+		interp := NewInterpreter(env, &stdout, &stderr)
+		helpers := interp.GetHelpers()
+
+		err = helpers.Inherit([]string{})
+		if err != nil {
+			t.Errorf("Inherit with empty args should succeed: %v", err)
+		}
+
+		inherited := helpers.GetEclassRegistry().GetInherited()
+		if inherited != "" {
+			t.Errorf("INHERITED should be empty, got '%s'", inherited)
+		}
+	})
+}
+
+// TestInheritWithRealEclassFile tests inherit with actual eclass files.
+func TestInheritWithRealEclassFile(t *testing.T) {
+	t.Run("inherit loads real eclass file", func(t *testing.T) {
+		// Create a temporary directory for test eclasses
+		tmpDir := t.TempDir()
+		eclassDir := filepath.Join(tmpDir, "eclass")
+		if err := os.MkdirAll(eclassDir, 0755); err != nil {
+			t.Fatalf("failed to create eclass dir: %v", err)
+		}
+
+		// Create a simple test eclass file
+		testEclassContent := `# test.eclass - Test eclass for GRPM
+# This defines a simple function and variable
+
+TEST_ECLASS_VAR="loaded"
+
+test_eclass_func() {
+	einfo "test_eclass_func called"
+}
+`
+		eclassPath := filepath.Join(eclassDir, "test.eclass")
+		if err := os.WriteFile(eclassPath, []byte(testEclassContent), 0644); err != nil {
+			t.Fatalf("failed to write test eclass: %v", err)
+		}
+
+		// Create environment pointing to our test repo
+		pkg := &pkgdomain.Package{
+			Name:    "app-misc/test",
+			Version: "1.0",
+		}
+
+		env, err := NewEnvironment(pkg, "/tmp/portage", tmpDir, "/var/cache/distfiles")
+		if err != nil {
+			t.Fatalf("NewEnvironment failed: %v", err)
+		}
+
+		var stdout, stderr bytes.Buffer
+		interp := NewInterpreter(env, &stdout, &stderr)
+		helpers := interp.GetHelpers()
+
+		// Inherit the test eclass
+		err = helpers.Inherit([]string{"test"})
+		if err != nil {
+			t.Errorf("Inherit should succeed: %v", err)
+		}
+
+		// Check INHERITED is populated
+		inherited := helpers.GetEclassRegistry().GetInherited()
+		if inherited != "test" {
+			t.Errorf("INHERITED should be 'test', got '%s'", inherited)
+		}
+	})
+
+	t.Run("inherit with nested inheritance", func(t *testing.T) {
+		// Create a temporary directory for test eclasses
+		tmpDir := t.TempDir()
+		eclassDir := filepath.Join(tmpDir, "eclass")
+		if err := os.MkdirAll(eclassDir, 0755); err != nil {
+			t.Fatalf("failed to create eclass dir: %v", err)
+		}
+
+		// Create base eclass
+		baseEclassContent := `# base.eclass - Base eclass
+BASE_VAR="base"
+base_func() {
+	einfo "base_func"
+}
+`
+		if err := os.WriteFile(filepath.Join(eclassDir, "base.eclass"), []byte(baseEclassContent), 0644); err != nil {
+			t.Fatalf("failed to write base eclass: %v", err)
+		}
+
+		// Create child eclass that inherits base
+		childEclassContent := `# child.eclass - Child eclass that inherits base
+inherit base
+
+CHILD_VAR="child"
+child_func() {
+	base_func
+	einfo "child_func"
+}
+`
+		if err := os.WriteFile(filepath.Join(eclassDir, "child.eclass"), []byte(childEclassContent), 0644); err != nil {
+			t.Fatalf("failed to write child eclass: %v", err)
+		}
+
+		// Create environment
+		pkg := &pkgdomain.Package{
+			Name:    "app-misc/test",
+			Version: "1.0",
+		}
+
+		env, err := NewEnvironment(pkg, "/tmp/portage", tmpDir, "/var/cache/distfiles")
+		if err != nil {
+			t.Fatalf("NewEnvironment failed: %v", err)
+		}
+
+		var stdout, stderr bytes.Buffer
+		interp := NewInterpreter(env, &stdout, &stderr)
+		helpers := interp.GetHelpers()
+
+		// Inherit the child eclass (which should trigger inherit of base)
+		err = helpers.Inherit([]string{"child"})
+		if err != nil {
+			t.Errorf("Inherit should succeed: %v", err)
+		}
+
+		// Check that both eclasses are in INHERITED
+		inherited := helpers.GetEclassRegistry().GetInherited()
+		if !bytes.Contains([]byte(inherited), []byte("base")) {
+			t.Errorf("INHERITED should contain 'base', got '%s'", inherited)
+		}
+		if !bytes.Contains([]byte(inherited), []byte("child")) {
+			t.Errorf("INHERITED should contain 'child', got '%s'", inherited)
+		}
+	})
+
+	t.Run("inherit missing eclass fails gracefully", func(t *testing.T) {
+		// Create a temporary directory with no eclasses
+		tmpDir := t.TempDir()
+		eclassDir := filepath.Join(tmpDir, "eclass")
+		if err := os.MkdirAll(eclassDir, 0755); err != nil {
+			t.Fatalf("failed to create eclass dir: %v", err)
+		}
+
+		pkg := &pkgdomain.Package{
+			Name:    "app-misc/test",
+			Version: "1.0",
+		}
+
+		env, err := NewEnvironment(pkg, "/tmp/portage", tmpDir, "/var/cache/distfiles")
+		if err != nil {
+			t.Fatalf("NewEnvironment failed: %v", err)
+		}
+
+		var stdout, stderr bytes.Buffer
+		interp := NewInterpreter(env, &stdout, &stderr)
+		helpers := interp.GetHelpers()
+
+		// Try to inherit non-existent eclass
+		err = helpers.Inherit([]string{"nonexistent"})
+		if err == nil {
+			t.Error("Inherit of non-existent eclass should fail")
+		}
+
+		// Error should mention inherit failed
+		if err != nil && !bytes.Contains([]byte(err.Error()), []byte("inherit failed")) {
+			t.Errorf("Error should mention 'inherit failed', got: %v", err)
+		}
+	})
+}
+
+// TestInheritThroughInterpreter tests inherit called from bash scripts.
+func TestInheritThroughInterpreter(t *testing.T) {
+	t.Run("inherit called from script", func(t *testing.T) {
+		// Create test eclass directory
+		tmpDir := t.TempDir()
+		eclassDir := filepath.Join(tmpDir, "eclass")
+		if err := os.MkdirAll(eclassDir, 0755); err != nil {
+			t.Fatalf("failed to create eclass dir: %v", err)
+		}
+
+		// Create simple eclass
+		eclassContent := `# simple.eclass
+SIMPLE_VAR="set_by_eclass"
+simple_helper() {
+	einfo "Simple helper called"
+}
+`
+		if err := os.WriteFile(filepath.Join(eclassDir, "simple.eclass"), []byte(eclassContent), 0644); err != nil {
+			t.Fatalf("failed to write eclass: %v", err)
+		}
+
+		pkg := &pkgdomain.Package{
+			Name:    "app-misc/test",
+			Version: "1.0",
+		}
+
+		env, err := NewEnvironment(pkg, "/tmp/portage", tmpDir, "/var/cache/distfiles")
+		if err != nil {
+			t.Fatalf("NewEnvironment failed: %v", err)
+		}
+
+		var stdout, stderr bytes.Buffer
+		interp := NewInterpreter(env, &stdout, &stderr)
+
+		// Run script that calls inherit
+		script := `inherit simple
+einfo "After inherit"
+`
+		err = interp.Run(context.Background(), script)
+		if err != nil {
+			t.Errorf("Script execution failed: %v", err)
+		}
+
+		// Check INHERITED through helpers
+		helpers := interp.GetHelpers()
+		inherited := helpers.GetEclassRegistry().GetInherited()
+		if inherited != "simple" {
+			t.Errorf("INHERITED should be 'simple', got '%s'", inherited)
+		}
+	})
+
+	t.Run("inherit builtin from script", func(t *testing.T) {
+		pkg := &pkgdomain.Package{
+			Name:    "app-misc/test",
+			Version: "1.0",
+		}
+
+		env, err := NewEnvironment(pkg, "/tmp/portage", "/var/db/repos/gentoo", "/var/cache/distfiles")
+		if err != nil {
+			t.Fatalf("NewEnvironment failed: %v", err)
+		}
+
+		var stdout, stderr bytes.Buffer
+		interp := NewInterpreter(env, &stdout, &stderr)
+
+		// Run script that inherits builtin eclass and uses its function
+		script := `inherit toolchain-funcs
+CC=$(tc-getCC)
+einfo "CC is $CC"
+`
+		err = interp.Run(context.Background(), script)
+		if err != nil {
+			t.Errorf("Script execution failed: %v", err)
+		}
+
+		// Check output contains gcc (default CC)
+		output := stdout.String()
+		if !bytes.Contains([]byte(output), []byte("gcc")) {
+			t.Errorf("Output should contain 'gcc', got: %s", output)
 		}
 	})
 }

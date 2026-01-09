@@ -8,6 +8,7 @@ import (
 	"github.com/grpmsoft/grpm/internal/pkg"
 	"github.com/grpmsoft/grpm/internal/repo"
 	"github.com/grpmsoft/grpm/internal/solver"
+	"github.com/grpmsoft/grpm/internal/state"
 )
 
 // PackageService is an Application Service following DDD pattern
@@ -17,14 +18,22 @@ type PackageService struct {
 	repo       repo.Repository
 	resolver   *solver.PortageResolver
 	depService *pkg.DependencyService
+	pkgDB      *state.PackageDatabase
 }
 
-// NewPackageService creates a new PackageService
-func NewPackageService(repository repo.Repository) *PackageService {
+// NewPackageService creates a new PackageService.
+//
+// Parameters:
+//   - repository: Package repository for package metadata queries
+//   - pkgDB: Package database for installed package queries (can be nil)
+//
+// If pkgDB is nil, installed package checks will always return false.
+func NewPackageService(repository repo.Repository, pkgDB *state.PackageDatabase) *PackageService {
 	return &PackageService{
 		repo:       repository,
 		resolver:   solver.NewResolver(repository),
 		depService: pkg.NewDependencyService(),
+		pkgDB:      pkgDB,
 	}
 }
 
@@ -224,6 +233,14 @@ func (s *PackageService) packageToDTO(p *pkg.Package) *PackageInfo {
 		}
 	}
 
+	// Check if package is installed in VarDB
+	installed := false
+	if s.pkgDB != nil {
+		// Query by full atom: "category/name-version"
+		atom := fmt.Sprintf("%s-%s", p.Name, p.Version)
+		installed = s.pkgDB.Has(atom)
+	}
+
 	return &PackageInfo{
 		Name:         p.Name,
 		Version:      p.Version,
@@ -234,7 +251,7 @@ func (s *PackageService) packageToDTO(p *pkg.Package) *PackageInfo {
 		License:      "", // TODO: Load from ebuild metadata
 		UseFlags:     useFlags,
 		Dependencies: dependencies,
-		Installed:    false, // TODO: Check installed database
+		Installed:    installed,
 	}
 }
 
