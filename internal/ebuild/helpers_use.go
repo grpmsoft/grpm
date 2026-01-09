@@ -193,3 +193,113 @@ func (h *Helpers) isInIuse(flag string) bool {
 	// TODO: Add IUSE field to Environment struct
 	return false
 }
+
+// ============================================================================
+// EAPI 8 USE Flag Configure Helpers (PMS Section 11.3.2)
+// ============================================================================
+
+// UseEnable outputs --enable-${opt} or --disable-${opt} for ./configure.
+//
+// Per PMS Section 11.3.2.2, this function is used to generate autoconf-style
+// configure options based on USE flag state.
+//
+// Usage:
+//
+//	use_enable <flag>                        -> --enable-flag or --disable-flag
+//	use_enable <flag> <option>               -> --enable-option or --disable-option
+//	use_enable <flag> <opt> <val_if_true> <val_if_false> -> --opt=val_if_true or --opt=val_if_false
+//
+// Examples:
+//
+//	use_enable ssl           -> --enable-ssl (if ssl enabled) or --disable-ssl
+//	use_enable ssl openssl   -> --enable-openssl (if ssl enabled) or --disable-openssl
+//	use_enable ssl openssl yes no -> --openssl=yes (if enabled) or --openssl=no
+func (h *Helpers) UseEnable(args []string) error {
+	if len(args) < 1 {
+		return exitFalse()
+	}
+
+	result := h.useConfigureHelper(args, "enable", "disable")
+	h.writeStdout(result)
+	return nil
+}
+
+// UseWith outputs --with-${opt} or --without-${opt} for ./configure.
+//
+// Per PMS Section 11.3.2.3, this function is used to generate autoconf-style
+// configure options for optional dependencies based on USE flag state.
+//
+// Usage:
+//
+//	use_with <flag>                        -> --with-flag or --without-flag
+//	use_with <flag> <option>               -> --with-option or --without-option
+//	use_with <flag> <opt> <val_if_true> <val_if_false> -> --opt=val_if_true or --opt=val_if_false
+//
+// Examples:
+//
+//	use_with ssl           -> --with-ssl (if ssl enabled) or --without-ssl
+//	use_with ssl openssl   -> --with-openssl (if ssl enabled) or --without-openssl
+//	use_with ssl openssl yes no -> --openssl=yes (if enabled) or --openssl=no
+func (h *Helpers) UseWith(args []string) error {
+	if len(args) < 1 {
+		return exitFalse()
+	}
+
+	result := h.useConfigureHelper(args, "with", "without")
+	h.writeStdout(result)
+	return nil
+}
+
+// useConfigureHelper is the common implementation for use_enable and use_with.
+//
+// Parameters:
+//   - args: Command arguments [flag, option?, val_if_true?, val_if_false?]
+//   - enablePrefix: Prefix for enabled state (e.g., "enable" or "with")
+//   - disablePrefix: Prefix for disabled state (e.g., "disable" or "without")
+//
+// Return format depends on argument count:
+//   - 1 arg:  --{prefix}-{flag}
+//   - 2 args: --{prefix}-{option}
+//   - 4 args: --{option}={value}
+func (h *Helpers) useConfigureHelper(args []string, enablePrefix, disablePrefix string) string {
+	flag := args[0]
+	enabled := h.isUseEnabled(flag)
+
+	switch len(args) {
+	case 1:
+		// use_enable flag -> --enable-flag or --disable-flag
+		if enabled {
+			return "--" + enablePrefix + "-" + flag
+		}
+		return "--" + disablePrefix + "-" + flag
+
+	case 2:
+		// use_enable flag option -> --enable-option or --disable-option
+		option := args[1]
+		if enabled {
+			return "--" + enablePrefix + "-" + option
+		}
+		return "--" + disablePrefix + "-" + option
+
+	case 3:
+		// Per PMS, 3 arguments is valid: use_enable flag opt value
+		// This outputs --enable-opt=value or --disable-opt
+		option := args[1]
+		value := args[2]
+		if enabled {
+			return "--" + enablePrefix + "-" + option + "=" + value
+		}
+		return "--" + disablePrefix + "-" + option
+
+	default:
+		// 4+ args: use_enable flag opt val_if_true val_if_false
+		// Outputs --opt=val_if_true or --opt=val_if_false
+		option := args[1]
+		valTrue := args[2]
+		valFalse := args[3]
+		if enabled {
+			return "--" + option + "=" + valTrue
+		}
+		return "--" + option + "=" + valFalse
+	}
+}

@@ -328,3 +328,32 @@ func (pr *PortageRepository) Count() (int, error) {
 
 	return count, nil
 }
+
+// FindByAtom finds all packages matching a PMS-compliant atom.
+// Uses Atom.Matches() for version, slot, and subslot matching.
+// Optimized: only searches the specific category/package directory.
+func (pr *PortageRepository) FindByAtom(atom *pkg.Atom) ([]*pkg.Package, error) {
+	if atom == nil {
+		return nil, fmt.Errorf("atom is nil")
+	}
+
+	// Construct the package directory path from atom's category/package
+	packageName := atom.CP()
+
+	// Get all versions of this package
+	versions, err := pr.GetAllVersions(packageName)
+	if err != nil {
+		// Package doesn't exist - return empty slice, not error
+		return []*pkg.Package{}, nil
+	}
+
+	// Filter by atom matching (version, slot, subslot constraints)
+	var result []*pkg.Package
+	for _, p := range versions {
+		if atom.Matches(p) {
+			result = append(result, p)
+		}
+	}
+
+	return result, nil
+}

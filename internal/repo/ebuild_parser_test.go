@@ -1090,3 +1090,404 @@ RDEPEND=">=sys-libs/zlib-1.2.13"
 		_ = parser.ExtractVariable("SRC_URI")
 	}
 }
+
+// ==================== EAPI 8 Variables Tests ====================
+
+// TestIDEPENDParsing tests EAPI 8 IDEPEND parsing
+func TestIDEPENDParsing(t *testing.T) {
+	content := `
+EAPI=8
+IDEPEND="app-misc/pax-utils"
+`
+
+	parser := NewEbuildParser(content)
+	idepend := parser.ExtractVariable("IDEPEND")
+
+	if idepend != "app-misc/pax-utils" {
+		t.Errorf("IDEPEND = %q, expected %q", idepend, "app-misc/pax-utils")
+	}
+}
+
+// TestIDEPENDDependencyParsing tests IDEPEND is included in ParseDependencies
+func TestIDEPENDDependencyParsing(t *testing.T) {
+	content := `
+EAPI=8
+RDEPEND="sys-libs/zlib"
+IDEPEND="app-misc/pax-utils"
+`
+
+	parser := NewEbuildParser(content)
+	deps, err := parser.ParseDependencies()
+
+	if err != nil {
+		t.Fatalf("ParseDependencies() error: %v", err)
+	}
+
+	// Should have 2 dependencies: zlib (RDEPEND) and pax-utils (IDEPEND)
+	if len(deps) != 2 {
+		t.Fatalf("ParseDependencies() returned %d deps, expected 2", len(deps))
+	}
+
+	// Check that IDEPEND has correct type
+	var idependFound bool
+	for _, dep := range deps {
+		if contains(dep.Constraint.Name, "pax-utils") {
+			idependFound = true
+			if dep.DepType != DepTypeInstall {
+				t.Errorf("pax-utils should have DepTypeInstall, got %d", dep.DepType)
+			}
+		}
+	}
+
+	if !idependFound {
+		t.Error("Expected to find pax-utils in dependencies")
+	}
+}
+
+// TestPDEPENDParsing tests PDEPEND parsing
+func TestPDEPENDParsing(t *testing.T) {
+	content := `
+EAPI=8
+PDEPEND="app-misc/screen"
+`
+
+	parser := NewEbuildParser(content)
+	deps, err := parser.ParseDependencies()
+
+	if err != nil {
+		t.Fatalf("ParseDependencies() error: %v", err)
+	}
+
+	if len(deps) != 1 {
+		t.Fatalf("ParseDependencies() returned %d deps, expected 1", len(deps))
+	}
+
+	if deps[0].DepType != DepTypePostMerge {
+		t.Errorf("PDEPEND should have DepTypePostMerge, got %d", deps[0].DepType)
+	}
+}
+
+// TestAllDependencyTypes tests all dependency types are parsed correctly
+func TestAllDependencyTypes(t *testing.T) {
+	content := `
+EAPI=8
+RDEPEND="sys-libs/zlib"
+DEPEND="dev-libs/openssl"
+BDEPEND="sys-devel/gcc"
+IDEPEND="app-misc/pax-utils"
+PDEPEND="app-misc/screen"
+`
+
+	parser := NewEbuildParser(content)
+	deps, err := parser.ParseDependencies()
+
+	if err != nil {
+		t.Fatalf("ParseDependencies() error: %v", err)
+	}
+
+	// Should have 5 dependencies total
+	if len(deps) != 5 {
+		t.Fatalf("ParseDependencies() returned %d deps, expected 5", len(deps))
+	}
+
+	// Count each type
+	typeCounts := make(map[DependencyType]int)
+	for _, dep := range deps {
+		typeCounts[dep.DepType]++
+	}
+
+	expectedCounts := map[DependencyType]int{
+		DepTypeRuntime:   1,
+		DepTypeBuild:     1,
+		DepTypeBuildtime: 1,
+		DepTypeInstall:   1,
+		DepTypePostMerge: 1,
+	}
+
+	for depType, expected := range expectedCounts {
+		if typeCounts[depType] != expected {
+			t.Errorf("DepType %d: got %d, expected %d", depType, typeCounts[depType], expected)
+		}
+	}
+}
+
+// TestPropertiesParsing tests PROPERTIES extraction
+func TestPropertiesParsing(t *testing.T) {
+	tests := []struct {
+		name     string
+		content  string
+		expected []string
+	}{
+		{
+			name: "Single property",
+			content: `
+PROPERTIES="interactive"
+`,
+			expected: []string{"interactive"},
+		},
+		{
+			name: "Multiple properties",
+			content: `
+PROPERTIES="interactive live"
+`,
+			expected: []string{"interactive", "live"},
+		},
+		{
+			name: "All common properties",
+			content: `
+PROPERTIES="interactive live test_network"
+`,
+			expected: []string{"interactive", "live", "test_network"},
+		},
+		{
+			name:     "Empty properties",
+			content:  ``,
+			expected: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parser := NewEbuildParser(tt.content)
+			props := parser.ExtractProperties()
+
+			if len(props) != len(tt.expected) {
+				t.Errorf("ExtractProperties() returned %d items, expected %d", len(props), len(tt.expected))
+				return
+			}
+
+			for i, expected := range tt.expected {
+				if props[i] != expected {
+					t.Errorf("Properties[%d] = %q, expected %q", i, props[i], expected)
+				}
+			}
+		})
+	}
+}
+
+// TestRestrictParsing tests RESTRICT extraction
+func TestRestrictParsing(t *testing.T) {
+	tests := []struct {
+		name     string
+		content  string
+		expected []string
+	}{
+		{
+			name: "Single restrict",
+			content: `
+RESTRICT="mirror"
+`,
+			expected: []string{"mirror"},
+		},
+		{
+			name: "Multiple restricts",
+			content: `
+RESTRICT="mirror fetch"
+`,
+			expected: []string{"mirror", "fetch"},
+		},
+		{
+			name: "All common restricts",
+			content: `
+RESTRICT="mirror fetch strip test userpriv network-sandbox"
+`,
+			expected: []string{"mirror", "fetch", "strip", "test", "userpriv", "network-sandbox"},
+		},
+		{
+			name:     "Empty restrict",
+			content:  ``,
+			expected: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parser := NewEbuildParser(tt.content)
+			restrict := parser.ExtractRestrict()
+
+			if len(restrict) != len(tt.expected) {
+				t.Errorf("ExtractRestrict() returned %d items, expected %d", len(restrict), len(tt.expected))
+				return
+			}
+
+			for i, expected := range tt.expected {
+				if restrict[i] != expected {
+					t.Errorf("Restrict[%d] = %q, expected %q", i, restrict[i], expected)
+				}
+			}
+		})
+	}
+}
+
+// TestRequiredUseParsing tests REQUIRED_USE extraction
+func TestRequiredUseParsing(t *testing.T) {
+	tests := []struct {
+		name     string
+		content  string
+		expected string
+	}{
+		{
+			name: "Simple any-of",
+			content: `
+REQUIRED_USE="|| ( ssl gnutls )"
+`,
+			expected: "|| ( ssl gnutls )",
+		},
+		{
+			name: "Exactly-one",
+			content: `
+REQUIRED_USE="^^ ( openssl gnutls libressl )"
+`,
+			expected: "^^ ( openssl gnutls libressl )",
+		},
+		{
+			name: "Complex expression",
+			content: `
+REQUIRED_USE="ssl? ( ^^ ( openssl gnutls ) )"
+`,
+			expected: "ssl? ( ^^ ( openssl gnutls ) )",
+		},
+		{
+			name:     "Empty",
+			content:  ``,
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parser := NewEbuildParser(tt.content)
+			requiredUse := parser.ExtractRequiredUse()
+
+			if requiredUse != tt.expected {
+				t.Errorf("ExtractRequiredUse() = %q, expected %q", requiredUse, tt.expected)
+			}
+		})
+	}
+}
+
+// TestRealWorldEAPI8Ebuild tests parsing a real-world EAPI 8 ebuild
+func TestRealWorldEAPI8Ebuild(t *testing.T) {
+	content := `
+# Copyright 1999-2025 Gentoo Authors
+# Distributed under the terms of the GNU General Public License v2
+
+EAPI=8
+
+DESCRIPTION="Example EAPI 8 package"
+HOMEPAGE="https://example.com/"
+SRC_URI="https://example.com/${P}.tar.gz"
+
+LICENSE="MIT"
+SLOT="0"
+KEYWORDS="~amd64 ~x86"
+IUSE="ssl gnutls mysql postgres"
+
+RDEPEND="
+	>=sys-libs/zlib-1.2.13
+	ssl? ( dev-libs/openssl:0= )
+"
+DEPEND="${RDEPEND}"
+BDEPEND="sys-devel/gcc"
+IDEPEND="app-misc/pax-utils"
+PDEPEND="
+	mysql? ( dev-db/mysql-connector-c )
+	postgres? ( dev-db/postgresql )
+"
+
+REQUIRED_USE="^^ ( ssl gnutls )"
+PROPERTIES="live"
+RESTRICT="mirror test"
+`
+
+	parser := NewEbuildParser(content)
+
+	// Test IDEPEND
+	deps, err := parser.ParseDependencies()
+	if err != nil {
+		t.Fatalf("ParseDependencies() error: %v", err)
+	}
+
+	var hasIDEPEND, hasPDEPEND bool
+	for _, dep := range deps {
+		if dep.DepType == DepTypeInstall {
+			hasIDEPEND = true
+		}
+		if dep.DepType == DepTypePostMerge {
+			hasPDEPEND = true
+		}
+	}
+
+	if !hasIDEPEND {
+		t.Error("Expected to find IDEPEND dependencies")
+	}
+	if !hasPDEPEND {
+		t.Error("Expected to find PDEPEND dependencies")
+	}
+
+	// Test REQUIRED_USE
+	requiredUse := parser.ExtractRequiredUse()
+	if requiredUse != "^^ ( ssl gnutls )" {
+		t.Errorf("REQUIRED_USE = %q, expected %q", requiredUse, "^^ ( ssl gnutls )")
+	}
+
+	// Test PROPERTIES
+	props := parser.ExtractProperties()
+	if len(props) != 1 || props[0] != "live" {
+		t.Errorf("PROPERTIES = %v, expected [live]", props)
+	}
+
+	// Test RESTRICT
+	restrict := parser.ExtractRestrict()
+	if len(restrict) != 2 {
+		t.Errorf("RESTRICT = %v, expected [mirror test]", restrict)
+	}
+}
+
+// TestParseSpaceSeparatedList tests the helper function
+func TestParseSpaceSeparatedList(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected []string
+	}{
+		{"", nil},
+		{"   ", nil},
+		{"single", []string{"single"}},
+		{"one two", []string{"one", "two"}},
+		{"one  two   three", []string{"one", "two", "three"}},
+		{"\tone\ttwo\t", []string{"one", "two"}},
+		{"mixed\t space\nnewline", []string{"mixed", "space", "newline"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			result := parseSpaceSeparatedList(tt.input)
+
+			if len(result) != len(tt.expected) {
+				t.Errorf("parseSpaceSeparatedList(%q) = %v, expected %v", tt.input, result, tt.expected)
+				return
+			}
+
+			for i, expected := range tt.expected {
+				if result[i] != expected {
+					t.Errorf("parseSpaceSeparatedList(%q)[%d] = %q, expected %q", tt.input, i, result[i], expected)
+				}
+			}
+		})
+	}
+}
+
+// BenchmarkPropertiesParsing benchmarks PROPERTIES extraction
+func BenchmarkPropertiesParsing(b *testing.B) {
+	content := `
+PROPERTIES="interactive live test_network"
+RESTRICT="mirror fetch strip test"
+`
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		parser := NewEbuildParser(content)
+		_ = parser.ExtractProperties()
+		_ = parser.ExtractRestrict()
+	}
+}

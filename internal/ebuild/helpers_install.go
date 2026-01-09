@@ -897,15 +897,28 @@ func (h *Helpers) Doenvd(args []string) error {
 // Dosym creates a symbolic link.
 //
 // Usage: dosym target linkname
+// Usage: dosym -r target linkname (EAPI 8: relative symlink)
+//
+// With -r flag (EAPI 8), calculates the relative path from linkname to target
+// automatically. Both paths should be absolute paths within the image.
 //
 // Creates symlink ${D}/${linkname} -> target
 func (h *Helpers) Dosym(args []string) error {
-	if len(args) < 2 {
+	relative := false
+	argIdx := 0
+
+	// Parse -r flag (EAPI 8 feature)
+	if len(args) > 0 && args[0] == "-r" {
+		relative = true
+		argIdx = 1
+	}
+
+	if len(args) < argIdx+2 {
 		return &DieError{Message: "dosym: requires target and linkname"}
 	}
 
-	target := args[0]
-	linkname := args[1]
+	target := args[argIdx]
+	linkname := args[argIdx+1]
 
 	imageDir := h.getImageDir()
 	if imageDir == "" {
@@ -913,6 +926,11 @@ func (h *Helpers) Dosym(args []string) error {
 	}
 
 	linkPath := filepath.Join(imageDir, linkname)
+
+	// For relative symlinks, calculate the relative path from link to target
+	if relative {
+		target = calculateRelativePath(linkname, target)
+	}
 
 	// Create parent directory
 	if err := os.MkdirAll(filepath.Dir(linkPath), 0755); err != nil {
@@ -928,6 +946,41 @@ func (h *Helpers) Dosym(args []string) error {
 	}
 
 	return nil
+}
+
+// calculateRelativePath computes the relative path from linkPath to targetPath.
+//
+// Both paths should be absolute paths (starting with /).
+// Returns a relative path that, when resolved from the link's directory,
+// points to the target.
+//
+// Examples:
+//   - linkPath="/usr/lib/libfoo.so", targetPath="/usr/lib/libfoo.so.1"
+//     returns "libfoo.so.1"
+//   - linkPath="/usr/lib/libfoo.so", targetPath="/usr/lib64/libfoo.so.1"
+//     returns "../lib64/libfoo.so.1"
+//   - linkPath="/usr/bin/python", targetPath="/usr/bin/python3.11"
+//     returns "python3.11"
+func calculateRelativePath(linkPath, targetPath string) string {
+	// Clean both paths
+	linkPath = filepath.Clean(linkPath)
+	targetPath = filepath.Clean(targetPath)
+
+	// Get the directory containing the link
+	linkDir := filepath.Dir(linkPath)
+
+	// Calculate relative path from link directory to target
+	relPath, err := filepath.Rel(linkDir, targetPath)
+	if err != nil {
+		// If we can't compute relative path, return target as-is
+		return targetPath
+	}
+
+	// On Windows, convert backslashes to forward slashes for consistency
+	// (though GRPM targets Linux, this ensures tests work cross-platform)
+	relPath = filepath.ToSlash(relPath)
+
+	return relPath
 }
 
 // Fperms changes file permissions in ${D}.
@@ -1018,4 +1071,104 @@ func (h *Helpers) Fowners(args []string) error {
 
 	h.writeStdout(fmt.Sprintf(">>> fowners: %s\n", ownerGroup))
 	return nil
+}
+
+// ============================================================================
+// EAPI 8 Strip Control Functions
+// ============================================================================
+
+// Dostrip controls which files get stripped during installation.
+//
+// Usage: dostrip <path>...         - Include paths in stripping
+// Usage: dostrip -x <path>...      - Exclude paths from stripping
+//
+// Per PMS Section 11.3.3.17 (EAPI 8):
+//   - Without -x, adds paths to the list of files to strip
+//   - With -x, adds paths to the exclusion list (files that should NOT be stripped)
+//   - Paths are relative to ${ED} (e.g., /usr/bin, /usr/lib/debug)
+//
+// The strip lists are tracked in the Helpers struct and can be queried by
+// the installation system to determine which files should be stripped.
+func (h *Helpers) Dostrip(args []string) error {
+	if len(args) < 1 {
+		return &DieError{Message: "dostrip: no paths specified"}
+	}
+
+	exclude := false
+	paths := args
+
+	// Check for -x flag
+	if args[0] == "-x" {
+		exclude = true
+		paths = args[1:]
+		if len(paths) < 1 {
+			return &DieError{Message: "dostrip: no paths specified after -x"}
+		}
+	}
+
+	for _, p := range paths {
+		// Normalize path (ensure it starts with /)
+		if !strings.HasPrefix(p, "/") {
+			p = "/" + p
+		}
+
+		if exclude {
+			h.stripExclude = append(h.stripExclude, p)
+		} else {
+			h.stripInclude = append(h.stripInclude, p)
+		}
+	}
+
+	return nil
+}
+
+// GetStripInclude returns the list of paths to include in stripping.
+func (h *Helpers) GetStripInclude() []string {
+	return h.stripInclude
+}
+
+// GetStripExclude returns the list of paths to exclude from stripping.
+func (h *Helpers) GetStripExclude() []string {
+	return h.stripExclude
+}
+
+// ShouldStrip determines whether a file at the given path should be stripped.
+//
+// Logic:
+//   - If stripInclude is empty, default behavior applies (strip most binaries)
+//   - If stripInclude is set, only files under those paths are stripped
+//   - Files matching stripExclude are never stripped
+//
+// The path should be relative to ${ED} (e.g., /usr/bin/myapp).
+func (h *Helpers) ShouldStrip(path string) bool {
+	// Normalize path - use forward slashes for consistent comparison
+	// (GRPM targets Linux, but tests may run on Windows)
+	path = filepath.ToSlash(filepath.Clean(path))
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+
+	// Check exclusion list first - exclusions always win
+	for _, exclude := range h.stripExclude {
+		exclude = filepath.ToSlash(filepath.Clean(exclude))
+		if strings.HasPrefix(path, exclude) {
+			return false
+		}
+	}
+
+	// If include list is empty, default is to strip (unless excluded above)
+	if len(h.stripInclude) == 0 {
+		return true
+	}
+
+	// Check if path is under any include path
+	for _, include := range h.stripInclude {
+		include = filepath.ToSlash(filepath.Clean(include))
+		if strings.HasPrefix(path, include) {
+			return true
+		}
+	}
+
+	// Not in include list
+	return false
 }

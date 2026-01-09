@@ -33,14 +33,17 @@ const (
 	DepTypeRuntime   DependencyType = iota // RDEPEND
 	DepTypeBuild                           // DEPEND
 	DepTypeBuildtime                       // BDEPEND
+	DepTypeInstall                         // IDEPEND (EAPI 8)
+	DepTypePostMerge                       // PDEPEND
 )
 
 // ParsedDependency represents a parsed dependency with all metadata
 type ParsedDependency struct {
-	Constraint  pkg.Constraint
-	UseFlag     string // USE flag condition (e.g., "ssl" for "ssl? ( ... )")
-	IsBlocker   bool   // true if starts with !
-	IsHardBlock bool   // true if starts with !!
+	Atom        *pkg.Atom      // PMS-compliant atom (preferred)
+	Constraint  pkg.Constraint // Legacy constraint (for backwards compatibility)
+	UseFlag     string         // USE flag condition (e.g., "ssl" for "ssl? ( ... )")
+	IsBlocker   bool           // true if starts with !
+	IsHardBlock bool           // true if starts with !!
 	DepType     DependencyType
 	OrGroupID   int // OR-group ID (0 = not in OR-group, >0 = OR alternative)
 }
@@ -168,6 +171,27 @@ func (ep *EbuildParser) ParseDependencies() ([]ParsedDependency, error) {
 		allDeps = append(allDeps, deps...)
 	}
 
+	// Parse IDEPEND (EAPI 8: install-time dependencies)
+	// These are dependencies needed by pkg_* phases at install time
+	idepend := ep.ExtractVariable("IDEPEND")
+	if idepend != "" {
+		deps, err := ep.parseDependencyString(idepend, DepTypeInstall)
+		if err != nil {
+			return nil, fmt.Errorf("parsing IDEPEND: %w", err)
+		}
+		allDeps = append(allDeps, deps...)
+	}
+
+	// Parse PDEPEND (post-merge dependencies)
+	pdepend := ep.ExtractVariable("PDEPEND")
+	if pdepend != "" {
+		deps, err := ep.parseDependencyString(pdepend, DepTypePostMerge)
+		if err != nil {
+			return nil, fmt.Errorf("parsing PDEPEND: %w", err)
+		}
+		allDeps = append(allDeps, deps...)
+	}
+
 	return allDeps, nil
 }
 
@@ -260,6 +284,55 @@ func (ep *EbuildParser) ExtractVariable(varName string) string {
 	expanded := ep.expandVariables(rawValue, 0)
 
 	return strings.TrimSpace(expanded)
+}
+
+// ExtractProperties extracts and parses the PROPERTIES variable from ebuild.
+// PROPERTIES values affect package manager behavior (PMS Section 7.2.7).
+// Common values: interactive, live, test_network
+func (ep *EbuildParser) ExtractProperties() []string {
+	props := ep.ExtractVariable("PROPERTIES")
+	if props == "" {
+		return nil
+	}
+	return parseSpaceSeparatedList(props)
+}
+
+// ExtractRestrict extracts and parses the RESTRICT variable from ebuild.
+// RESTRICT values limit package manager actions (PMS Section 7.2.8).
+// Common values: mirror, fetch, strip, test, userpriv, network-sandbox
+func (ep *EbuildParser) ExtractRestrict() []string {
+	restrict := ep.ExtractVariable("RESTRICT")
+	if restrict == "" {
+		return nil
+	}
+	return parseSpaceSeparatedList(restrict)
+}
+
+// ExtractRequiredUse extracts the REQUIRED_USE variable from ebuild.
+// REQUIRED_USE defines constraints on USE flag combinations (PMS Section 7.2.6).
+// Example: "|| ( ssl gnutls )" means at least one of ssl or gnutls must be enabled.
+func (ep *EbuildParser) ExtractRequiredUse() string {
+	return ep.ExtractVariable("REQUIRED_USE")
+}
+
+// parseSpaceSeparatedList splits a space-separated string into a slice.
+// Handles multiple whitespace and trims each element.
+func parseSpaceSeparatedList(s string) []string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
+
+	// Split on whitespace
+	fields := strings.Fields(s)
+	result := make([]string, 0, len(fields))
+	for _, f := range fields {
+		f = strings.TrimSpace(f)
+		if f != "" {
+			result = append(result, f)
+		}
+	}
+	return result
 }
 
 // parseDependencyString parses a dependency string (e.g., RDEPEND value)
@@ -388,8 +461,60 @@ func (ep *EbuildParser) isPackageAtom(token string) bool {
 	return token != "" && token != "(" && token != ")"
 }
 
-// parsePackageAtom parses a single package atom (e.g., ">=sys-libs/zlib-1.2.13:0/1[static-libs]")
-func (ep *EbuildParser) parsePackageAtom(atom string, depType DependencyType, useFlag string, orGroupID int) (ParsedDependency, error) {
+// parsePackageAtom parses a single package atom using pkg.ParseAtom (PMS Section 8.3).
+// Example: ">=sys-libs/zlib-1.2.13:0/1[static-libs]"
+func (ep *EbuildParser) parsePackageAtom(atomStr string, depType DependencyType, useFlag string, orGroupID int) (ParsedDependency, error) {
+	dep := ParsedDependency{
+		DepType:   depType,
+		UseFlag:   useFlag,
+		OrGroupID: orGroupID,
+	}
+
+	// Use the PMS-compliant atom parser
+	atom, err := pkg.ParseAtom(atomStr)
+	if err != nil {
+		// Fallback to legacy parsing for atoms that fail PMS parsing
+		// This handles edge cases like virtual packages or unusual patterns
+		return ep.parsePackageAtomLegacy(atomStr, depType, useFlag, orGroupID)
+	}
+
+	// Store the parsed atom
+	dep.Atom = atom
+
+	// Set blocker flags
+	dep.IsBlocker = atom.IsBlocker()
+	dep.IsHardBlock = atom.IsStrongBlocker()
+
+	// Convert atom to constraint for backwards compatibility
+	dep.Constraint = atom.ToConstraint()
+	dep.Constraint.OrGroupID = orGroupID
+
+	// Set slot from atom if present
+	if atom.HasSlot() {
+		dep.Constraint.Slot = atom.Slot
+		if atom.Subslot != "" {
+			dep.Constraint.Slot = atom.Slot + "/" + atom.Subslot
+		}
+		dep.Constraint.Type = pkg.ConstraintTypeSlot
+	}
+
+	// Store USE flags in Condition field
+	if atom.HasUseDeps() {
+		var useFlags []string
+		useFlags = append(useFlags, atom.UseRequire...)
+		for _, flag := range atom.UseBlock {
+			useFlags = append(useFlags, "-"+flag)
+		}
+		useFlags = append(useFlags, atom.UseConditional...)
+		dep.Constraint.Condition = strings.Join(useFlags, " ")
+	}
+
+	return dep, nil
+}
+
+// parsePackageAtomLegacy is the fallback parser for atoms that fail PMS parsing.
+// This handles edge cases and provides backward compatibility.
+func (ep *EbuildParser) parsePackageAtomLegacy(atom string, depType DependencyType, useFlag string, orGroupID int) (ParsedDependency, error) {
 	dep := ParsedDependency{
 		DepType:   depType,
 		UseFlag:   useFlag,

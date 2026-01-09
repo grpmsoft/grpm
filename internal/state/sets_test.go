@@ -595,6 +595,20 @@ func (r *mockRepo) Count() (int, error) {
 	return len(r.packages), nil
 }
 
+func (r *mockRepo) FindByAtom(atom *pkg.Atom) ([]*pkg.Package, error) {
+	if atom == nil {
+		return nil, repo.ErrPackageNotFound
+	}
+
+	var result []*pkg.Package
+	for _, p := range r.packages {
+		if atom.Matches(p) {
+			result = append(result, p)
+		}
+	}
+	return result, nil
+}
+
 func TestSetManager_CalculateUpdates(t *testing.T) {
 	// Create mock repository
 	mockRepository := newMockRepo()

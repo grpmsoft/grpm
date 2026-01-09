@@ -104,6 +104,10 @@ type Environment struct {
 
 	// EBUILD = path to the ebuild file being executed
 	EBUILD string
+
+	// ExtraVars holds additional environment variables set by ebuilds.
+	// This includes ebuild-specific variables like DOCS, HTML_DOCS, etc.
+	ExtraVars map[string]string
 }
 
 // NewEnvironment creates a new ebuild execution environment.
@@ -266,4 +270,36 @@ func (env *Environment) Cleanup() error {
 	// Remove work base directory
 	workBase := filepath.Dir(env.WORKDIR)
 	return os.RemoveAll(workBase)
+}
+
+// GetVar retrieves an environment variable by name.
+//
+// First checks built-in variables (P, PN, PV, etc.), then checks ExtraVars.
+// Returns empty string if not found.
+func (env *Environment) GetVar(name string) string {
+	// Use ToMap to get all built-in variables
+	builtIn := env.ToMap()
+	if val, ok := builtIn[name]; ok {
+		return val
+	}
+
+	// Check ExtraVars
+	if env.ExtraVars != nil {
+		if val, ok := env.ExtraVars[name]; ok {
+			return val
+		}
+	}
+
+	return ""
+}
+
+// SetVar sets an extra environment variable.
+//
+// Built-in variables cannot be set via this method.
+// Use this for ebuild-specific variables like DOCS, HTML_DOCS, etc.
+func (env *Environment) SetVar(name, value string) {
+	if env.ExtraVars == nil {
+		env.ExtraVars = make(map[string]string)
+	}
+	env.ExtraVars[name] = value
 }

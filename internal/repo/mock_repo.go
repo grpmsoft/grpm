@@ -105,6 +105,23 @@ func (m *MockRepository) FindBySpecification(spec Specification) ([]*pkg.Package
 	return result, nil
 }
 
+// FindByAtom finds all packages matching a PMS-compliant atom.
+// Uses Atom.Matches() for version, slot, and subslot matching.
+func (m *MockRepository) FindByAtom(atom *pkg.Atom) ([]*pkg.Package, error) {
+	if atom == nil {
+		return nil, fmt.Errorf("atom is nil")
+	}
+
+	var result []*pkg.Package
+	for _, p := range m.packages {
+		if atom.Matches(p) {
+			copyPkg := *p
+			result = append(result, &copyPkg)
+		}
+	}
+	return result, nil
+}
+
 // GetAllVersions returns all versions of a package
 // Note: MockRepository stores only one version per package
 func (m *MockRepository) GetAllVersions(packageName string) ([]*pkg.Package, error) {
