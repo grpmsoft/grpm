@@ -175,6 +175,33 @@ type EAPIFeatures struct {
 	// EAPI 7+: Unset environment variables in profile.
 	EnvUnset bool
 
+	// --- Offset-Prefix Variables (PMS Section 11.1) ---
+
+	// OffsetPrefix indicates if offset-prefix variables are supported.
+	// EAPI 3+: EPREFIX, EROOT, ED variables.
+	OffsetPrefix bool
+
+	// ESYSROOT indicates if ESYSROOT variable is supported.
+	// EAPI 7+: ${SYSROOT}${EPREFIX} for cross-compilation.
+	ESYSROOTSupported bool
+
+	// --- Cross-Compilation Variables (PMS Section 11.1) ---
+
+	// SYSROOT indicates if SYSROOT and related variables are supported.
+	// EAPI 7+: SYSROOT, ESYSROOT, BROOT for cross-compilation.
+	SYSROOTSupported bool
+
+	// BROOT indicates if BROOT variable is supported.
+	// EAPI 7+: Build root for build dependencies (CBUILD).
+	BROOTSupported bool
+
+	// --- Trailing Slash Behavior (PMS Section 11.1.4) ---
+
+	// TrailingSlash indicates if path variables always have trailing slashes.
+	// EAPI 0-6: ROOT, EROOT, D, ED always end with '/'.
+	// EAPI 7+: These variables never have trailing slashes.
+	TrailingSlash bool
+
 	// --- Dependency Group Behavior ---
 
 	// EmptyGroupsMatch indicates how empty || and ^^ groups behave.
@@ -203,6 +230,7 @@ var supportedEAPIs = map[string]EAPIFeatures{
 		RdependDefaultsToDepend: true,
 		EmptyGroupsMatch:        true,
 		Restrict:                true,
+		TrailingSlash:           true, // EAPI 0-6 always have trailing slashes
 	},
 	"1": {
 		Version:                 "1",
@@ -214,6 +242,7 @@ var supportedEAPIs = map[string]EAPIFeatures{
 		SlotDeps:                true,
 		IUSEDefaults:            true,
 		Restrict:                true,
+		TrailingSlash:           true,
 	},
 	"2": {
 		Version:                 "2",
@@ -230,6 +259,7 @@ var supportedEAPIs = map[string]EAPIFeatures{
 		HasSrcConfigure:         true,
 		DefaultSrcPrepareFormat: 2,
 		Restrict:                true,
+		TrailingSlash:           true,
 	},
 	"3": {
 		Version:                 "3",
@@ -246,6 +276,8 @@ var supportedEAPIs = map[string]EAPIFeatures{
 		HasSrcConfigure:         true,
 		DefaultSrcPrepareFormat: 2,
 		Restrict:                true,
+		TrailingSlash:           true,
+		OffsetPrefix:            true, // EAPI 3+ supports EPREFIX, EROOT, ED
 	},
 	"4": {
 		Version:                 "4",
@@ -266,6 +298,8 @@ var supportedEAPIs = map[string]EAPIFeatures{
 		Properties:              true,
 		Restrict:                true,
 		RdependDefaultsToDepend: false, // Removed in EAPI 4
+		TrailingSlash:           true,
+		OffsetPrefix:            true,
 	},
 	"5": {
 		Version:                 "5",
@@ -292,6 +326,8 @@ var supportedEAPIs = map[string]EAPIFeatures{
 		Usev:                    true,
 		UsexDefaultValues:       true,
 		RdependDefaultsToDepend: false,
+		TrailingSlash:           true,
+		OffsetPrefix:            true,
 	},
 	"6": {
 		Version:                 "6",
@@ -324,6 +360,8 @@ var supportedEAPIs = map[string]EAPIFeatures{
 		GetLibdir:               true,
 		InDodir:                 true,
 		RdependDefaultsToDepend: false,
+		TrailingSlash:           true,
+		OffsetPrefix:            true,
 	},
 	"7": {
 		Version:                 "7",
@@ -360,6 +398,11 @@ var supportedEAPIs = map[string]EAPIFeatures{
 		ProfileDirectories:      true,
 		EnvUnset:                true,
 		RdependDefaultsToDepend: false,
+		TrailingSlash:           false, // EAPI 7+ never have trailing slashes
+		OffsetPrefix:            true,
+		SYSROOTSupported:        true, // EAPI 7+ cross-compilation
+		ESYSROOTSupported:       true,
+		BROOTSupported:          true,
 	},
 	"8": {
 		Version:                     "8",
@@ -399,6 +442,11 @@ var supportedEAPIs = map[string]EAPIFeatures{
 		ProfileDirectories:          true,
 		EnvUnset:                    true,
 		RdependDefaultsToDepend:     false,
+		TrailingSlash:               false, // EAPI 7+ never have trailing slashes
+		OffsetPrefix:                true,
+		SYSROOTSupported:            true, // EAPI 7+ cross-compilation
+		ESYSROOTSupported:           true,
+		BROOTSupported:              true,
 	},
 }
 
@@ -518,4 +566,29 @@ func (e EAPIFeatures) String() string {
 // IsValid returns true if this EAPIFeatures represents a valid EAPI.
 func (e EAPIFeatures) IsValid() bool {
 	return e.Version != ""
+}
+
+// SupportsOffsetPrefix returns true if the EAPI supports offset-prefix variables.
+// EAPI 3+: EPREFIX, EROOT, ED are available.
+func (e EAPIFeatures) SupportsOffsetPrefix() bool {
+	return e.OffsetPrefix
+}
+
+// SupportsSYSROOT returns true if the EAPI supports SYSROOT and ESYSROOT.
+// EAPI 7+: Cross-compilation support with SYSROOT, ESYSROOT, BROOT.
+func (e EAPIFeatures) SupportsSYSROOT() bool {
+	return e.SYSROOTSupported
+}
+
+// SupportsBROOT returns true if the EAPI supports BROOT.
+// EAPI 7+: Build root for build dependencies (CBUILD).
+func (e EAPIFeatures) SupportsBROOT() bool {
+	return e.BROOTSupported
+}
+
+// HasTrailingSlash returns true if path variables should have trailing slashes.
+// EAPI 0-6: ROOT, EROOT, D, ED always end with '/'.
+// EAPI 7+: These variables never have trailing slashes.
+func (e EAPIFeatures) HasTrailingSlash() bool {
+	return e.TrailingSlash
 }
