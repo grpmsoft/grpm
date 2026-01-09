@@ -434,9 +434,18 @@ func (e *Executor) ParseEbuild() error {
 		e.Env.EAPI = parsed.EAPI
 	}
 
-	// Validate and store EAPI features
-	eapiFeatures, err := pkg.GetEAPIFeatures(e.Env.EAPI)
+	// Validate EAPI per PMS Chapter 2
+	// This must happen before any other operations on the package
+	eapi := pkg.NormalizeEAPI(e.Env.EAPI)
+	if err := pkg.ValidateEAPI(eapi); err != nil {
+		return fmt.Errorf("ebuild %s: %w", e.EbuildPath, err)
+	}
+	e.Env.EAPI = eapi
+
+	// Get EAPI features (this won't fail now since ValidateEAPI passed)
+	eapiFeatures, err := pkg.GetEAPIFeatures(eapi)
 	if err != nil {
+		// This should not happen since ValidateEAPI already checked
 		return fmt.Errorf("ebuild %s has %w", e.EbuildPath, err)
 	}
 	e.EAPIFeatures = eapiFeatures

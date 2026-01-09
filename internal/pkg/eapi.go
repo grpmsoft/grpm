@@ -535,6 +535,56 @@ func DefaultEAPI() string {
 	return "0"
 }
 
+// --- EAPI Validation (PMS Chapter 2) ---
+
+// ErrInvalidEAPIFormat is returned when EAPI contains invalid characters.
+// Per PMS Section 2.1: EAPI must be a single word (no whitespace).
+var ErrInvalidEAPIFormat = errors.New("invalid EAPI format")
+
+// ValidateEAPI validates an EAPI value per PMS Chapter 2.
+//
+// Per PMS Section 2.1:
+//   - Package managers must not perform operations on packages with unrecognized EAPIs
+//   - EAPI must be a single word (no whitespace)
+//   - Empty EAPI is valid (defaults to EAPI 0)
+//
+// Returns nil if EAPI is valid, error otherwise.
+//
+// Error types:
+//   - ErrInvalidEAPIFormat: EAPI contains whitespace or invalid characters
+//   - ErrUnsupportedEAPI: EAPI is not recognized/supported
+func ValidateEAPI(eapi string) error {
+	// Empty EAPI defaults to "0" per PMS Section 7.1
+	if eapi == "" {
+		return nil
+	}
+
+	// Check for invalid characters (whitespace)
+	// Per PMS Section 2.1: EAPI must be a single word
+	for _, ch := range eapi {
+		if ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' {
+			return fmt.Errorf("%w: EAPI must be a single word, got %q", ErrInvalidEAPIFormat, eapi)
+		}
+	}
+
+	// Check if EAPI is supported
+	if !IsEAPISupported(eapi) {
+		return fmt.Errorf("%w: %s", ErrUnsupportedEAPI, eapi)
+	}
+
+	return nil
+}
+
+// NormalizeEAPI returns the canonical EAPI value.
+// Empty string is normalized to DefaultEAPI ("0").
+// All other values are returned unchanged.
+func NormalizeEAPI(eapi string) string {
+	if eapi == "" {
+		return DefaultEAPI()
+	}
+	return eapi
+}
+
 // --- Feature Query Methods ---
 
 // SupportsSlotOperators returns true if the EAPI supports slot operators (:=, :*, :slot=).

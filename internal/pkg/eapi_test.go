@@ -645,3 +645,110 @@ func TestAllEAPIsHaveBashVersion(t *testing.T) {
 		}
 	}
 }
+
+// --- EAPI Validation Tests (PMS Chapter 2) ---
+
+// TestValidateEAPI tests EAPI validation per PMS Chapter 2
+func TestValidateEAPI(t *testing.T) {
+	tests := []struct {
+		name    string
+		eapi    string
+		wantErr bool
+		errType error // Expected error type (use errors.Is)
+	}{
+		// Valid EAPIs (0-8)
+		{"EAPI 0", "0", false, nil},
+		{"EAPI 1", "1", false, nil},
+		{"EAPI 2", "2", false, nil},
+		{"EAPI 3", "3", false, nil},
+		{"EAPI 4", "4", false, nil},
+		{"EAPI 5", "5", false, nil},
+		{"EAPI 6", "6", false, nil},
+		{"EAPI 7", "7", false, nil},
+		{"EAPI 8", "8", false, nil},
+
+		// Empty EAPI (defaults to 0, should be valid)
+		{"empty EAPI defaults to 0", "", false, nil},
+
+		// Unknown/Unsupported EAPIs
+		{"EAPI 9 unsupported", "9", true, ErrUnsupportedEAPI},
+		{"EAPI 10 unsupported", "10", true, ErrUnsupportedEAPI},
+		{"unknown string EAPI", "foo", true, ErrUnsupportedEAPI},
+		{"paludis reserved", "paludis-1", true, ErrUnsupportedEAPI},
+
+		// Invalid format (contains whitespace per PMS Section 2.1)
+		{"EAPI with space", "8 ", true, ErrInvalidEAPIFormat},
+		{"EAPI with leading space", " 8", true, ErrInvalidEAPIFormat},
+		{"EAPI with tab", "8\t", true, ErrInvalidEAPIFormat},
+		{"EAPI with newline", "8\n", true, ErrInvalidEAPIFormat},
+		{"EAPI with carriage return", "8\r", true, ErrInvalidEAPIFormat},
+		{"EAPI with multiple spaces", "8 test", true, ErrInvalidEAPIFormat},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateEAPI(tt.eapi)
+
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateEAPI(%q) error = %v, wantErr %v", tt.eapi, err, tt.wantErr)
+				return
+			}
+
+			if tt.errType != nil && err != nil {
+				if !errors.Is(err, tt.errType) {
+					t.Errorf("ValidateEAPI(%q) error = %v, want error type %v", tt.eapi, err, tt.errType)
+				}
+			}
+		})
+	}
+}
+
+// TestNormalizeEAPI tests EAPI normalization
+func TestNormalizeEAPI(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"", "0"},      // Empty defaults to "0"
+		{"0", "0"},     // Already 0
+		{"1", "1"},     // Pass through
+		{"8", "8"},     // Pass through
+		{"foo", "foo"}, // Unknown values pass through (validation is separate)
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := NormalizeEAPI(tt.input)
+			if got != tt.expected {
+				t.Errorf("NormalizeEAPI(%q) = %q, want %q", tt.input, got, tt.expected)
+			}
+		})
+	}
+}
+
+// TestValidateEAPIWithNormalization tests validation after normalization
+func TestValidateEAPIWithNormalization(t *testing.T) {
+	// Empty EAPI should normalize to "0" and be valid
+	eapi := NormalizeEAPI("")
+	if err := ValidateEAPI(eapi); err != nil {
+		t.Errorf("ValidateEAPI(NormalizeEAPI(\"\")) = %v, want nil", err)
+	}
+	if eapi != "0" {
+		t.Errorf("NormalizeEAPI(\"\") = %q, want \"0\"", eapi)
+	}
+}
+
+// TestErrInvalidEAPIFormat verifies the error variable exists and works
+func TestErrInvalidEAPIFormat(t *testing.T) {
+	err := ValidateEAPI("8 test")
+	if err == nil {
+		t.Fatal("expected error for EAPI with space")
+	}
+	if !errors.Is(err, ErrInvalidEAPIFormat) {
+		t.Errorf("error = %v, want ErrInvalidEAPIFormat", err)
+	}
+	// Error message should be descriptive
+	if err.Error() == "" {
+		t.Error("error message should not be empty")
+	}
+}
