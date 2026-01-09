@@ -26,8 +26,8 @@ GRPM aims to be a modern, reliable package manager for Gentoo Linux with:
 | Task | Status | Description |
 |------|--------|-------------|
 | Atom Parser | ✅ Done | PMS Section 8.3 compliant parser |
-| EAPI 8 | 🔲 TODO | Full EAPI 8 feature support |
-| GoSh Integration | 🔲 TODO | Replace mvdan.cc/sh with GoSh |
+| EAPI 8 | ✅ Done | Full EAPI 8 feature support |
+| GoSh Integration | ⏸️ Blocked | Replace mvdan.cc/sh with GoSh (waiting for gosh library) |
 
 ---
 
@@ -92,8 +92,8 @@ No fixed timeline for v1.0.0 — quality and stability over deadlines.
 ### Near-term (v0.3.0)
 
 - [x] PMS-compliant atom parser (Section 8.3)
-- [ ] Full EAPI 8 support
-- [ ] GoSh integration (bash compatibility)
+- [x] Full EAPI 8 support (REQUIRED_USE, SRC_URI arrow, IDEPEND, use_enable/use_with, dosym -r, dostrip, einstalldocs)
+- [ ] GoSh integration (bash compatibility) — blocked, waiting for gosh library
 - [ ] Improved error messages and diagnostics
 
 ### Medium-term (v0.4.0+)

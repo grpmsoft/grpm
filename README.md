@@ -162,15 +162,12 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidelines and [AGENTS.md
 
 ## Roadmap
 
-**v0.1.1** (Current) — Module architecture improvements, real eclass support, proper phase dispatch.
+**v0.2.0** (Released) — Ebuild parser improvements, variable expansion, xargs helper.
 
-**v0.2.0** (Next) — Ebuild parser improvements:
-- Variable expansion (`${P}`, `${PV}`)
-- xargs helper implementation
-
-**v0.3.0** — PMS compliance:
-- PMS-compliant atom parser
-- Full EAPI 8 support
+**v0.3.0** (In Progress) — PMS compliance:
+- ✅ PMS-compliant atom parser
+- ✅ Full EAPI 8 support (REQUIRED_USE, SRC_URI arrow, IDEPEND, use_enable/use_with, dosym -r)
+- ⏸️ GoSh integration (blocked, waiting for gosh library)
 
 **v1.0.0** — Production ready after community validation (no fixed date).
 

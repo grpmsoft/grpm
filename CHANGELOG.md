@@ -21,8 +21,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Atom.ToConstraint()` for solver integration
 - Full test coverage (30+ test cases)
 
+#### Full EAPI 8 Support (v0.3.0-002)
+- **REQUIRED_USE validator** - Full expression parsing (||, ^^, ??, flag?, !flag?, conditionals)
+- **SRC_URI enhancements** - Arrow syntax (`-> filename`), USE-conditional downloads
+- **USE flag helpers** - `use_enable`, `use_with` (1-4 argument modes per PMS 11.3.2)
+- **EAPI 8 installation helpers** - `dosym -r` (relative symlinks), `dostrip`, `einstalldocs`
+- **New ebuild variables** - IDEPEND, PROPERTIES, RESTRICT parsing
+- **Atom parser integration** - `FindByAtom()` in Repository, `AddAtomConstraint()` in SAT solver
+- Full test coverage for all new features
+
 ### Planned
-- Full EAPI 8 support (v0.3.0-002)
 - GoSh integration for bash compatibility (v0.3.0-003)
 - CMake/Meson build systems
 - Performance optimization for large dependency graphs
