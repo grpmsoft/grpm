@@ -52,6 +52,10 @@ func NewInterpreter(env *Environment, stdout, stderr io.Writer) *Interpreter {
 	eclassLoader := NewEclassLoader(i.helpers.eclassRegistry, i)
 	i.helpers.SetEclassLoader(eclassLoader)
 
+	// Wire up the command dispatcher for nonfatal support.
+	// This allows nonfatal to execute helper commands through the interpreter.
+	i.helpers.SetCommandDispatcher(i.dispatchCommand)
+
 	return i
 }
 
@@ -155,13 +159,16 @@ type helperFunc func(args []string) error
 func (i *Interpreter) buildCommandMap() map[string]helperFunc {
 	return map[string]helperFunc{
 		// Messaging functions
-		"die":    i.helpers.Die,
-		"einfo":  i.helpers.Einfo,
-		"ewarn":  i.helpers.Ewarn,
-		"eerror": i.helpers.Eerror,
-		"elog":   i.helpers.Elog,
-		"ebegin": i.helpers.Ebegin,
-		"eend":   i.helpers.Eend,
+		"die":      i.helpers.Die,
+		"assert":   i.helpers.Assert, // PMS Section 12.3.6 - error handling
+		"einfo":    i.helpers.Einfo,
+		"einfon":   i.helpers.Einfon, // PMS Section 12.3.5 - no trailing newline
+		"ewarn":    i.helpers.Ewarn,
+		"eerror":   i.helpers.Eerror,
+		"elog":     i.helpers.Elog,
+		"ebegin":   i.helpers.Ebegin,
+		"eend":     i.helpers.Eend,
+		"nonfatal": i.helpers.Nonfatal, // PMS Section 12.3.1 - EAPI 4+
 
 		// USE flag functions
 		"has":        i.helpers.Has,
@@ -179,6 +186,7 @@ func (i *Interpreter) buildCommandMap() map[string]helperFunc {
 		"tc-arch":   i.helpers.TcArch,
 
 		// Directory setting functions
+		"into":    i.helpers.Into, // PMS Section 12.3.10 - sets DESTTREE
 		"insinto": i.helpers.Insinto,
 		"exeinto": i.helpers.Exeinto,
 		"docinto": i.helpers.Docinto,
@@ -204,6 +212,8 @@ func (i *Interpreter) buildCommandMap() map[string]helperFunc {
 		"newdoc": i.helpers.Newdoc,
 		"doman":  i.helpers.Doman,
 		"newman": i.helpers.Newman,
+		"doinfo": i.helpers.Doinfo,
+		"domo":   i.helpers.Domo, // PMS Section 12.3.9 - gettext .mo files
 
 		// Library/header installation functions
 		"dolib":    i.helpers.Dolib,
@@ -224,8 +234,9 @@ func (i *Interpreter) buildCommandMap() map[string]helperFunc {
 		// User patch function
 		"eapply_user": i.helpers.EapplyUser,
 
-		// Default phase functions
+		// Default phase functions (PMS Section 9.1.17 / 12.3.15)
 		"default":               i.helpers.Default,
+		"default_pkg_nofetch":   i.helpers.DefaultPkgNofetch,
 		"default_src_unpack":    i.helpers.DefaultSrcUnpack,
 		"default_src_prepare":   i.helpers.DefaultSrcPrepare,
 		"default_src_configure": i.helpers.DefaultSrcConfigure,
@@ -233,9 +244,10 @@ func (i *Interpreter) buildCommandMap() map[string]helperFunc {
 		"default_src_test":      i.helpers.DefaultSrcTest,
 		"default_src_install":   i.helpers.DefaultSrcInstall,
 
-		// Version manipulation functions
-		"ver_cut": i.helpers.VerCut,
-		"ver_rs":  i.helpers.VerRs,
+		// Version manipulation functions (EAPI 7+)
+		"ver_cut":  i.helpers.VerCut,
+		"ver_rs":   i.helpers.VerRs,
+		"ver_test": i.helpers.VerTest,
 
 		// Additional installation helpers
 		"dosym":        i.helpers.Dosym,
@@ -314,13 +326,24 @@ func (i *Interpreter) buildCommandMap() map[string]helperFunc {
 		"edosym":           i.helpers.Edosym,
 		"has_version":      i.helpers.HasVersion,
 		"best_version":     i.helpers.BestVersion,
+
+		// Banned commands (PMS Section 12.3.2 / Table 12.3)
+		// These stubs check EAPI and return appropriate errors.
+		"dohard":   i.helpers.Dohard,   // Banned in EAPI 4+
+		"dosed":    i.helpers.Dosed,    // Banned in EAPI 4+
+		"useq":     i.helpers.Useq,     // Banned in EAPI 5+
+		"einstall": i.helpers.Einstall, // Banned in EAPI 6+
+		"dohtml":   i.helpers.Dohtml,   // Banned in EAPI 7+
+		"libopts":  i.helpers.Libopts,  // Banned in EAPI 7+
+		"hasv":     i.helpers.Hasv,     // Banned in EAPI 8+
+		"hasq":     i.helpers.Hasq,     // Banned in EAPI 8+
 	}
 }
 
 // execHandler intercepts Portage commands and delegates to Go implementations.
 //
 // Commands handled:
-//   - die, einfo, ewarn, eerror, elog, ebegin, eend, eqawarn (messaging)
+//   - die, assert, einfo, ewarn, eerror, elog, ebegin, eend, eqawarn (messaging)
 //   - has, use, usev, usex, in_iuse, use_enable, use_with (USE flags)
 //   - tc-getCC, tc-getCXX, tc-getLD, tc-arch (toolchain-funcs)
 //   - tc-is-gcc, tc-is-clang, tc-export, tc-getAR, etc. (toolchain-funcs)
@@ -333,7 +356,7 @@ func (i *Interpreter) buildCommandMap() map[string]helperFunc {
 //   - dodir, keepdir (directory creation)
 //   - emake, econf, unpack, eapply, eapply_user (build helpers)
 //   - default, default_src_* (default phase implementations)
-//   - ver_cut, ver_rs (version manipulation)
+//   - ver_cut, ver_rs, ver_test (version manipulation)
 //   - dosym, edosym, fperms, fowners, doconfd, doinitd, doenvd (installation)
 //   - sed, cat, mkdir, rm, cp, mv, chmod, ln, find, grep, xargs, etc. (utilities)
 //   - epatch, eshopts_push, eshopts_pop, estack_push, estack_pop (eutils)
@@ -378,6 +401,31 @@ func (i *Interpreter) execHandler(next interp.ExecHandlerFunc) interp.ExecHandle
 // going through the interpreter.
 func (i *Interpreter) GetHelpers() *Helpers {
 	return i.helpers
+}
+
+// dispatchCommand executes a helper command by name.
+//
+// This is used by the nonfatal helper to execute commands through the
+// interpreter's command dispatch mechanism. It looks up the command in
+// the command map and executes it.
+func (i *Interpreter) dispatchCommand(cmd string, args []string) error {
+	commands := i.buildCommandMap()
+
+	// Skip nonfatal itself to avoid recursion
+	if cmd == "nonfatal" {
+		return fmt.Errorf("nonfatal: cannot call nonfatal recursively")
+	}
+
+	// Look up the command
+	handler, ok := commands[cmd]
+	if !ok {
+		// Command not found in our handlers - return exit status 127
+		// This matches shell behavior for command not found
+		return interp.ExitStatus(127)
+	}
+
+	// Execute the command
+	return handler(args)
 }
 
 // Eval evaluates a bash expression and returns its output.

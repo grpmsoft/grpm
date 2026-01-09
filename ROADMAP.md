@@ -1,8 +1,8 @@
 # GRPM Roadmap
 
-> **Last Updated:** 2026-01-09
-> **Current Version:** v0.2.0
-> **In Development:** v0.3.0 (PMS Compliance + GoSh)
+> **Last Updated:** 2026-01-10
+> **Current Version:** v0.3.0
+> **Next Release:** v0.4.0 (Extended Features)
 
 ---
 
@@ -19,19 +19,42 @@ GRPM aims to be a modern, reliable package manager for Gentoo Linux with:
 
 ## Current Development
 
-### v0.3.0 — PMS Compliance + GoSh (In Progress)
+### v0.4.0 — Extended Features (Planned)
 
-**Focus:** Full PMS compliance and bash compatibility
+**Focus:** Build system support and performance
 
 | Task | Status | Description |
 |------|--------|-------------|
-| Atom Parser | ✅ Done | PMS Section 8.3 compliant parser |
-| EAPI 8 | ✅ Done | Full EAPI 8 feature support |
-| GoSh Integration | ⏸️ Blocked | Replace mvdan.cc/sh with GoSh (waiting for gosh library) |
+| CMake Support | Planned | CMake build system integration |
+| Meson Support | Planned | Meson build system integration |
+| Performance | Planned | Optimization for large dependency graphs |
+| Extended Eclasses | Planned | Additional eclass support |
 
 ---
 
 ## Recent Releases
+
+### v0.3.0 — PMS Compliance (2026-01-10)
+
+**Major release** with comprehensive PMS (Package Manager Specification) compliance:
+
+- **EAPI Feature Matrix** — Complete EAPI 0-8 support with 30+ feature flags
+- **PMS-Compliant Atom Parser** — Section 8.3 compliant parser with all operators
+- **Version Commands** — `ver_test`, `ver_cut`, `ver_rs` per PMS Algorithm 3.2-3.7
+- **Environment Variables** — PVR, ROOT, EROOT, SYSROOT, ESYSROOT, BROOT
+- **Error Handling** — `assert`, `nonfatal` commands
+- **Phase Functions** — `pkg_pretend`, `pkg_config`, `pkg_info`, `pkg_nofetch`
+- **Installation Helpers** — `into`, `doinfo`, `domo`
+- **Default Functions** — `default_src_*` implementations
+- **Banned Commands** — EAPI-aware validation with deprecation warnings
+- **mvdan.cc/sh Integration** — Direct bash compatibility (GoSh wrapper not needed)
+- **PMS Test Suite** — 1076 lines of compliance tests
+
+### v0.2.1 — PMS Version Comparison (2026-01-09)
+
+- PMS-compliant version comparison (Algorithm 3.2-3.7)
+- Version suffix ordering fix (`_alpha < _beta < _pre < _rc < release < _p`)
+- Leading zero and letter suffix handling
 
 ### v0.2.0 — Ebuild Parser Improvements (2026-01-09)
 
@@ -60,12 +83,6 @@ First public release with core functionality:
 - Profile system and configuration management
 - Package installation/removal with collision detection
 
-**Known Limitations:**
-- Ebuild execution limited to autotools workflow
-- Limited eclass support
-- No EAPI 8 features
-- CMake/Meson not supported
-
 ---
 
 ## Development Approach
@@ -89,18 +106,16 @@ No fixed timeline for v1.0.0 — quality and stability over deadlines.
 
 ## Planned Features (v0.x.x)
 
-### Near-term (v0.3.0)
+### Near-term (v0.4.0)
 
-- [x] PMS-compliant atom parser (Section 8.3)
-- [x] Full EAPI 8 support (REQUIRED_USE, SRC_URI arrow, IDEPEND, use_enable/use_with, dosym -r, dostrip, einstalldocs)
-- [ ] GoSh integration (bash compatibility) — blocked, waiting for gosh library
+- [ ] CMake build system support
+- [ ] Meson build system support
+- [ ] Performance optimization for large dependency graphs
+- [ ] Extended eclass support
 - [ ] Improved error messages and diagnostics
 
-### Medium-term (v0.4.0+)
+### Medium-term (v0.5.0+)
 
-- [ ] CMake/Meson build system support
-- [ ] Extended eclass support
-- [ ] Performance optimization for large dependency graphs
 - [ ] Web UI for daemon management
 - [ ] Parallel package builds
 - [ ] Distributed build support

@@ -24,6 +24,7 @@ This documentation is a Markdown conversion of the official Gentoo Package Manag
 
 | Chapter | Title | Description |
 |---------|-------|-------------|
+| [6](chapter6-ebuild-format.md) | Ebuild File Format | File encoding, bash version, umask, failglob |
 | [7](chapter7-variables.md) | Ebuild-defined Variables | EAPI, SRC_URI, DEPEND, RDEPEND, SLOT, etc. |
 | [8](chapter8-dependencies.md) | Dependencies | Dependency syntax, operators, USE conditionals |
 | [9](chapter9-phases.md) | Ebuild-defined Functions | Phase functions (src_*, pkg_*) and execution order |

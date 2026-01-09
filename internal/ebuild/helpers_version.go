@@ -1,6 +1,6 @@
 // Package ebuild implements ebuild execution engine.
 //
-// This file provides EAPI 8 version manipulation functions (ver_cut, ver_rs).
+// This file provides EAPI 7+ version manipulation functions (ver_cut, ver_rs, ver_test).
 package ebuild
 
 import (
@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/grpmsoft/grpm/internal/pkg"
 )
 
 // ============================================================================
@@ -170,6 +172,54 @@ func (h *Helpers) verRsImpl(rangeSpec, newSep, version string) string {
 	}
 
 	return string(result)
+}
+
+// VerTest compares two version strings per PMS Section 12.3.14.
+//
+// Usage: ver_test <v1> <op> <v2>
+//
+// Operators:
+//   - -eq: v1 equals v2
+//   - -ne: v1 not equals v2
+//   - -lt: v1 less than v2
+//   - -le: v1 less than or equal to v2
+//   - -gt: v1 greater than v2
+//   - -ge: v1 greater than or equal to v2
+//
+// Returns: exit code 0 (true) or 1 (false) via exitFalse().
+// Available in EAPI 7+.
+func (h *Helpers) VerTest(args []string) error {
+	if len(args) != 3 {
+		return &DieError{Message: "ver_test: requires exactly 3 arguments: <v1> <op> <v2>"}
+	}
+
+	v1, op, v2 := args[0], args[1], args[2]
+
+	// Use PMS-compliant version comparison from pkg package
+	cmp := pkg.CompareVersions(v1, v2)
+
+	var result bool
+	switch op {
+	case "-eq":
+		result = cmp == 0
+	case "-ne":
+		result = cmp != 0
+	case "-lt":
+		result = cmp < 0
+	case "-le":
+		result = cmp <= 0
+	case "-gt":
+		result = cmp > 0
+	case "-ge":
+		result = cmp >= 0
+	default:
+		return &DieError{Message: fmt.Sprintf("ver_test: unknown operator: %s", op)}
+	}
+
+	if !result {
+		return exitFalse()
+	}
+	return nil
 }
 
 // ============================================================================

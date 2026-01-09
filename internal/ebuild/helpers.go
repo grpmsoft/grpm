@@ -77,6 +77,19 @@ type Helpers struct {
 	// Strip control (EAPI 8)
 	stripInclude []string // Paths to include in stripping
 	stripExclude []string // Paths to exclude from stripping (-x flag)
+
+	// Exit status tracking for assert command (PMS Section 12.3.6)
+	lastExitStatus int   // Last command exit status ($?)
+	pipeStatus     []int // Pipe status array (PIPESTATUS)
+
+	// Nonfatal mode flag for nonfatal command (PMS Section 12.3.1)
+	// When true, die() returns error instead of aborting the build.
+	// EAPI 4+: nonfatal command sets this flag.
+	nonfatalMode bool
+
+	// Command dispatcher for nonfatal command execution.
+	// Set by the interpreter to allow nonfatal to execute commands.
+	commandDispatcher func(cmd string, args []string) error
 }
 
 // NewHelpers creates helpers instance with default settings.
@@ -152,4 +165,58 @@ func (h *Helpers) writeStderr(s string) {
 	if h.stderr != nil {
 		_, _ = io.WriteString(h.stderr, s)
 	}
+}
+
+// SetLastExitStatus sets the last command exit status for assert command.
+//
+// This should be called by the interpreter after each command execution
+// to track the exit status for subsequent assert calls.
+func (h *Helpers) SetLastExitStatus(status int) {
+	h.lastExitStatus = status
+}
+
+// GetLastExitStatus returns the last command exit status.
+func (h *Helpers) GetLastExitStatus() int {
+	return h.lastExitStatus
+}
+
+// SetPipeStatus sets the pipe status array for assert command.
+//
+// This should be called by the interpreter after pipeline execution
+// to track the PIPESTATUS array for subsequent assert calls.
+// Per PMS Section 12.3.6, assert checks PIPESTATUS for pipelines.
+func (h *Helpers) SetPipeStatus(status []int) {
+	h.pipeStatus = make([]int, len(status))
+	copy(h.pipeStatus, status)
+}
+
+// GetPipeStatus returns the pipe status array.
+func (h *Helpers) GetPipeStatus() []int {
+	if h.pipeStatus == nil {
+		return []int{h.lastExitStatus}
+	}
+	return h.pipeStatus
+}
+
+// SetNonfatalMode sets the nonfatal mode flag.
+//
+// When nonfatal mode is enabled, die() returns an error instead of
+// aborting the build process. This is used by the nonfatal command.
+// Per PMS Section 12.3.1: EAPI 4+ only.
+func (h *Helpers) SetNonfatalMode(enabled bool) {
+	h.nonfatalMode = enabled
+}
+
+// IsNonfatalMode returns true if nonfatal mode is currently active.
+func (h *Helpers) IsNonfatalMode() bool {
+	return h.nonfatalMode
+}
+
+// SetCommandDispatcher sets the function used to execute commands.
+//
+// This is called by the interpreter to wire up command execution for
+// the nonfatal helper, which needs to execute commands through the
+// interpreter's command dispatch mechanism.
+func (h *Helpers) SetCommandDispatcher(dispatcher func(cmd string, args []string) error) {
+	h.commandDispatcher = dispatcher
 }

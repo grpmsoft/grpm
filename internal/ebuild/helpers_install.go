@@ -62,6 +62,46 @@ func (h *Helpers) Docinto(args []string) error {
 	return nil
 }
 
+// Into sets DESTTREE for subsequent dobin, dosbin, dolib.* commands.
+//
+// Usage: into /opt/myapp
+//
+// Per PMS Section 12.3.10:
+//   - Takes exactly one argument and sets DESTTREE to it
+//   - Creates the directory under ${ED} or ${D} if it does not exist
+//   - Default DESTTREE is /usr
+//   - Affects: dobin, dosbin, dolib.a, dolib.so, doman (EAPI 0-6)
+//
+// Example:
+//
+//	into /opt/myapp
+//	dobin myapp          # installs to /opt/myapp/bin/myapp
+//	dosbin mysbin        # installs to /opt/myapp/sbin/mysbin
+//	into /usr            # reset to default
+func (h *Helpers) Into(args []string) error {
+	if len(args) != 1 {
+		return &DieError{Message: "into: requires exactly one argument"}
+	}
+
+	path := args[0]
+	if path == "" {
+		path = "/usr" // default
+	}
+
+	h.destTree = path
+
+	// Per PMS 12.3.10: Creates the directory under ${ED} or ${D} if needed
+	imageDir := h.getImageDir()
+	if imageDir != "" {
+		destDir := filepath.Join(imageDir, path)
+		if err := os.MkdirAll(destDir, 0755); err != nil {
+			return &DieError{Message: fmt.Sprintf("into: failed to create directory %s: %v", destDir, err)}
+		}
+	}
+
+	return nil
+}
+
 // ============================================================================
 // EAPI 8 Option Setting Functions
 // ============================================================================
