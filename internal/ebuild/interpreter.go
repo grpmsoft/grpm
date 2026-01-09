@@ -186,6 +186,7 @@ func (i *Interpreter) buildCommandMap() map[string]helperFunc {
 		"tc-arch":   i.helpers.TcArch,
 
 		// Directory setting functions
+		"into":    i.helpers.Into, // PMS Section 12.3.10 - sets DESTTREE
 		"insinto": i.helpers.Insinto,
 		"exeinto": i.helpers.Exeinto,
 		"docinto": i.helpers.Docinto,
