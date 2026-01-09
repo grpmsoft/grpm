@@ -2026,6 +2026,114 @@ func TestHelpers_Newman(t *testing.T) {
 }
 
 // ============================================================================
+// Info Page Tests
+// ============================================================================
+
+func TestHelpers_Doinfo(t *testing.T) {
+	helpers, tmpDir := createInstallTestHelpers(t)
+
+	infoPath := createTestFile(t, tmpDir, "myapp.info", "GNU Info file content")
+
+	err := helpers.Doinfo([]string{infoPath})
+	if err != nil {
+		t.Fatalf("Doinfo failed: %v", err)
+	}
+
+	installedPath := filepath.Join(helpers.env.D, "usr", "share", "info", "myapp.info")
+	if _, err := os.Stat(installedPath); os.IsNotExist(err) {
+		t.Errorf("expected file at %s", installedPath)
+	}
+
+	// Check file mode (skip on Windows - permissions work differently)
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(installedPath)
+		if err != nil {
+			t.Fatalf("failed to stat installed file: %v", err)
+		}
+		if info.Mode().Perm() != 0644 {
+			t.Errorf("expected mode 0644, got %o", info.Mode().Perm())
+		}
+	}
+}
+
+func TestHelpers_Doinfo_GzippedFile(t *testing.T) {
+	helpers, tmpDir := createInstallTestHelpers(t)
+
+	infoPath := createTestFile(t, tmpDir, "myapp.info.gz", "compressed info content")
+
+	err := helpers.Doinfo([]string{infoPath})
+	if err != nil {
+		t.Fatalf("Doinfo failed: %v", err)
+	}
+
+	installedPath := filepath.Join(helpers.env.D, "usr", "share", "info", "myapp.info.gz")
+	if _, err := os.Stat(installedPath); os.IsNotExist(err) {
+		t.Errorf("expected file at %s", installedPath)
+	}
+}
+
+func TestHelpers_Doinfo_MultipleFiles(t *testing.T) {
+	helpers, tmpDir := createInstallTestHelpers(t)
+
+	info1 := createTestFile(t, tmpDir, "foo.info", "foo info")
+	info2 := createTestFile(t, tmpDir, "bar.info", "bar info")
+
+	err := helpers.Doinfo([]string{info1, info2})
+	if err != nil {
+		t.Fatalf("Doinfo failed: %v", err)
+	}
+
+	for _, name := range []string{"foo.info", "bar.info"} {
+		installedPath := filepath.Join(helpers.env.D, "usr", "share", "info", name)
+		if _, err := os.Stat(installedPath); os.IsNotExist(err) {
+			t.Errorf("expected file at %s", installedPath)
+		}
+	}
+}
+
+func TestHelpers_Doinfo_NoArgs(t *testing.T) {
+	helpers, _ := createInstallTestHelpers(t)
+
+	err := helpers.Doinfo([]string{})
+	if err == nil {
+		t.Error("expected error with no arguments")
+	}
+}
+
+func TestHelpers_Doinfo_Directory(t *testing.T) {
+	helpers, tmpDir := createInstallTestHelpers(t)
+
+	subDir := filepath.Join(tmpDir, "infos")
+	if err := os.MkdirAll(subDir, 0755); err != nil {
+		t.Fatalf("failed to create subdir: %v", err)
+	}
+
+	err := helpers.Doinfo([]string{subDir})
+	if err == nil {
+		t.Error("expected error when passing directory to doinfo")
+	}
+}
+
+func TestHelpers_Doinfo_NonExistent(t *testing.T) {
+	helpers, tmpDir := createInstallTestHelpers(t)
+
+	err := helpers.Doinfo([]string{filepath.Join(tmpDir, "nonexistent.info")})
+	if err == nil {
+		t.Error("expected error for non-existent file")
+	}
+}
+
+func TestHelpers_Doinfo_NilEnv(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	helpers := NewHelpers(nil, &stdout, &stderr)
+
+	err := helpers.Doinfo([]string{"/some/file.info"})
+	if err == nil {
+		t.Error("expected error with nil environment")
+	}
+}
+
+// ============================================================================
 // Library/Header Tests
 // ============================================================================
 

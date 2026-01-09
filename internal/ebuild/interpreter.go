@@ -212,6 +212,7 @@ func (i *Interpreter) buildCommandMap() map[string]helperFunc {
 		"newdoc": i.helpers.Newdoc,
 		"doman":  i.helpers.Doman,
 		"newman": i.helpers.Newman,
+		"doinfo": i.helpers.Doinfo,
 
 		// Library/header installation functions
 		"dolib":    i.helpers.Dolib,

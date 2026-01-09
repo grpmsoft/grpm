@@ -202,6 +202,52 @@ func (h *Helpers) Newman(args []string) error {
 	return nil
 }
 
+// Doinfo installs GNU Info files to ${D}/usr/share/info.
+//
+// Usage: doinfo <file>...
+//
+// Per PMS Section 12.3.9:
+//   - Installs GNU Info files into /usr/share/info
+//   - Files are installed with mode 0644
+//   - Failure behavior is EAPI dependent
+//
+// Example:
+//
+//	doinfo doc/myapp.info
+//	doinfo doc/*.info
+func (h *Helpers) Doinfo(args []string) error {
+	if len(args) < 1 {
+		return &DieError{Message: "doinfo: no files specified"}
+	}
+
+	imageDir := h.getImageDir()
+	if imageDir == "" {
+		return &DieError{Message: "doinfo: D not set"}
+	}
+
+	destDir := filepath.Join(imageDir, "usr", "share", "info")
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		return &DieError{Message: fmt.Sprintf("doinfo: mkdir %s: %v", destDir, err)}
+	}
+
+	for _, file := range args {
+		info, err := os.Stat(file)
+		if err != nil {
+			return &DieError{Message: fmt.Sprintf("doinfo: %s: %v", file, err)}
+		}
+		if info.IsDir() {
+			return &DieError{Message: fmt.Sprintf("doinfo: %s is a directory", file)}
+		}
+
+		dst := filepath.Join(destDir, filepath.Base(file))
+		if err := h.installFile(file, dst, 0644); err != nil {
+			return &DieError{Message: fmt.Sprintf("doinfo: %v", err)}
+		}
+	}
+
+	return nil
+}
+
 // ============================================================================
 // EAPI 8 Standard Documentation Installation
 // ============================================================================
