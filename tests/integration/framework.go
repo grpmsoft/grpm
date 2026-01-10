@@ -502,3 +502,78 @@ func getEbuildInherits(t *testing.T, atom string) []string {
 
 	return parsed.InheritedEclasses
 }
+
+// ParseResult contains ebuild parsing validation results.
+type ParseResult struct {
+	// Success indicates if parsing succeeded
+	Success bool
+
+	// Version is the package version
+	Version string
+
+	// EAPI is the ebuild API version
+	EAPI string
+
+	// Inherits lists inherited eclasses
+	Inherits []string
+
+	// Functions lists discovered functions
+	Functions []string
+
+	// Error contains parsing error if any
+	Error error
+}
+
+// validatePackageParsing validates that a package can be parsed correctly.
+//
+// This is the core validation for v0.4.0 - we validate parsing and metadata
+// extraction without requiring actual source files or full eclass support.
+func validatePackageParsing(t *testing.T, atom string) *ParseResult {
+	t.Helper()
+
+	result := &ParseResult{}
+
+	tc := NewTestContext(t)
+	if err := tc.Init(); err != nil {
+		result.Error = fmt.Errorf("initializing context: %w", err)
+		return result
+	}
+
+	// Load package from repository
+	loadedPkg, err := tc.Repo.LoadPackage(atom)
+	if err != nil {
+		result.Error = fmt.Errorf("loading package: %w", err)
+		return result
+	}
+	result.Version = loadedPkg.Version
+
+	// Parse ebuild script
+	parts := strings.Split(atom, "/")
+	if len(parts) != 2 {
+		result.Error = fmt.Errorf("invalid atom format: %s", atom)
+		return result
+	}
+	category := parts[0]
+	pkgName := parts[1]
+	ebuildPath := filepath.Join(tc.RepoPath, category, pkgName,
+		fmt.Sprintf("%s-%s.ebuild", pkgName, loadedPkg.Version))
+
+	parsed, err := ebuild.ParseEbuildScript(ebuildPath)
+	if err != nil {
+		result.Error = fmt.Errorf("parsing ebuild: %w", err)
+		return result
+	}
+
+	result.EAPI = parsed.EAPI
+	result.Inherits = parsed.InheritedEclasses
+
+	// Convert map keys to slice
+	result.Functions = make([]string, 0, len(parsed.DefinedFunctions))
+	for fn := range parsed.DefinedFunctions {
+		result.Functions = append(result.Functions, fn)
+	}
+
+	result.Success = true
+
+	return result
+}
