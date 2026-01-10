@@ -64,12 +64,12 @@ type Helpers struct {
 	libDir      string // LIBDIR - library directory name (lib, lib64)
 
 	// Eclass support
-	eclassRegistry *EclassRegistry // Eclass registry for inherit tracking
-	eclassLoader   *EclassLoader   // Eclass loader for inherit functionality
-	eclassStack    *EclassStack    // Stack for eshopts/estack operations
-	cflags         []string        // CFLAGS for flag-o-matic
-	cxxflags       []string        // CXXFLAGS for flag-o-matic
-	ldflags        []string        // LDFLAGS for flag-o-matic
+	eclassRegistry *EclassRegistry   // Eclass registry for inherit tracking
+	eclassLoader   EclassLoaderIface // Eclass loader for inherit functionality (interface)
+	eclassStack    *EclassStack      // Stack for eshopts/estack operations
+	cflags         []string          // CFLAGS for flag-o-matic
+	cxxflags       []string          // CXXFLAGS for flag-o-matic
+	ldflags        []string          // LDFLAGS for flag-o-matic
 
 	// Package database for has_version/best_version queries
 	pkgDB *state.PackageDatabase
@@ -132,14 +132,17 @@ func (h *Helpers) SetPackageDatabase(db *state.PackageDatabase) {
 // This must be called after creating both Helpers and Interpreter to resolve
 // the circular dependency between them. The EclassLoader uses the Interpreter
 // to execute eclass bash code.
-func (h *Helpers) SetEclassLoader(loader *EclassLoader) {
+//
+// The loader can be either a *EclassLoader (legacy) or any type implementing
+// EclassLoaderIface (for dynamic loading).
+func (h *Helpers) SetEclassLoader(loader EclassLoaderIface) {
 	h.eclassLoader = loader
 }
 
-// GetEclassLoader returns the eclass loader, creating one if needed.
+// GetEclassLoader returns the eclass loader.
 //
-// Returns nil if no interpreter is available to create a loader.
-func (h *Helpers) GetEclassLoader() *EclassLoader {
+// Returns nil if no loader is set.
+func (h *Helpers) GetEclassLoader() EclassLoaderIface {
 	return h.eclassLoader
 }
 

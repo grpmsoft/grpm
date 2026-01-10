@@ -17,6 +17,16 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
+// EclassLoaderIface defines the interface for eclass loading.
+//
+// This interface allows different implementations:
+//   - EclassLoader: The original implementation that executes eclasses through the interpreter
+//   - DynamicEclassLoader: Uses the eclass package for dynamic loading with fallbacks
+type EclassLoaderIface interface {
+	// Inherit loads one or more eclasses.
+	Inherit(ctx context.Context, eclasses []string) error
+}
+
 // EclassRegistry manages loaded eclasses and their functions.
 //
 // The registry tracks which eclasses have been inherited to prevent

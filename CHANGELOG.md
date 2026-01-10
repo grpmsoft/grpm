@@ -15,6 +15,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.5.2] - 2026-01-10
+
+### Refactor: Dynamic Eclass Loading
+
+> **Community Feedback Addressed**
+>
+> This release addresses criticism from the Gentoo community (forums.gentoo.org)
+> about hardcoded eclass implementations. Eclasses are now loaded dynamically
+> from the repository, matching Portage's behavior.
+
+#### Added
+- **Dynamic eclass loading** - Eclasses are now loaded from repository eclass/ directories
+  - New `internal/eclass/` package (3300+ lines) for dynamic loading
+  - `eclass.Cache` - Scans and caches eclass files with mtime tracking
+  - `eclass.Executor` - Executes eclasses via mvdan.cc/sh interpreter
+  - `eclass.HybridLoader` - Dynamic loading with Go fallbacks
+  - `ebuild.DynamicEclassLoader` - Bridge for integration
+  - `ebuild.SetupDynamicEclassLoading()` - Configuration helper
+
+- **Metadata accumulation** - Proper handling of DEPEND, IUSE, RDEPEND from eclasses
+  - Backup/restore of metadata variables during inherit
+  - E_DEPEND, E_IUSE accumulator variables
+
+- **EXPORT_FUNCTIONS support** - Phase function exports from eclasses
+
+#### Changed
+- `Executor` now uses dynamic eclass loading by default (`EnableDynamicEclass: true`)
+- Go eclass implementations (cmake, meson, python, cargo, etc.) serve as fallbacks
+- Added `EclassLocations` option for custom eclass search paths
+
+#### Technical Details
+- Uses mvdan.cc/sh bash interpreter for eclass execution
+- Priority: dynamic loading → Go fallbacks
+- Thread-safe with mutex protection
+- Non-fatal fallback on cache creation errors
+
+---
+
 ## [0.5.1] - 2026-01-10
 
 ### Hotfix: Multilib ABI Lookup

@@ -19,6 +19,7 @@ import (
 	"os/exec"
 	"path/filepath"
 
+	"github.com/grpmsoft/grpm/internal/eclass"
 	"github.com/grpmsoft/grpm/internal/fetch"
 	"github.com/grpmsoft/grpm/internal/pkg"
 	"github.com/grpmsoft/grpm/internal/sandbox"
@@ -75,6 +76,16 @@ type Executor struct {
 	// interpreter is the bash interpreter for executing ebuild functions
 	interpreter *Interpreter
 
+	// dynamicLoader provides dynamic eclass loading from repository
+	// Uses HybridLoader with Go fallbacks for complex eclasses
+	dynamicLoader *DynamicEclassLoader
+
+	// eclassCache stores the eclass file cache for dynamic loading
+	eclassCache *eclass.Cache
+
+	// enableDynamicEclass tracks if dynamic loading is enabled
+	enableDynamicEclass bool
+
 	// currentPhase tracks the currently executing phase for EBUILD_PHASE
 	currentPhase Phase
 }
@@ -113,18 +124,29 @@ type ExecutorOptions struct {
 	// DenyNetwork blocks network access during build.
 	// Implements Portage's network-sandbox feature.
 	DenyNetwork bool
+
+	// EnableDynamicEclass enables dynamic eclass loading from repository.
+	// When true (default), eclasses are loaded directly from eclass/ directories
+	// using mvdan.cc/sh interpreter, with fallback to Go implementations.
+	// This addresses the community feedback about hardcoded eclasses.
+	EnableDynamicEclass bool
+
+	// EclassLocations specifies custom eclass search paths.
+	// If empty, defaults to [PortDir/eclass, /var/db/repos/gentoo/eclass].
+	EclassLocations []string
 }
 
 // DefaultOptions returns default executor options.
 func DefaultOptions() ExecutorOptions {
 	return ExecutorOptions{
-		TmpDir:        "/var/tmp/portage",
-		PortDir:       "/var/db/repos/gentoo",
-		DistDir:       "/var/cache/distfiles",
-		EnableSandbox: true,
-		EnableTests:   false,
-		KeepWork:      false,
-		DenyNetwork:   true, // network-sandbox by default
+		TmpDir:              "/var/tmp/portage",
+		PortDir:             "/var/db/repos/gentoo",
+		DistDir:             "/var/cache/distfiles",
+		EnableSandbox:       true,
+		EnableTests:         false,
+		KeepWork:            false,
+		DenyNetwork:         true,  // network-sandbox by default
+		EnableDynamicEclass: true,  // dynamic eclass loading by default
 	}
 }
 
@@ -177,6 +199,27 @@ func NewExecutor(pkg *pkg.Package, opts ExecutorOptions) (*Executor, error) {
 
 		executor.Sandbox = sb
 		executor.SandboxConfig = sbConfig
+	}
+
+	// Initialize dynamic eclass loading if enabled
+	if opts.EnableDynamicEclass {
+		executor.enableDynamicEclass = true
+
+		locations := opts.EclassLocations
+		if len(locations) == 0 {
+			// Default locations: PortDir/eclass and standard Gentoo path
+			locations = []string{
+				filepath.Join(opts.PortDir, "eclass"),
+			}
+		}
+
+		cache, err := eclass.NewCacheWithLocations(locations)
+		if err != nil {
+			// Non-fatal: fall back to Go implementations
+			log.Printf("[ebuild] warning: failed to create eclass cache: %v (using Go fallbacks)", err)
+		} else {
+			executor.eclassCache = cache
+		}
 	}
 
 	return executor, nil
@@ -685,6 +728,20 @@ func (e *Executor) RunPhaseFunction(phase Phase) (string, error) {
 // initInterpreter initializes the bash interpreter for the executor.
 func (e *Executor) initInterpreter() error {
 	e.interpreter = NewInterpreter(e.Env, os.Stdout, os.Stderr)
+
+	// Setup dynamic eclass loading if cache is available
+	if e.enableDynamicEclass && e.eclassCache != nil {
+		loader, err := SetupDynamicEclassLoading(e.interpreter, e.eclassCache)
+		if err != nil {
+			// Non-fatal: fall back to Go implementations
+			log.Printf("[ebuild] warning: failed to setup dynamic eclass loading: %v", err)
+		} else {
+			e.dynamicLoader = loader
+			log.Printf("[ebuild] dynamic eclass loading enabled (%d locations)",
+				len(e.eclassCache.Locations()))
+		}
+	}
+
 	return nil
 }
 
