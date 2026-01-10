@@ -57,13 +57,27 @@ jobs:
     timeout-minutes: ${{ github.event.inputs.timeout_minutes || 120 }}
 
     steps:
+      - name: Configure binary packages
+        run: |
+          # Enable binary packages from official Gentoo binhost
+          # This significantly speeds up dependency installation
+          cat >> /etc/portage/make.conf << 'EOF'
+          FEATURES="${FEATURES} getbinpkg binpkg-request-signature"
+          PORTAGE_BINHOST="https://distfiles.gentoo.org/releases/amd64/binpackages/17.1/x86-64/"
+          EOF
+
+          # Get GPG keys for binhost verification
+          getuto
+
       - name: Install dependencies
         run: |
           # Update portage tree (webrsync is more reliable for fresh containers)
           emerge-webrsync
 
-          # Install build tools (use new category names per Gentoo 2024+ changes)
-          emerge --quiet --noreplace \
+          # Install build tools using binary packages when available
+          # --usepkg: prefer binary packages, fall back to source
+          # --binpkg-respect-use=y: ensure USE flags match
+          emerge --quiet --noreplace --usepkg --binpkg-respect-use=y \
             dev-lang/go \
             dev-build/make \
             dev-build/cmake \
