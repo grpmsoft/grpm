@@ -21,7 +21,7 @@
 
 GRPM (Go Resource Package Manager) is a modern source-based package manager written in Go, inspired by and fully compatible with **Gentoo's Portage**. It brings SAT-based dependency resolution, transactional updates with filesystem snapshots, and binary package support. While rooted in the Gentoo ecosystem, GRPM is designed to be distribution-agnostic and extensible for any Linux distribution.
 
-**Current Version:** v0.4.0 (January 2026)
+**Current Version:** [Latest Release](https://github.com/grpmsoft/grpm/releases/latest)
 
 ---
 
@@ -34,6 +34,9 @@ GRPM (Go Resource Package Manager) is a modern source-based package manager writ
 | **Transactional Updates** | Btrfs/ZFS snapshot-based rollbacks for safe system updates |
 | **Source Building** | Complete ebuild execution with autotools, CMake, and Meson |
 | **Build Systems** | cmake.eclass, meson.eclass, toolchain-funcs, flag-o-matic |
+| **Language Ecosystems** | Python (distutils-r1), Rust (cargo.eclass), Go (go-module.eclass) |
+| **Multilib Support** | 32-bit/64-bit library support with ABI management |
+| **Package Sets** | @world, @system, @selected, @preserved-rebuild |
 | **Distfile Fetching** | *Planned* — Manual download currently required |
 | **Daemon Architecture** | gRPC + REST API for background operations |
 | **Repository Sync** | Native rsync and Git sync with GPG verification |
@@ -163,19 +166,18 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidelines and [AGENTS.md
 
 ## Roadmap
 
-**v0.3.0** (Released) — PMS compliance:
-- ✅ PMS-compliant atom parser (Section 8.3)
-- ✅ Full EAPI 0-8 feature matrix with 30+ feature flags
-- ✅ Version manipulation commands (ver_test, ver_cut, ver_rs)
-- ✅ PMS environment variables (PVR, ROOT, EROOT, SYSROOT, BROOT)
-- ✅ Error handling (assert, nonfatal)
-- ✅ Default phase functions (default_src_*)
-- ✅ Direct mvdan.cc/sh integration (GoSh wrapper not needed)
+> **Rapid Development Phase Complete (v0.1.0 → v0.5.0)**
+>
+> The initial rapid development phase is complete. GRPM now supports ~75% of the Gentoo package tree.
+> Future development will focus on stability, testing, and community feedback.
 
-**v0.4.0** (Planned) — Extended features:
-- CMake/Meson build system support
-- Performance optimization for large dependency graphs
-- Extended eclass support
+**Completed Features:**
+- ✅ SAT-based dependency resolution
+- ✅ Full ebuild execution (autotools, CMake, Meson)
+- ✅ Language ecosystems (Python, Rust, Go)
+- ✅ Multilib support (32-bit/64-bit)
+- ✅ Binary package support (GPKG, TBZ2)
+- ✅ Repository sync (rsync, git) with GPG verification
 
 **v1.0.0** — Production ready after community validation (no fixed date).
 

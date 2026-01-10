@@ -1,8 +1,10 @@
 # GRPM Roadmap
 
-> **Last Updated:** 2026-01-10
-> **Current Version:** v0.4.0
-> **Next Release:** v0.5.0 (Language Ecosystems)
+> **Rapid Development Phase Complete (v0.1.0 → v0.5.0)**
+>
+> The initial rapid development phase has been completed.
+> GRPM now supports approximately 75% of the Gentoo package tree.
+> Future development focuses on stability, testing, and community feedback.
 
 ---
 
@@ -17,26 +19,36 @@ GRPM aims to be a modern, reliable package manager for Gentoo Linux with:
 
 ---
 
-## Current Development
+## Current Status
 
-### v0.5.0 — Language Ecosystems (Planned)
+### What's Implemented (~75% Tree Coverage)
 
-**Focus:** Python, Rust, Go package support and system management
-
-| Task | Status | Description |
-|------|--------|-------------|
-| Python Eclasses | Planned | python-utils-r1, python-single-r1, python-r1 |
-| Package Sets | Planned | @world, @system support |
-| Multilib Eclass | Planned | 32-bit/64-bit library support |
-| REQUIRED_USE Solver | Planned | Automatic USE flag resolution |
-| cargo.eclass | Planned | Rust package support |
-| go-module.eclass | Planned | Go package support |
+| Category | Features |
+|----------|----------|
+| **Core** | SAT solver, version comparison, slot/subslot, USE flags |
+| **Build Systems** | autotools, CMake, Meson |
+| **Languages** | Python (distutils-r1), Rust (cargo.eclass), Go (go-module.eclass) |
+| **Multilib** | 32-bit/64-bit ABI support |
+| **Binary Packages** | GPKG (.gpkg.tar), TBZ2 (.tbz2) read/write |
+| **Sync** | rsync, git with GPG verification |
+| **API** | gRPC + REST daemon architecture |
 
 ---
 
-## Recent Releases
+## Release History
 
-### v0.4.0 — Build Systems (2026-01-10)
+### v0.5.0 — Language Ecosystems
+
+**Final release of rapid development phase** with Python, Rust, and Go support:
+
+- **Python Eclasses** — python-utils-r1, python-single-r1, python-r1, python-any-r1, distutils-r1
+- **Package Sets** — @world, @system, @selected, @preserved-rebuild
+- **Multilib Eclass** — 32-bit/64-bit ABI support
+- **REQUIRED_USE Solver** — Automatic USE flag resolution
+- **cargo.eclass** — Rust packages with crate vendoring
+- **go-module.eclass** — Go packages with EGO_SUM support
+
+### v0.4.0 — Build Systems
 
 **Major release** with CMake and Meson build system support (~60% tree coverage):
 
@@ -47,7 +59,7 @@ GRPM aims to be a modern, reliable package manager for Gentoo Linux with:
 - **Repository Cache** — SQLite-backed metadata cache (modernc.org/sqlite, pure Go)
 - **Integration Tests** — 2768 lines covering autotools, cmake, meson packages
 
-### v0.3.0 — PMS Compliance (2026-01-10)
+### v0.3.0 — PMS Compliance
 
 **Major release** with comprehensive PMS (Package Manager Specification) compliance:
 
@@ -63,27 +75,27 @@ GRPM aims to be a modern, reliable package manager for Gentoo Linux with:
 - **mvdan.cc/sh Integration** — Direct bash compatibility (GoSh wrapper not needed)
 - **PMS Test Suite** — 1076 lines of compliance tests
 
-### v0.2.1 — PMS Version Comparison (2026-01-09)
+### v0.2.1 — PMS Version Comparison
 
 - PMS-compliant version comparison (Algorithm 3.2-3.7)
 - Version suffix ordering fix (`_alpha < _beta < _pre < _rc < release < _p`)
 - Leading zero and letter suffix handling
 
-### v0.2.0 — Ebuild Parser Improvements (2026-01-09)
+### v0.2.0 — Ebuild Parser Improvements
 
 - Package variable expansion (${P}, ${PN}, ${PV}, ${PVR}, ${PF}, ${CATEGORY})
 - Removed builtin eclass handling (all eclasses from repository)
 - REST API socket improvements
 - Native xargs helper implementation
 
-### v0.1.1 — Module Architecture (2026-01-09)
+### v0.1.1 — Module Architecture
 
 - Real eclass `inherit` with `EXPORT_FUNCTIONS`
 - Proper phase dispatch to custom functions
 - Hook phases working correctly
 - Enhanced `has_version`/`best_version`
 
-### v0.1.0 — Initial Public Release (2026-01-08)
+### v0.1.0 — Initial Public Release
 
 First public release with core functionality:
 
@@ -116,25 +128,17 @@ No fixed timeline for v1.0.0 — quality and stability over deadlines.
 
 ---
 
-## Planned Features (v0.x.x)
+## Planned Features
 
-### Near-term (v0.5.0)
-
-- [ ] Python eclasses (python-utils-r1, python-single-r1, python-r1)
-- [ ] Package sets (@world, @system)
-- [ ] Multilib eclass
-- [ ] REQUIRED_USE solver
-- [ ] cargo.eclass for Rust packages
-- [ ] go-module.eclass for Go packages
-
-### Medium-term (v0.6.0+)
+### Next (v0.6.0+)
 
 - [ ] Web UI for daemon management
 - [ ] Parallel package builds
 - [ ] Distributed build support
 - [ ] Plugin system for custom build systems
+- [ ] Performance optimization for large dependency graphs
 
-### Long-term (post-1.0)
+### Future (post-1.0)
 
 - [ ] Native GUI application
 - [ ] Cross-compilation support
@@ -144,7 +148,15 @@ No fixed timeline for v1.0.0 — quality and stability over deadlines.
 
 ## Completed Features
 
-### v0.4.0 (2026-01-10)
+### v0.5.0 — Language Ecosystems
+- [x] Python eclasses (python-utils-r1, python-single-r1, python-r1, distutils-r1)
+- [x] Package sets (@world, @system, @selected, @preserved-rebuild)
+- [x] Multilib eclass (32-bit/64-bit ABI)
+- [x] REQUIRED_USE solver
+- [x] cargo.eclass (Rust)
+- [x] go-module.eclass (Go)
+
+### v0.4.0 — Build Systems
 - [x] CMake build system support
 - [x] Meson build system support
 - [x] toolchain-funcs eclass
@@ -152,7 +164,7 @@ No fixed timeline for v1.0.0 — quality and stability over deadlines.
 - [x] Repository metadata cache
 - [x] Integration test framework
 
-### v0.3.0 (2026-01-10)
+### v0.3.0 — PMS Compliance
 - [x] EAPI 0-8 feature matrix
 - [x] PMS-compliant atom parser
 - [x] Version manipulation commands

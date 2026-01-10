@@ -8,13 +8,82 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Planned
-- Python eclasses (python-utils-r1, python-single-r1, python-r1)
-- Package sets (@world, @system)
-- cargo.eclass for Rust packages
-- go-module.eclass for Go packages
 - Performance optimization for large dependency graphs
 - Web UI for daemon management
 - Native GUI application ([gogpu/ui](https://github.com/gogpu/ui))
+- Additional eclass implementations
+
+---
+
+## [0.5.0] - 2026-01-10
+
+### Language Ecosystems Release
+
+> **Rapid Development Phase Complete**
+>
+> This release marks the end of the initial rapid development phase.
+> GRPM now supports approximately 75% of the Gentoo package tree.
+> Future development will focus on stability, testing, and community feedback.
+
+This release adds comprehensive support for Python, Rust, and Go package ecosystems.
+
+### Added
+
+#### Python Eclasses (v0.5.0-001)
+- `internal/ebuild/eclass_python.go` - Full Python eclass suite
+- `python-utils-r1` - Core Python utilities
+- `python-single-r1` - Single Python implementation packages
+- `python-r1` - Multi-implementation packages
+- `python-any-r1` - Build-time only Python dependency
+- `distutils-r1` - Distutils/setuptools/flit/poetry build system
+- PYTHON_COMPAT validation and USE flag generation
+- `python_foreach_impl`, `python_setup`, `python_fix_shebang`
+
+#### Package Sets (v0.5.0-002)
+- `internal/state/sets.go` - Package set management
+- @world - All explicitly installed packages
+- @system - Essential system packages
+- @selected - Packages in /var/lib/portage/world
+- @preserved-rebuild - Packages needing rebuild
+- Set operations: union, intersection, difference, expand
+
+#### Multilib Eclass (v0.5.0-003)
+- `internal/ebuild/eclass_multilib.go` - Core multilib support
+- `internal/ebuild/eclass_multilib_build.go` - multilib-build eclass
+- ABI types: amd64, x86, arm64, arm, ppc64
+- `get_libdir`, `get_abi_CHOST`, `get_abi_CFLAGS`, `get_abi_LIBDIR`
+- `multilib_foreach_abi`, `multilib_is_native_abi`
+- CFLAGS -m32/-m64 handling
+
+#### REQUIRED_USE Solver (v0.5.0-004)
+- `internal/pkg/required_use.go` - Full REQUIRED_USE implementation
+- Operators: `||` (any-of), `^^` (exactly-one), `??` (at-most-one)
+- Conditionals: `flag?`, `!flag?`
+- Complex nested expressions
+- Automatic USE flag resolution
+
+#### cargo.eclass (v0.5.0-005)
+- `internal/ebuild/eclass_cargo.go` - Rust package support
+- Crate URI generation for SRC_URI
+- Crate vendoring from DISTDIR
+- .cargo/config.toml generation
+- CFLAGS to RUSTFLAGS conversion
+- CHOST to Rust target triple conversion
+- Full phase support: src_unpack, src_configure, src_compile, src_test, src_install
+
+#### go-module.eclass (v0.5.0-006)
+- `internal/ebuild/eclass_go_module.go` - Go package support
+- EGO_SUM parsing and SRC_URI generation
+- Go module cache setup
+- Vendor directory support
+- GOPROXY=off for offline builds
+- CGO integration with system compilers
+- Full phase support: src_unpack, src_compile, src_install
+- `ego` wrapper for Go commands
+
+### Changed
+- Ebuild execution now supports Python, Rust, and Go build workflows
+- ~75% estimated Gentoo package tree coverage (up from ~60%)
 
 ---
 
@@ -437,7 +506,9 @@ GRPM (Go Resource Package Manager) is a modern reimplementation of Gentoo's Port
 - **Issues**: https://github.com/grpmsoft/grpm/issues
 - **License**: [Apache-2.0](LICENSE)
 
-[Unreleased]: https://github.com/grpmsoft/grpm/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/grpmsoft/grpm/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/grpmsoft/grpm/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/grpmsoft/grpm/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/grpmsoft/grpm/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/grpmsoft/grpm/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/grpmsoft/grpm/compare/v0.1.1...v0.2.0
