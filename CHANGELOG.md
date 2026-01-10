@@ -15,6 +15,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.5.1] - 2026-01-10
+
+### Hotfix: Multilib ABI Lookup
+
+#### Fixed
+- **Deterministic ABI lookup** - Fixed non-deterministic map iteration in multilib functions
+  - `computeABILibdir`, `GetABIChost`, `GetABICflags`, `GetABILdflags`, `setupABIEnvironment`
+  - Added `getCurrentArch()` to determine system architecture from CHOST
+  - Now uses deterministic search order as fallback
+  - Fixes CI test failures on Linux (TestComputeLibdir_WithABI, TestGetABICflags)
+
+---
+
 ## [0.5.0] - 2026-01-10
 
 ### Language Ecosystems Release
@@ -506,7 +519,8 @@ GRPM (Go Resource Package Manager) is a modern reimplementation of Gentoo's Port
 - **Issues**: https://github.com/grpmsoft/grpm/issues
 - **License**: [Apache-2.0](LICENSE)
 
-[Unreleased]: https://github.com/grpmsoft/grpm/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/grpmsoft/grpm/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/grpmsoft/grpm/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/grpmsoft/grpm/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/grpmsoft/grpm/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/grpmsoft/grpm/compare/v0.2.1...v0.3.0
