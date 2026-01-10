@@ -24,12 +24,14 @@ var AutotoolsPackages = []PackageSpec{
 		BuildSystem: BuildSystemAutotools,
 		Complexity:  "simple",
 		Description: "GNU grep",
+		SkipReason:  "Uses brace expansion in variable names (mvdan.cc/sh limitation)",
 	},
 	{
 		Atom:        "sys-apps/sed",
 		BuildSystem: BuildSystemAutotools,
 		Complexity:  "simple",
 		Description: "GNU sed",
+		SkipReason:  "Uses brace expansion in variable names (mvdan.cc/sh limitation)",
 	},
 	{
 		Atom:        "app-misc/screen",
@@ -42,6 +44,7 @@ var AutotoolsPackages = []PackageSpec{
 		BuildSystem: BuildSystemAutotools,
 		Complexity:  "medium",
 		Description: "GNU core utilities",
+		SkipReason:  "Uses brace expansion in variable names (mvdan.cc/sh limitation)",
 	},
 
 	// Packages requiring unsupported eclasses - skip
@@ -231,7 +234,7 @@ func TestAutotools_EbuildMetadata(t *testing.T) {
 			expectInherits: false,
 		},
 		{
-			atom:           "sys-apps/grep",
+			atom:           "app-misc/screen",
 			expectEAPI:     "",
 			expectInherits: false,
 		},
