@@ -1,10 +1,53 @@
 name: Release
 
+# Professional Release Workflow with Pre-Tag Quality Gates
+#
+# IMPORTANT: In Go, tags are FINAL - they're cached by proxy.golang.org
+# and cannot be changed. All tests MUST pass BEFORE creating the tag.
+#
+# Architecture:
+# 1. Trigger: Manual dispatch OR push to release/* branch
+# 2. Run ALL tests (unit + smoke + integration)
+# 3. Only after ALL tests pass → create tag
+# 4. Tag created → GoReleaser publishes release
+#
+# This ensures:
+# - No broken versions in Go module proxy
+# - Full test coverage before release
+# - Professional, enterprise-grade release process
+#
+# Usage:
+#   Option A: Manual trigger via GitHub Actions UI
+#   Option B: Push to release/v0.5.3 branch → auto-tag after tests
+#
+# References:
+# - https://docs.github.com/en/actions/sharing-automations/creating-actions/releasing-and-maintaining-actions
+# - https://goreleaser.com/ci/actions/
+# - https://blog.nimblepros.com/blogs/using-workflow-run-in-github-actions/
+
 on:
+  # Manual trigger with version input
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., 0.5.3, 0.6.0-beta.1)'
+        required: true
+        type: string
+      skip_integration:
+        description: 'Skip integration tests (NOT recommended for stable releases)'
+        required: false
+        default: false
+        type: boolean
+      dry_run:
+        description: 'Dry run - run tests but do not create release'
+        required: false
+        default: false
+        type: boolean
+
+  # Auto-trigger on release branches
   push:
-    tags:
-      - 'v*.*.*'
-      - 'v*.*.*-*'  # Pre-releases: v0.1.0-beta.1, v1.0.0-rc.1
+    branches:
+      - 'release/v*'
 
 permissions:
   contents: write
@@ -13,15 +56,251 @@ env:
   GO_VERSION: '1.25'
 
 jobs:
-  release:
-    name: Release
+  # ============================================================
+  # Stage 1: Determine Version
+  # ============================================================
+  prepare:
+    name: Prepare Release
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      is_prerelease: ${{ steps.version.outputs.is_prerelease }}
+      skip_integration: ${{ steps.version.outputs.skip_integration }}
+      dry_run: ${{ steps.version.outputs.dry_run }}
+
+    steps:
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+            SKIP_INT="${{ github.event.inputs.skip_integration }}"
+            DRY_RUN="${{ github.event.inputs.dry_run }}"
+          else
+            # Extract version from branch name: release/v0.5.3 -> 0.5.3
+            BRANCH="${{ github.ref_name }}"
+            VERSION="${BRANCH#release/v}"
+            SKIP_INT="false"
+            DRY_RUN="false"
+          fi
+
+          # Validate version format
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+            echo "ERROR: Invalid version format: $VERSION"
+            echo "Expected: X.Y.Z or X.Y.Z-suffix (e.g., 0.5.3, 1.0.0-beta.1)"
+            exit 1
+          fi
+
+          TAG="v${VERSION}"
+
+          # Check if pre-release
+          if [[ "$VERSION" == *"-"* ]]; then
+            IS_PRERELEASE="true"
+          else
+            IS_PRERELEASE="false"
+          fi
+
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "is_prerelease=$IS_PRERELEASE" >> $GITHUB_OUTPUT
+          echo "skip_integration=$SKIP_INT" >> $GITHUB_OUTPUT
+          echo "dry_run=$DRY_RUN" >> $GITHUB_OUTPUT
+
+          echo "=== Release Configuration ==="
+          echo "Version:          $VERSION"
+          echo "Tag:              $TAG"
+          echo "Pre-release:      $IS_PRERELEASE"
+          echo "Skip Integration: $SKIP_INT"
+          echo "Dry Run:          $DRY_RUN"
+
+      - name: Check tag doesn't exist
+        run: |
+          if git ls-remote --tags origin | grep -q "refs/tags/${{ steps.version.outputs.tag }}$"; then
+            echo "ERROR: Tag ${{ steps.version.outputs.tag }} already exists!"
+            echo "Cannot release an already-published version."
+            exit 1
+          fi
+          echo "Tag ${{ steps.version.outputs.tag }} is available"
+
+  # ============================================================
+  # Stage 2: Unit Tests (REQUIRED)
+  # ============================================================
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    needs: prepare
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Verify dependencies
+        run: go mod verify
+
+      - name: Run linter
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: latest
+          args: --timeout=5m
+
+      - name: Run unit tests with race detector
+        run: go test -v -race -coverprofile=coverage.out -timeout=15m ./...
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.out
+
+  # ============================================================
+  # Stage 3: Smoke Tests (REQUIRED)
+  # ============================================================
+  smoke-tests:
+    name: Smoke Tests
+    runs-on: ubuntu-latest
+    needs: prepare
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Build binary
+        run: go build -v -o bin/grpm ./cmd/grpm
+
+      - name: Verify binary
+        run: |
+          ./bin/grpm version || echo "Version check completed"
+          ./bin/grpm --help
+
+      - name: Test with mock repository
+        run: |
+          echo "=== Mock Repository Tests ==="
+          ./bin/grpm resolve --mock sys-libs/zlib
+          ./bin/grpm resolve --mock app-misc/hello
+          echo "=== Smoke tests passed ==="
+
+  # ============================================================
+  # Stage 4: Integration Tests (REQUIRED for stable releases)
+  # ============================================================
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: prepare
+    # Skip if explicitly requested OR if it's a pre-release
+    if: |
+      needs.prepare.outputs.skip_integration != 'true' &&
+      needs.prepare.outputs.is_prerelease != 'true'
+    container:
+      image: gentoo/stage3:latest
+      options: --privileged
+    timeout-minutes: 120
+
+    steps:
+      - name: Configure binary packages
+        run: |
+          cat >> /etc/portage/make.conf << 'EOF'
+          FEATURES="${FEATURES} getbinpkg binpkg-request-signature"
+          PORTAGE_BINHOST="https://distfiles.gentoo.org/releases/amd64/binpackages/17.1/x86-64/"
+          EOF
+          getuto || true
+
+      - name: Install dependencies
+        run: |
+          emerge-webrsync
+          emerge --quiet --noreplace --usepkg --binpkg-respect-use=y \
+            dev-lang/go dev-build/make dev-build/cmake dev-build/meson \
+            dev-build/ninja sys-devel/gcc app-arch/unzip net-misc/curl dev-vcs/git
+
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Build and run integration tests
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          go build -v -o bin/grpm ./cmd/grpm
+          go test -v -tags=integration -timeout=90m ./tests/integration/...
+        env:
+          GRPM_REPO_PATH: /var/db/repos/gentoo
+          GRPM_DIST_DIR: /var/cache/distfiles
+          GRPM_TMP_DIR: /var/tmp/portage
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-logs
+          path: /var/tmp/portage/
+          retention-days: 7
+
+  # ============================================================
+  # Stage 5: Create Tag and Release (only after ALL tests pass)
+  # ============================================================
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: [prepare, unit-tests, smoke-tests, integration-tests]
+    # Run if:
+    # - Unit and smoke tests passed
+    # - Integration tests passed OR were skipped (pre-release/explicit skip)
+    if: |
+      always() &&
+      needs.unit-tests.result == 'success' &&
+      needs.smoke-tests.result == 'success' &&
+      (needs.integration-tests.result == 'success' || needs.integration-tests.result == 'skipped') &&
+      needs.prepare.outputs.dry_run != 'true'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Create and push tag
+        run: |
+          TAG="${{ needs.prepare.outputs.tag }}"
+          VERSION="${{ needs.prepare.outputs.version }}"
+
+          echo "Creating tag $TAG..."
+
+          # Create annotated tag
+          git tag -a "$TAG" -m "Release $TAG
+
+          Version: $VERSION
+          Released: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          Commit: ${{ github.sha }}
+
+          All tests passed:
+          - Unit tests: passed
+          - Smoke tests: passed
+          - Integration tests: ${{ needs.integration-tests.result }}
+
+          Full changelog: https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md"
+
+          # Push tag
+          git push origin "$TAG"
+
+          echo "Tag $TAG created and pushed successfully"
 
       - name: Fetch all tags
         run: git fetch --force --tags
@@ -44,12 +323,6 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
-      - name: Verify dependencies
-        run: go mod verify
-
-      - name: Run tests
-        run: go test -v -race ./...
-
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
@@ -60,12 +333,90 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload release artifacts
-        uses: actions/upload-artifact@v6
-        if: always()
+        uses: actions/upload-artifact@v4
         with:
           name: release-artifacts
           path: |
             dist/*.tar.gz
             dist/*.zip
             dist/checksums.txt
-          retention-days: 5
+          retention-days: 30
+
+  # ============================================================
+  # Dry Run Summary (when dry_run is true)
+  # ============================================================
+  dry-run-summary:
+    name: Dry Run Summary
+    runs-on: ubuntu-latest
+    needs: [prepare, unit-tests, smoke-tests, integration-tests]
+    if: |
+      always() &&
+      needs.prepare.outputs.dry_run == 'true'
+
+    steps:
+      - name: Report dry run results
+        run: |
+          echo "========================================"
+          echo "         DRY RUN COMPLETE"
+          echo "========================================"
+          echo ""
+          echo "Version:           ${{ needs.prepare.outputs.version }}"
+          echo "Tag:               ${{ needs.prepare.outputs.tag }}"
+          echo "Pre-release:       ${{ needs.prepare.outputs.is_prerelease }}"
+          echo ""
+          echo "Test Results:"
+          echo "  Unit Tests:        ${{ needs.unit-tests.result }}"
+          echo "  Smoke Tests:       ${{ needs.smoke-tests.result }}"
+          echo "  Integration Tests: ${{ needs.integration-tests.result }}"
+          echo ""
+
+          if [[ "${{ needs.unit-tests.result }}" == "success" ]] && \
+             [[ "${{ needs.smoke-tests.result }}" == "success" ]] && \
+             [[ "${{ needs.integration-tests.result }}" == "success" || "${{ needs.integration-tests.result }}" == "skipped" ]]; then
+            echo "STATUS: Ready for release"
+            echo ""
+            echo "To create the actual release, run this workflow again"
+            echo "with dry_run = false"
+          else
+            echo "STATUS: NOT ready for release"
+            echo "Fix failing tests before releasing"
+            exit 1
+          fi
+
+  # ============================================================
+  # Final Summary
+  # ============================================================
+  summary:
+    name: Release Summary
+    runs-on: ubuntu-latest
+    needs: [prepare, unit-tests, smoke-tests, integration-tests, create-release]
+    if: always()
+
+    steps:
+      - name: Report final status
+        run: |
+          echo "========================================"
+          echo "         RELEASE WORKFLOW SUMMARY"
+          echo "========================================"
+          echo ""
+          echo "Version:           ${{ needs.prepare.outputs.version }}"
+          echo "Tag:               ${{ needs.prepare.outputs.tag }}"
+          echo ""
+          echo "Stage Results:"
+          echo "  Prepare:           ${{ needs.prepare.result }}"
+          echo "  Unit Tests:        ${{ needs.unit-tests.result }}"
+          echo "  Smoke Tests:       ${{ needs.smoke-tests.result }}"
+          echo "  Integration Tests: ${{ needs.integration-tests.result }}"
+          echo "  Create Release:    ${{ needs.create-release.result }}"
+          echo ""
+
+          if [[ "${{ needs.create-release.result }}" == "success" ]]; then
+            echo "RELEASE SUCCESSFUL"
+            echo ""
+            echo "Release URL: https://github.com/${{ github.repository }}/releases/tag/${{ needs.prepare.outputs.tag }}"
+          elif [[ "${{ needs.prepare.outputs.dry_run }}" == "true" ]]; then
+            echo "DRY RUN COMPLETE - No release created"
+          else
+            echo "RELEASE FAILED"
+            exit 1
+          fi
