@@ -59,14 +59,14 @@ jobs:
           # Update portage
           emerge --sync --quiet
 
-          # Install build tools
+          # Install build tools (use new category names per Gentoo 2024+ changes)
           emerge --quiet --noreplace \
             dev-lang/go \
-            sys-devel/make \
+            dev-build/make \
+            dev-build/cmake \
+            dev-build/meson \
+            dev-build/ninja \
             sys-devel/gcc \
-            dev-util/cmake \
-            dev-util/meson \
-            dev-util/ninja \
             app-arch/unzip \
             net-misc/curl \
             dev-vcs/git
