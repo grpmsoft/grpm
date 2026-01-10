@@ -89,6 +89,8 @@ jobs:
 
       - name: Build GRPM
         run: |
+          # Fix git safe directory issue in container
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           go build -v -o bin/grpm ./cmd/grpm
           ./bin/grpm version || echo "Version check skipped"
 
