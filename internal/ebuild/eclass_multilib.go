@@ -127,11 +127,26 @@ func (h *Helpers) computeABILibdir(abi string) string {
 		return libdir
 	}
 
-	// Look up in common ABIs
-	for _, abis := range CommonABIs {
+	// Determine current architecture from CHOST or DEFAULT_ABI
+	currentArch := h.getCurrentArch()
+
+	// First, look in the current architecture's ABIs
+	if abis, ok := CommonABIs[currentArch]; ok {
 		for _, a := range abis {
 			if a.Name == abi {
 				return a.LibDir
+			}
+		}
+	}
+
+	// Fallback: search in deterministic order (amd64 first for multilib cases)
+	archOrder := []string{"amd64", "arm64", "ppc64", "x86", "arm"}
+	for _, arch := range archOrder {
+		if abis, ok := CommonABIs[arch]; ok {
+			for _, a := range abis {
+				if a.Name == abi {
+					return a.LibDir
+				}
 			}
 		}
 	}
@@ -167,12 +182,28 @@ func (h *Helpers) GetABIChost(args []string) error {
 		return nil
 	}
 
-	// Look up in common ABIs
-	for _, abis := range CommonABIs {
+	// Determine current architecture from CHOST or DEFAULT_ABI
+	currentArch := h.getCurrentArch()
+
+	// First, look in the current architecture's ABIs
+	if abis, ok := CommonABIs[currentArch]; ok {
 		for _, a := range abis {
 			if a.Name == abi {
 				h.writeStdout(a.CHost)
 				return nil
+			}
+		}
+	}
+
+	// Fallback: search in deterministic order (amd64 first for multilib cases)
+	archOrder := []string{"amd64", "arm64", "ppc64", "x86", "arm"}
+	for _, arch := range archOrder {
+		if abis, ok := CommonABIs[arch]; ok {
+			for _, a := range abis {
+				if a.Name == abi {
+					h.writeStdout(a.CHost)
+					return nil
+				}
 			}
 		}
 	}
@@ -199,12 +230,28 @@ func (h *Helpers) GetABICflags(args []string) error {
 		return nil
 	}
 
-	// Look up in common ABIs
-	for _, abis := range CommonABIs {
+	// Determine current architecture from CHOST or DEFAULT_ABI
+	currentArch := h.getCurrentArch()
+
+	// First, look in the current architecture's ABIs
+	if abis, ok := CommonABIs[currentArch]; ok {
 		for _, a := range abis {
 			if a.Name == abi {
 				h.writeStdout(a.CFlags)
 				return nil
+			}
+		}
+	}
+
+	// Fallback: search in deterministic order (amd64 first for multilib cases)
+	archOrder := []string{"amd64", "arm64", "ppc64", "x86", "arm"}
+	for _, arch := range archOrder {
+		if abis, ok := CommonABIs[arch]; ok {
+			for _, a := range abis {
+				if a.Name == abi {
+					h.writeStdout(a.CFlags)
+					return nil
+				}
 			}
 		}
 	}
@@ -230,8 +277,11 @@ func (h *Helpers) GetABILdflags(args []string) error {
 		return nil
 	}
 
-	// Look up in common ABIs
-	for _, abis := range CommonABIs {
+	// Determine current architecture from CHOST or DEFAULT_ABI
+	currentArch := h.getCurrentArch()
+
+	// First, look in the current architecture's ABIs
+	if abis, ok := CommonABIs[currentArch]; ok {
 		for _, a := range abis {
 			if a.Name == abi {
 				h.writeStdout(a.LDFlags)
@@ -240,8 +290,59 @@ func (h *Helpers) GetABILdflags(args []string) error {
 		}
 	}
 
+	// Fallback: search in deterministic order (amd64 first for multilib cases)
+	archOrder := []string{"amd64", "arm64", "ppc64", "x86", "arm"}
+	for _, arch := range archOrder {
+		if abis, ok := CommonABIs[arch]; ok {
+			for _, a := range abis {
+				if a.Name == abi {
+					h.writeStdout(a.LDFlags)
+					return nil
+				}
+			}
+		}
+	}
+
 	h.writeStdout("")
 	return nil
+}
+
+// getCurrentArch determines the current system architecture from CHOST.
+func (h *Helpers) getCurrentArch() string {
+	// Check DEFAULT_ABI first
+	if defaultABI := h.getEnvOrDefault("DEFAULT_ABI", ""); defaultABI != "" {
+		// Map ABI to architecture
+		switch defaultABI {
+		case "amd64":
+			return "amd64"
+		case "x86":
+			return "x86"
+		case "arm64":
+			return "arm64"
+		case "arm":
+			return "arm"
+		case "ppc64":
+			return "ppc64"
+		}
+	}
+
+	// Determine from CHOST
+	chost := h.getEnvOrDefault("CHOST", "")
+	switch {
+	case strings.Contains(chost, "x86_64"):
+		return "amd64"
+	case strings.Contains(chost, "i686"), strings.Contains(chost, "i386"):
+		return "x86"
+	case strings.Contains(chost, "aarch64"):
+		return "arm64"
+	case strings.Contains(chost, "armv7"):
+		return "arm"
+	case strings.Contains(chost, "powerpc64"):
+		return "ppc64"
+	default:
+		// Default to amd64 for multilib support
+		return "amd64"
+	}
 }
 
 // MultilibEnv sets up the environment for a specific ABI.
@@ -260,12 +361,35 @@ func (h *Helpers) MultilibEnv(args []string) error {
 
 // setupABIEnvironment configures environment for a specific ABI.
 func (h *Helpers) setupABIEnvironment(abiName string) error {
-	// Find ABI definition
+	// Determine current architecture from CHOST or DEFAULT_ABI
+	currentArch := h.getCurrentArch()
+
+	// Find ABI definition - first in current arch, then deterministic order
 	var abi *ABI
-	for _, abis := range CommonABIs {
+
+	// First, look in the current architecture's ABIs
+	if abis, ok := CommonABIs[currentArch]; ok {
 		for i := range abis {
 			if abis[i].Name == abiName {
 				abi = &abis[i]
+				break
+			}
+		}
+	}
+
+	// Fallback: search in deterministic order
+	if abi == nil {
+		archOrder := []string{"amd64", "arm64", "ppc64", "x86", "arm"}
+		for _, arch := range archOrder {
+			if abis, ok := CommonABIs[arch]; ok {
+				for i := range abis {
+					if abis[i].Name == abiName {
+						abi = &abis[i]
+						break
+					}
+				}
+			}
+			if abi != nil {
 				break
 			}
 		}
