@@ -56,8 +56,8 @@ jobs:
     steps:
       - name: Install dependencies
         run: |
-          # Update portage
-          emerge --sync --quiet
+          # Update portage tree (webrsync is more reliable for fresh containers)
+          emerge-webrsync
 
           # Install build tools (use new category names per Gentoo 2024+ changes)
           emerge --quiet --noreplace \
