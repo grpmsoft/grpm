@@ -304,15 +304,30 @@ func (i *Interpreter) buildCommandMap() map[string]helperFunc {
 		"multilib_native_use_enable": i.helpers.MultilibNativeUseEnable,
 
 		// flag-o-matic.eclass functions
-		"append-cflags":     i.helpers.AppendCflags,
-		"append-cxxflags":   i.helpers.AppendCxxflags,
-		"append-ldflags":    i.helpers.AppendLdflags,
-		"append-flags":      i.helpers.AppendFlags,
-		"filter-flags":      i.helpers.FilterFlags,
-		"filter-ldflags":    i.helpers.FilterLdflags,
-		"strip-flags":       i.helpers.StripFlags,
-		"replace-cpu-flags": i.helpers.ReplaceCpuFlags,
-		"is-flag-supported": i.helpers.IsFlagSupported,
+		"append-cflags":           i.helpers.AppendCflags,
+		"append-cxxflags":         i.helpers.AppendCxxflags,
+		"append-cppflags":         i.helpers.AppendCppflags,
+		"append-ldflags":          i.helpers.AppendLdflags,
+		"append-flags":            i.helpers.AppendFlags,
+		"append-lfs-flags":        i.helpers.AppendLfsFlags,
+		"filter-flags":            i.helpers.FilterFlags,
+		"filter-ldflags":          i.helpers.FilterLdflags,
+		"filter-lfs-flags":        i.helpers.FilterLfsFlags,
+		"replace-flags":           i.helpers.ReplaceFlagsImpl,
+		"replace-cpu-flags":       i.helpers.ReplaceCpuFlags,
+		"strip-flags":             i.helpers.StripFlags,
+		"strip-unsupported-flags": i.helpers.StripUnsupportedFlags,
+		"test-flags-CC":           i.helpers.TestFlagsCC,
+		"test-flags-CXX":          i.helpers.TestFlagsCXX,
+		"test-flags-F77":          i.helpers.TestFlagsF77,
+		"test-flags-FC":           i.helpers.TestFlagsFC,
+		"test-flags":              i.helpers.TestFlagsAll,
+		"get-flag":                i.helpers.GetFlag,
+		"is-flag":                 i.helpers.IsFlag,
+		"is-ldflag":               i.helpers.IsLdflag,
+		"is-flag-supported":       i.helpers.IsFlagSupported,
+		"no-as-needed":            i.helpers.NoAsNeeded,
+		"raw-ldflags":             i.helpers.RawLdflags,
 
 		// linux-info.eclass functions
 		"get_version":               i.helpers.GetVersion,
@@ -386,7 +401,7 @@ func (i *Interpreter) buildCommandMap() map[string]helperFunc {
 //   - sed, cat, mkdir, rm, cp, mv, chmod, ln, find, grep, xargs, etc. (utilities)
 //   - epatch, eshopts_push, eshopts_pop, estack_push, estack_pop (eutils)
 //   - get_libdir, multilib_native_use_* (multilib)
-//   - append-cflags, filter-flags, strip-flags, etc. (flag-o-matic)
+//   - append-*, filter-*, replace-*, strip-*, test-flags-*, get-flag, is-flag, is-ldflag, no-as-needed, raw-ldflags (flag-o-matic)
 //   - get_version, linux_config_exists (linux-info)
 //   - inherit, EXPORT_FUNCTIONS (eclass support)
 //   - has_version, best_version (package queries)
