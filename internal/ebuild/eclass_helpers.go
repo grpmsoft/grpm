@@ -11,7 +11,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 
 	"github.com/grpmsoft/grpm/internal/pkg"
@@ -151,8 +150,13 @@ func (h *Helpers) restoreShellOptions(opts string) {
 }
 
 // ============================================================================
-// toolchain-funcs.eclass Functions
+// toolchain-funcs.eclass Functions (Additional)
 // ============================================================================
+//
+// Note: Core toolchain functions (tc-getCC, tc-getCXX, tc-getAR, etc.) are
+// implemented in helpers_toolchain.go with full CHOST/CBUILD support.
+//
+// This section contains additional toolchain-funcs.eclass functions.
 
 // TcIsGcc checks if the C compiler is GCC.
 //
@@ -185,114 +189,12 @@ func (h *Helpers) TcIsClang(args []string) error {
 	return exitFalse()
 }
 
-// TcExport exports toolchain variables.
-//
-// Usage: tc-export CC CXX LD
-//
-// Prints export commands for the specified variables.
-func (h *Helpers) TcExport(args []string) error {
-	for _, varName := range args {
-		var value string
-		switch varName {
-		case "CC":
-			value = h.getEnvOrDefault("CC", "gcc")
-		case "CXX":
-			value = h.getEnvOrDefault("CXX", "g++")
-		case "LD":
-			value = h.getEnvOrDefault("LD", "ld")
-		case "AR":
-			value = h.getEnvOrDefault("AR", "ar")
-		case "RANLIB":
-			value = h.getEnvOrDefault("RANLIB", "ranlib")
-		case "NM":
-			value = h.getEnvOrDefault("NM", "nm")
-		case "STRIP":
-			value = h.getEnvOrDefault("STRIP", "strip")
-		case "OBJCOPY":
-			value = h.getEnvOrDefault("OBJCOPY", "objcopy")
-		case "OBJDUMP":
-			value = h.getEnvOrDefault("OBJDUMP", "objdump")
-		case "PKG_CONFIG":
-			value = h.getEnvOrDefault("PKG_CONFIG", "pkg-config")
-		default:
-			value = os.Getenv(varName)
-		}
-		h.writeStdout(fmt.Sprintf("export %s=%q\n", varName, value))
-	}
-	return nil
-}
-
-// TcGetAR prints the archiver command.
-//
-// Usage: AR=$(tc-getAR)
-func (h *Helpers) TcGetAR(args []string) error {
-	ar := h.getEnvOrDefault("AR", "ar")
-	h.writeStdout(ar)
-	return nil
-}
-
-// TcGetRANLIB prints the ranlib command.
-//
-// Usage: RANLIB=$(tc-getRANLIB)
-func (h *Helpers) TcGetRANLIB(args []string) error {
-	ranlib := h.getEnvOrDefault("RANLIB", "ranlib")
-	h.writeStdout(ranlib)
-	return nil
-}
-
-// TcGetNM prints the nm command.
-//
-// Usage: NM=$(tc-getNM)
-func (h *Helpers) TcGetNM(args []string) error {
-	nm := h.getEnvOrDefault("NM", "nm")
-	h.writeStdout(nm)
-	return nil
-}
-
-// TcGetSTRIP prints the strip command.
-//
-// Usage: STRIP=$(tc-getSTRIP)
-func (h *Helpers) TcGetSTRIP(args []string) error {
-	strip := h.getEnvOrDefault("STRIP", "strip")
-	h.writeStdout(strip)
-	return nil
-}
-
-// TcGetOBJCOPY prints the objcopy command.
-//
-// Usage: OBJCOPY=$(tc-getOBJCOPY)
-func (h *Helpers) TcGetOBJCOPY(args []string) error {
-	objcopy := h.getEnvOrDefault("OBJCOPY", "objcopy")
-	h.writeStdout(objcopy)
-	return nil
-}
-
-// TcGetBUILD_CC prints the build C compiler (for cross-compilation).
-//
-// Usage: BUILD_CC=$(tc-getBUILD_CC)
-func (h *Helpers) TcGetBUILD_CC(args []string) error {
-	buildCC := h.getEnvOrDefault("BUILD_CC", "gcc")
-	h.writeStdout(buildCC)
-	return nil
-}
-
 // TcEndianBig checks if the target is big-endian.
 //
 // Usage: tc-endian big && echo "Big endian"
 func (h *Helpers) TcEndianBig(args []string) error {
-	// Most common architectures
-	bigEndianArches := map[string]bool{
-		"ppc":     true,
-		"ppc64":   true,
-		"s390":    true,
-		"s390x":   true,
-		"sparc":   true,
-		"sparc64": true,
-		"mips":    true,
-	}
-
-	arch := runtime.GOARCH
-	if bigEndianArches[arch] {
+	endian := h.detectEndian()
+	if endian == "big" {
 		return nil
 	}
 	return exitFalse()
@@ -302,9 +204,9 @@ func (h *Helpers) TcEndianBig(args []string) error {
 //
 // Usage: tc-endian little && echo "Little endian"
 func (h *Helpers) TcEndianLittle(args []string) error {
-	err := h.TcEndianBig(args)
-	if err != nil {
-		return nil // Not big endian = little endian
+	endian := h.detectEndian()
+	if endian == "little" {
+		return nil
 	}
 	return exitFalse()
 }

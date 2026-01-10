@@ -8,10 +8,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Planned
-- CMake/Meson build systems
+- Python eclasses (python-utils-r1, python-single-r1, python-r1)
+- Package sets (@world, @system)
+- cargo.eclass for Rust packages
+- go-module.eclass for Go packages
 - Performance optimization for large dependency graphs
 - Web UI for daemon management
 - Native GUI application ([gogpu/ui](https://github.com/gogpu/ui))
+
+---
+
+## [0.4.0] - 2026-01-10
+
+### Build Systems Release
+
+This release adds comprehensive build system support for CMake and Meson, covering approximately 60% of the Gentoo package tree.
+
+### Added
+
+#### CMake Build System (v0.4.0-001, v0.4.0-005)
+- `internal/ebuild/build_cmake.go` - CMake execution engine
+- `internal/ebuild/eclass_cmake.go` - Full cmake.eclass implementation
+- Support for Ninja and Unix Makefiles generators
+- `cmake_use`, `cmake_use_find_package` helpers
+- `cmake_comment_add_subdirectory` for directory exclusion
+- Full phase support: src_configure, src_compile, src_test, src_install
+- CMAKE_MAKEFILE_GENERATOR auto-detection
+
+#### Meson Build System (v0.4.0-002, v0.4.0-006)
+- `internal/ebuild/build_meson.go` - Meson execution engine
+- `internal/ebuild/eclass_meson.go` - Full meson.eclass implementation
+- `meson_use`, `meson_feature` helpers for USE flag mapping
+- Full phase support with ninja backend
+- Cross-compilation support via meson cross files
+
+#### toolchain-funcs Eclass (v0.4.0-003)
+- `internal/ebuild/helpers_toolchain.go` - Toolchain detection functions
+- Compiler detection: `tc-getCC`, `tc-getCXX`, `tc-getLD`, `tc-getAR`, `tc-getRANLIB`
+- Cross-compilation: `tc-getBUILD_CC`, `tc-getBUILD_CXX`, `tc-is-cross-compiler`
+- Architecture: `tc-arch`, `tc-arch-kernel`, `tc-endian`
+- Toolchain export: `tc-export`, `tc-export_build_env`
+- Compiler type detection: `tc-is-gcc`, `tc-is-clang`
+
+#### flag-o-matic Eclass (v0.4.0-008)
+- `internal/ebuild/eclass_flag_o_matic.go` - Flag manipulation with FlagSet value object
+- Append operations: `append-cflags`, `append-cxxflags`, `append-cppflags`, `append-ldflags`, `append-flags`
+- Filter operations: `filter-flags`, `filter-ldflags`, `filter-lfs-flags`, `filter-lto`
+- Replace operations: `replace-flags`, `replace-cpu-flags`
+- Strip operations: `strip-flags`, `strip-unsupported-flags`
+- Test operations: `test-flags`, `test-flag-CC`, `test-flag-CXX`, `test-flags-CCLD`
+- Utility: `get-flag`, `raw-ldflags`, `no-as-needed`, `is-ldflagq`
+- Glob pattern matching for flag filtering
+
+#### Repository Cache (v0.4.0-004)
+- `internal/cache/` - Core cache package with pluggable backends
+  - `cache.go` - Cache interface and factory
+  - `sqlite.go` - SQLite backend with WAL mode (modernc.org/sqlite, pure Go)
+  - `memory.go` - In-memory LRU cache backend
+  - `entry.go` - Cache entry types with mtime validation
+- `internal/repo/cache/` - Repository-specific cache wrapper
+  - `cache.go` - RepoCache with automatic invalidation
+  - `index.go` - Directory indexer for fast package lookups
+  - `cached_repo.go` - CachedRepository wrapper
+- `internal/repo/cached_portage.go` - Cached PortageRepository integration
+- Thread-safe concurrent access with prepared statements
+- Automatic stale entry invalidation on ebuild modification
+
+#### Integration Tests (v0.4.0-007)
+- `tests/integration/framework.go` - Test framework (504 lines)
+- `tests/integration/autotools_test.go` - 10 autotools packages (383 lines)
+- `tests/integration/cmake_test.go` - 15 CMake packages (485 lines)
+- `tests/integration/meson_test.go` - 15 Meson packages (523 lines)
+- `.github/workflows/integration.yml` - CI workflow for Gentoo container
+- Total: 2768 lines of integration tests
+- Build tag: `//go:build integration` for conditional compilation
+
+### Changed
+- Ebuild execution now supports autotools, CMake, and Meson workflows
+- Repository operations can use cache for faster metadata access
 
 ---
 

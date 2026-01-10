@@ -56,7 +56,12 @@ func ParseEbuildScript(path string) (*EbuildScript, error) {
 	}
 
 	// Parse using mvdan.cc/sh parser for accurate bash parsing
-	parser := syntax.NewParser(syntax.KeepComments(false))
+	// CRITICAL: Must use LangBash variant for ebuild compatibility
+	// Ebuilds use bash-specific syntax (local -a, arrays, etc.)
+	parser := syntax.NewParser(
+		syntax.KeepComments(false),
+		syntax.Variant(syntax.LangBash),
+	)
 	ast, err := parser.Parse(file, path)
 	if err != nil {
 		return nil, fmt.Errorf("parsing ebuild %s: %w", path, err)
@@ -111,8 +116,11 @@ func ParseEbuildScriptFromString(content string) (*EbuildScript, error) {
 		EAPI:              "0",
 	}
 
-	// Parse using mvdan.cc/sh parser
-	parser := syntax.NewParser(syntax.KeepComments(false))
+	// Parse using mvdan.cc/sh parser with bash variant
+	parser := syntax.NewParser(
+		syntax.KeepComments(false),
+		syntax.Variant(syntax.LangBash),
+	)
 	ast, err := parser.Parse(strings.NewReader(content), "ebuild")
 	if err != nil {
 		return nil, fmt.Errorf("parsing ebuild content: %w", err)

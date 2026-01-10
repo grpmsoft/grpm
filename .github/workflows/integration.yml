@@ -1,0 +1,219 @@
+name: Integration Tests
+
+# Integration tests run in a Gentoo container to validate GRPM
+# against real packages from the Gentoo repository.
+#
+# These tests are NOT run on regular PRs - they require a full Gentoo
+# environment with build tools and the portage tree.
+#
+# Trigger manually or on release branches.
+
+on:
+  # Manual trigger with optional test selection
+  workflow_dispatch:
+    inputs:
+      test_filter:
+        description: 'Test filter (e.g., TestAutotools, TestCMake, TestMeson)'
+        required: false
+        default: ''
+      timeout_minutes:
+        description: 'Timeout in minutes'
+        required: false
+        default: '120'
+      skip_complex:
+        description: 'Skip complex packages'
+        required: false
+        default: 'true'
+        type: boolean
+
+  # Run on release branches
+  push:
+    branches:
+      - 'release/**'
+    tags:
+      - 'v*'
+
+  # Weekly scheduled run to catch regressions
+  schedule:
+    - cron: '0 3 * * 0'  # Sunday at 3 AM UTC
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: '1.25'
+  GENTOO_MIRROR: 'https://distfiles.gentoo.org'
+
+jobs:
+  integration-test:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    # Integration tests are informational - failures don't block merge
+    # They require a full Gentoo environment which CI cannot fully provide
+    continue-on-error: true
+    container:
+      image: gentoo/stage3:latest
+      options: --privileged
+    timeout-minutes: ${{ github.event.inputs.timeout_minutes || 120 }}
+
+    steps:
+      - name: Configure binary packages
+        run: |
+          # Enable binary packages from official Gentoo binhost
+          # This significantly speeds up dependency installation
+          cat >> /etc/portage/make.conf << 'EOF'
+          FEATURES="${FEATURES} getbinpkg binpkg-request-signature"
+          PORTAGE_BINHOST="https://distfiles.gentoo.org/releases/amd64/binpackages/17.1/x86-64/"
+          EOF
+
+          # Get GPG keys for binhost verification
+          getuto
+
+      - name: Install dependencies
+        run: |
+          # Update portage tree (webrsync is more reliable for fresh containers)
+          emerge-webrsync
+
+          # Install build tools using binary packages when available
+          # --usepkg: prefer binary packages, fall back to source
+          # --binpkg-respect-use=y: ensure USE flags match
+          emerge --quiet --noreplace --usepkg --binpkg-respect-use=y \
+            dev-lang/go \
+            dev-build/make \
+            dev-build/cmake \
+            dev-build/meson \
+            dev-build/ninja \
+            sys-devel/gcc \
+            app-arch/unzip \
+            net-misc/curl \
+            dev-vcs/git
+
+      - name: Setup Go
+        run: |
+          # Verify Go installation
+          go version
+          echo "GOPATH=$HOME/go" >> $GITHUB_ENV
+          echo "PATH=$HOME/go/bin:$PATH" >> $GITHUB_ENV
+
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Build GRPM
+        run: |
+          # Fix git safe directory issue in container
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          go build -v -o bin/grpm ./cmd/grpm
+          ./bin/grpm version || echo "Version check skipped"
+
+      - name: Run Autotools Integration Tests
+        if: ${{ !github.event.inputs.test_filter || contains(github.event.inputs.test_filter, 'Autotools') }}
+        run: |
+          echo "=== Running Autotools Tests ==="
+          go test -v -tags=integration -timeout=30m \
+            -run 'TestAutotools' \
+            ./tests/integration/...
+        env:
+          GRPM_REPO_PATH: /var/db/repos/gentoo
+          GRPM_DIST_DIR: /var/cache/distfiles
+          GRPM_TMP_DIR: /var/tmp/portage
+
+      - name: Run CMake Integration Tests
+        if: ${{ !github.event.inputs.test_filter || contains(github.event.inputs.test_filter, 'CMake') }}
+        run: |
+          echo "=== Running CMake Tests ==="
+          go test -v -tags=integration -timeout=30m \
+            -run 'TestCMake' \
+            ./tests/integration/...
+        env:
+          GRPM_REPO_PATH: /var/db/repos/gentoo
+          GRPM_DIST_DIR: /var/cache/distfiles
+          GRPM_TMP_DIR: /var/tmp/portage
+
+      - name: Run Meson Integration Tests
+        if: ${{ !github.event.inputs.test_filter || contains(github.event.inputs.test_filter, 'Meson') }}
+        run: |
+          echo "=== Running Meson Tests ==="
+          go test -v -tags=integration -timeout=30m \
+            -run 'TestMeson' \
+            ./tests/integration/...
+        env:
+          GRPM_REPO_PATH: /var/db/repos/gentoo
+          GRPM_DIST_DIR: /var/cache/distfiles
+          GRPM_TMP_DIR: /var/tmp/portage
+
+      - name: Generate Test Report
+        if: always()
+        run: |
+          echo "=== Integration Test Summary ==="
+          echo "Repository: /var/db/repos/gentoo"
+          echo "Distfiles: /var/cache/distfiles"
+          echo "Build dir: /var/tmp/portage"
+          echo ""
+          echo "Test run completed at: $(date)"
+
+      - name: Upload build logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: /var/tmp/portage/grpm-test/
+          retention-days: 7
+
+  # Separate job for quick smoke test without full Gentoo container
+  smoke-test:
+    name: Smoke Test (Mock Repository)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Run unit tests
+        run: go test -v -race ./...
+
+      - name: Build binary
+        run: go build -v -o bin/grpm ./cmd/grpm
+
+      - name: Test with mock repository
+        run: |
+          # Use built-in test packages from gentoo/ directory
+          ./bin/grpm resolve --mock sys-libs/zlib
+          ./bin/grpm resolve --mock app-misc/hello
+
+  # Summary job that reports overall status
+  # Note: Integration tests are informational only - they require a full Gentoo
+  # environment and may fail in CI. The core CI tests (Test, Lint, Build) are
+  # what gate the PR merge.
+  summary:
+    name: Test Summary
+    runs-on: ubuntu-latest
+    needs: [integration-test, smoke-test]
+    if: always()
+
+    steps:
+      - name: Check results
+        run: |
+          echo "=== Test Summary ==="
+          echo "Integration Tests: ${{ needs.integration-test.result }}"
+          echo "Smoke Tests: ${{ needs.smoke-test.result }}"
+
+          # Integration tests are informational - don't fail the workflow
+          if [[ "${{ needs.integration-test.result }}" == "failure" ]]; then
+            echo "⚠️ Integration tests failed (expected in CI - requires Gentoo)"
+          fi
+
+          # Smoke tests must pass
+          if [[ "${{ needs.smoke-test.result }}" == "failure" ]]; then
+            echo "❌ Smoke tests failed!"
+            exit 1
+          fi
+
+          echo "✅ Core tests passed!"

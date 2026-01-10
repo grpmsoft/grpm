@@ -296,3 +296,182 @@ src_install() {
 		_, _ = ParseEbuildScriptFromString(content)
 	}
 }
+
+// TestParseEbuildScript_BashSyntax tests LangBash variant support for bash-specific syntax.
+func TestParseEbuildScript_BashSyntax(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		wantErr bool
+	}{
+		{
+			name: "brace expansion in path",
+			content: `
+src_install() {
+	rm "${ED}"/bin/{egrep,fgrep} || die
+}
+`,
+			wantErr: false,
+		},
+		{
+			name: "local array declaration",
+			content: `
+src_configure() {
+	local myeconfargs=(
+		--prefix=/usr
+		--with-foo
+	)
+	econf "${myeconfargs[@]}"
+}
+`,
+			wantErr: false,
+		},
+		{
+			name: "array with usex conditional",
+			content: `
+src_configure() {
+	local mycmakeargs=(
+		-DBUILD_TESTING=$(usex test)
+	)
+}
+`,
+			wantErr: false,
+		},
+		{
+			name: "complex brace expansion",
+			content: `
+src_prepare() {
+	touch {,doc/,lib/,src/}Makefile.in || die
+}
+`,
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ParseEbuildScriptFromString(tt.content)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ParseEbuildScriptFromString() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestParseEbuildScript_UnsupportedSyntax documents known parser limitations.
+// These patterns are valid bash but not supported by mvdan.cc/sh parser.
+func TestParseEbuildScript_UnsupportedSyntax(t *testing.T) {
+	tests := []struct {
+		name        string
+		content     string
+		wantErr     bool
+		description string
+	}{
+		{
+			name:        "brace expansion in variable name",
+			content:     `export RUN_{VERY_,}EXPENSIVE_TESTS=yes`,
+			wantErr:     true,
+			description: "Brace expansion in variable names not supported by mvdan.cc/sh",
+		},
+		{
+			name:        "brace expansion in export statement",
+			content:     `export FOO_{A,B}_BAR=value`,
+			wantErr:     true,
+			description: "Multiple variable names via brace expansion not supported",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ParseEbuildScriptFromString(tt.content)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ParseEbuildScriptFromString() error = %v, wantErr %v\nNote: %s",
+					err, tt.wantErr, tt.description)
+			}
+			if tt.wantErr && err != nil {
+				t.Logf("Expected limitation: %s - error: %v", tt.description, err)
+			}
+		})
+	}
+}
+
+// TestParseEbuildScript_RealWorldPatterns tests patterns from real Gentoo ebuilds.
+func TestParseEbuildScript_RealWorldPatterns(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		wantErr bool
+	}{
+		{
+			name: "cmake with options array",
+			content: `
+EAPI=8
+inherit cmake
+
+src_configure() {
+	local mycmakeargs=(
+		-DCMAKE_INSTALL_PREFIX="${EPREFIX}/usr"
+		-DBUILD_SHARED_LIBS=ON
+		$(cmake_use_find_package doc Doxygen)
+	)
+	cmake_src_configure
+}
+`,
+			wantErr: false,
+		},
+		{
+			name: "meson with options",
+			content: `
+EAPI=8
+inherit meson
+
+src_configure() {
+	local emesonargs=(
+		-Ddefault_library=shared
+		$(meson_use test tests)
+	)
+	meson_src_configure
+}
+`,
+			wantErr: false,
+		},
+		{
+			name: "autotools with flag-o-matic",
+			content: `
+EAPI=8
+inherit autotools flag-o-matic
+
+src_configure() {
+	append-cflags -fPIC
+	econf \
+		--disable-static \
+		$(use_enable nls)
+}
+`,
+			wantErr: false,
+		},
+		{
+			name: "complex use conditional",
+			content: `
+src_install() {
+	default
+	use doc && dodoc -r docs/*
+	if use examples; then
+		docinto examples
+		dodoc -r examples/*
+	fi
+}
+`,
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ParseEbuildScriptFromString(tt.content)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ParseEbuildScriptFromString() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}

@@ -72,8 +72,8 @@ func (i *Interpreter) SetPackageDatabase(db *state.PackageDatabase) {
 // The script is parsed and executed with the ebuild environment variables
 // available and Portage helper commands intercepted by the exec handler.
 func (i *Interpreter) Run(ctx context.Context, script string) error {
-	// Parse the script
-	parser := syntax.NewParser()
+	// Parse the script with bash variant for full ebuild compatibility
+	parser := syntax.NewParser(syntax.Variant(syntax.LangBash))
 	prog, err := parser.Parse(strings.NewReader(script), "script")
 	if err != nil {
 		return fmt.Errorf("parsing script: %w", err)
@@ -304,15 +304,30 @@ func (i *Interpreter) buildCommandMap() map[string]helperFunc {
 		"multilib_native_use_enable": i.helpers.MultilibNativeUseEnable,
 
 		// flag-o-matic.eclass functions
-		"append-cflags":     i.helpers.AppendCflags,
-		"append-cxxflags":   i.helpers.AppendCxxflags,
-		"append-ldflags":    i.helpers.AppendLdflags,
-		"append-flags":      i.helpers.AppendFlags,
-		"filter-flags":      i.helpers.FilterFlags,
-		"filter-ldflags":    i.helpers.FilterLdflags,
-		"strip-flags":       i.helpers.StripFlags,
-		"replace-cpu-flags": i.helpers.ReplaceCpuFlags,
-		"is-flag-supported": i.helpers.IsFlagSupported,
+		"append-cflags":           i.helpers.AppendCflags,
+		"append-cxxflags":         i.helpers.AppendCxxflags,
+		"append-cppflags":         i.helpers.AppendCppflags,
+		"append-ldflags":          i.helpers.AppendLdflags,
+		"append-flags":            i.helpers.AppendFlags,
+		"append-lfs-flags":        i.helpers.AppendLfsFlags,
+		"filter-flags":            i.helpers.FilterFlags,
+		"filter-ldflags":          i.helpers.FilterLdflags,
+		"filter-lfs-flags":        i.helpers.FilterLfsFlags,
+		"replace-flags":           i.helpers.ReplaceFlagsImpl,
+		"replace-cpu-flags":       i.helpers.ReplaceCpuFlags,
+		"strip-flags":             i.helpers.StripFlags,
+		"strip-unsupported-flags": i.helpers.StripUnsupportedFlags,
+		"test-flags-CC":           i.helpers.TestFlagsCC,
+		"test-flags-CXX":          i.helpers.TestFlagsCXX,
+		"test-flags-F77":          i.helpers.TestFlagsF77,
+		"test-flags-FC":           i.helpers.TestFlagsFC,
+		"test-flags":              i.helpers.TestFlagsAll,
+		"get-flag":                i.helpers.GetFlag,
+		"is-flag":                 i.helpers.IsFlag,
+		"is-ldflag":               i.helpers.IsLdflag,
+		"is-flag-supported":       i.helpers.IsFlagSupported,
+		"no-as-needed":            i.helpers.NoAsNeeded,
+		"raw-ldflags":             i.helpers.RawLdflags,
 
 		// linux-info.eclass functions
 		"get_version":               i.helpers.GetVersion,
@@ -326,6 +341,31 @@ func (i *Interpreter) buildCommandMap() map[string]helperFunc {
 		"edosym":           i.helpers.Edosym,
 		"has_version":      i.helpers.HasVersion,
 		"best_version":     i.helpers.BestVersion,
+
+		// cmake.eclass functions
+		"cmake":                          i.helpers.Cmake,
+		"cmake_src_prepare":              i.helpers.CmakeSrcPrepare,
+		"cmake_src_configure":            i.helpers.CmakeSrcConfigure,
+		"cmake_src_compile":              i.helpers.CmakeSrcCompile,
+		"cmake_src_test":                 i.helpers.CmakeSrcTest,
+		"cmake_src_install":              i.helpers.CmakeSrcInstall,
+		"cmake_use":                      i.helpers.CmakeUse,
+		"cmake_use_find_package":         i.helpers.CmakeUseFindPackage,
+		"cmake_comment_add_subdirectory": i.helpers.CmakeCommentAddSubdirectory,
+		"cmake_run_in":                   i.helpers.CmakeRunIn,
+		"cmake_build_type":               i.helpers.CmakeBuildType,
+		"cmake_multilib_src_configure":   i.helpers.CmakeMultilibSrcConfigure,
+		"eninja":                         i.helpers.Eninja,
+
+		// meson.eclass functions
+		"meson":               i.helpers.Meson,
+		"meson_src_configure": i.helpers.MesonSrcConfigure,
+		"meson_src_compile":   i.helpers.MesonSrcCompile,
+		"meson_src_test":      i.helpers.MesonSrcTest,
+		"meson_src_install":   i.helpers.MesonSrcInstall,
+		"meson_use":           i.helpers.MesonUse,
+		"meson_feature":       i.helpers.MesonFeature,
+		"meson_use_bool":      i.helpers.MesonUseBool,
 
 		// Banned commands (PMS Section 12.3.2 / Table 12.3)
 		// These stubs check EAPI and return appropriate errors.
@@ -361,10 +401,12 @@ func (i *Interpreter) buildCommandMap() map[string]helperFunc {
 //   - sed, cat, mkdir, rm, cp, mv, chmod, ln, find, grep, xargs, etc. (utilities)
 //   - epatch, eshopts_push, eshopts_pop, estack_push, estack_pop (eutils)
 //   - get_libdir, multilib_native_use_* (multilib)
-//   - append-cflags, filter-flags, strip-flags, etc. (flag-o-matic)
+//   - append-*, filter-*, replace-*, strip-*, test-flags-*, get-flag, is-flag, is-ldflag, no-as-needed, raw-ldflags (flag-o-matic)
 //   - get_version, linux_config_exists (linux-info)
 //   - inherit, EXPORT_FUNCTIONS (eclass support)
 //   - has_version, best_version (package queries)
+//   - cmake_*, eninja (cmake.eclass)
+//   - meson_*, meson (meson.eclass)
 //
 // Unhandled commands are passed to the next handler (real shell execution).
 func (i *Interpreter) execHandler(next interp.ExecHandlerFunc) interp.ExecHandlerFunc {
