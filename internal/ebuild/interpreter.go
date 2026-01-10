@@ -72,8 +72,8 @@ func (i *Interpreter) SetPackageDatabase(db *state.PackageDatabase) {
 // The script is parsed and executed with the ebuild environment variables
 // available and Portage helper commands intercepted by the exec handler.
 func (i *Interpreter) Run(ctx context.Context, script string) error {
-	// Parse the script
-	parser := syntax.NewParser()
+	// Parse the script with bash variant for full ebuild compatibility
+	parser := syntax.NewParser(syntax.Variant(syntax.LangBash))
 	prog, err := parser.Parse(strings.NewReader(script), "script")
 	if err != nil {
 		return fmt.Errorf("parsing script: %w", err)
