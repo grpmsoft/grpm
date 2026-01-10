@@ -327,6 +327,31 @@ func (i *Interpreter) buildCommandMap() map[string]helperFunc {
 		"has_version":      i.helpers.HasVersion,
 		"best_version":     i.helpers.BestVersion,
 
+		// cmake.eclass functions
+		"cmake":                          i.helpers.Cmake,
+		"cmake_src_prepare":              i.helpers.CmakeSrcPrepare,
+		"cmake_src_configure":            i.helpers.CmakeSrcConfigure,
+		"cmake_src_compile":              i.helpers.CmakeSrcCompile,
+		"cmake_src_test":                 i.helpers.CmakeSrcTest,
+		"cmake_src_install":              i.helpers.CmakeSrcInstall,
+		"cmake_use":                      i.helpers.CmakeUse,
+		"cmake_use_find_package":         i.helpers.CmakeUseFindPackage,
+		"cmake_comment_add_subdirectory": i.helpers.CmakeCommentAddSubdirectory,
+		"cmake_run_in":                   i.helpers.CmakeRunIn,
+		"cmake_build_type":               i.helpers.CmakeBuildType,
+		"cmake_multilib_src_configure":   i.helpers.CmakeMultilibSrcConfigure,
+		"eninja":                         i.helpers.Eninja,
+
+		// meson.eclass functions
+		"meson":               i.helpers.Meson,
+		"meson_src_configure": i.helpers.MesonSrcConfigure,
+		"meson_src_compile":   i.helpers.MesonSrcCompile,
+		"meson_src_test":      i.helpers.MesonSrcTest,
+		"meson_src_install":   i.helpers.MesonSrcInstall,
+		"meson_use":           i.helpers.MesonUse,
+		"meson_feature":       i.helpers.MesonFeature,
+		"meson_use_bool":      i.helpers.MesonUseBool,
+
 		// Banned commands (PMS Section 12.3.2 / Table 12.3)
 		// These stubs check EAPI and return appropriate errors.
 		"dohard":   i.helpers.Dohard,   // Banned in EAPI 4+
@@ -365,6 +390,8 @@ func (i *Interpreter) buildCommandMap() map[string]helperFunc {
 //   - get_version, linux_config_exists (linux-info)
 //   - inherit, EXPORT_FUNCTIONS (eclass support)
 //   - has_version, best_version (package queries)
+//   - cmake_*, eninja (cmake.eclass)
+//   - meson_*, meson (meson.eclass)
 //
 // Unhandled commands are passed to the next handler (real shell execution).
 func (i *Interpreter) execHandler(next interp.ExecHandlerFunc) interp.ExecHandlerFunc {
