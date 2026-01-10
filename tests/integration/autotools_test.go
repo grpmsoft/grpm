@@ -91,21 +91,23 @@ var AutotoolsPackages = []PackageSpec{
 func TestAutotools_ParseAll(t *testing.T) {
 	skipIfNoRepo(t)
 
-	var passed, failed, skipped int
+	// Count skipped packages upfront for accurate statistics
+	skipped := 0
+	for _, spec := range AutotoolsPackages {
+		if spec.SkipReason != "" {
+			skipped++
+		}
+	}
 
 	for _, spec := range AutotoolsPackages {
 		spec := spec
 		t.Run(spec.Atom, func(t *testing.T) {
 			if spec.SkipReason != "" {
 				t.Skip(spec.SkipReason)
-				skipped++
-				return
 			}
 
 			if !packageExists(t, spec.Atom) {
 				t.Skipf("Package %s not found in repository", spec.Atom)
-				skipped++
-				return
 			}
 
 			// Validate parsing
@@ -113,27 +115,16 @@ func TestAutotools_ParseAll(t *testing.T) {
 			if result.Success {
 				t.Logf("SUCCESS: %s-%s parsed (inherits: %v)",
 					spec.Atom, result.Version, result.Inherits)
-				passed++
 			} else {
 				t.Errorf("FAILED: %s: %v", spec.Atom, result.Error)
-				failed++
 			}
 		})
 	}
 
 	total := len(AutotoolsPackages)
+	expected := total - skipped
 	t.Logf("=== Autotools Parsing Summary ===")
-	t.Logf("Total: %d, Passed: %d, Failed: %d, Skipped: %d", total, passed, failed, skipped)
-
-	// Require 90% pass rate for non-skipped packages
-	if total-skipped > 0 {
-		passRate := float64(passed) / float64(total-skipped) * 100
-		t.Logf("Pass Rate: %.1f%% (target: 90%%)", passRate)
-
-		if passRate < 90 {
-			t.Errorf("Pass rate %.1f%% is below target of 90%%", passRate)
-		}
-	}
+	t.Logf("Total: %d, Expected to parse: %d, Skipped: %d", total, expected, skipped)
 }
 
 // TestAutotools_HelloWorld validates the canonical GNU Hello package.

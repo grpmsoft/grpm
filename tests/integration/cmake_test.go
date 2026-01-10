@@ -124,47 +124,39 @@ var CMakePackages = []PackageSpec{
 func TestCMake_ParseAll(t *testing.T) {
 	skipIfNoRepo(t)
 
-	var passed, failed, skipped int
+	// Count skipped packages upfront for accurate statistics
+	skipped := 0
+	for _, spec := range CMakePackages {
+		if spec.SkipReason != "" {
+			skipped++
+		}
+	}
 
 	for _, spec := range CMakePackages {
 		spec := spec
 		t.Run(spec.Atom, func(t *testing.T) {
 			if spec.SkipReason != "" {
 				t.Skip(spec.SkipReason)
-				skipped++
-				return
 			}
 
 			if !packageExists(t, spec.Atom) {
 				t.Skipf("Package %s not found in repository", spec.Atom)
-				skipped++
-				return
 			}
 
 			result := validatePackageParsing(t, spec.Atom)
 			if result.Success {
 				t.Logf("SUCCESS: %s-%s parsed (inherits: %v)",
 					spec.Atom, result.Version, result.Inherits)
-				passed++
 			} else {
 				t.Errorf("FAILED: %s: %v", spec.Atom, result.Error)
-				failed++
 			}
 		})
 	}
 
 	total := len(CMakePackages)
+	expected := total - skipped
 	t.Logf("=== CMake Parsing Summary ===")
-	t.Logf("Total: %d, Passed: %d, Failed: %d, Skipped: %d", total, passed, failed, skipped)
-
-	if total-skipped > 0 {
-		passRate := float64(passed) / float64(total-skipped) * 100
-		t.Logf("Pass Rate: %.1f%% (target: 80%%)", passRate)
-
-		if passRate < 80 {
-			t.Errorf("Pass rate %.1f%% is below target of 80%%", passRate)
-		}
-	}
+	t.Logf("Total: %d, Expected to parse: %d, Skipped: %d", total, expected, skipped)
 }
 
 // TestCMake_EclassInheritance verifies cmake.eclass inheritance detection.
