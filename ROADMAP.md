@@ -1,10 +1,10 @@
 # GRPM Roadmap
 
-> **Rapid Development Phase Complete (v0.1.0 → v0.5.0)**
+> **Stabilization Phase Active (v0.5.2)**
 >
-> The initial rapid development phase has been completed.
-> GRPM now supports approximately 75% of the Gentoo package tree.
-> Future development focuses on stability, testing, and community feedback.
+> Rapid development complete (v0.1.0 → v0.5.0).
+> ~75% Gentoo package tree coverage achieved.
+> Now focusing on infrastructure, testing, and production readiness.
 
 ---
 
@@ -12,10 +12,26 @@
 
 GRPM aims to be a modern, reliable package manager for Gentoo Linux with:
 - SAT-based dependency resolution for guaranteed conflict-free solutions
-- Full Portage/ebuild compatibility
+- Full Portage/ebuild compatibility via dynamic eclass loading
 - Binary package support (GPKG and TBZ2 formats)
 - Modern daemon architecture with gRPC/REST APIs
 - High performance through native Go implementation
+
+---
+
+## Architecture Breakthrough (v0.5.2)
+
+**Dynamic Eclass Loading via mvdan.cc/sh**
+
+```
+Eclass (bash) → mvdan.cc/sh interpreter → execHandler → Go helpers OR shell pass-through
+```
+
+Key insight: **Eclasses don't need Go implementations.** They are loaded dynamically from the repository and executed by the bash interpreter. Commands are either:
+- Intercepted by Go helpers (100+ implemented)
+- Passed through to real shell execution
+
+**Implication:** Most eclasses (xdg, desktop, systemd, edo, optfeature, etc.) work out-of-box.
 
 ---
 
@@ -32,10 +48,33 @@ GRPM aims to be a modern, reliable package manager for Gentoo Linux with:
 | **Binary Packages** | GPKG (.gpkg.tar), TBZ2 (.tbz2) read/write |
 | **Sync** | rsync, git with GPG verification |
 | **API** | gRPC + REST daemon architecture |
+| **Eclass Loading** | Dynamic via mvdan.cc/sh (100+ helpers) |
+
+### What's Blocking 75% → 90%?
+
+| Blocker | Impact | Resolution |
+|---------|--------|------------|
+| **No distfile fetching** | ~4% | v0.6.0 |
+| **Missing debug-print functions** | < 1% | v0.6.0 |
+| **Untested eclasses** | Unknown | v0.6.0 |
+| **External tools on user's system** | Variable | v0.6.0 (detection) |
 
 ---
 
 ## Release History
+
+### v0.5.2 — Dynamic Eclass Loading (Current)
+
+**Architecture overhaul** enabling universal eclass support:
+
+- **Dynamic eclass loading** via mvdan.cc/sh bash interpreter
+- **HybridLoader** with Go fallback implementations
+- New `internal/eclass/` package (3300+ lines)
+- Addresses community feedback about hardcoded eclasses
+
+### v0.5.1 — Hotfix: Multilib ABI Lookup
+
+- Fix deterministic ABI lookup in multilib functions
 
 ### v0.5.0 — Language Ecosystems
 
@@ -59,118 +98,123 @@ GRPM aims to be a modern, reliable package manager for Gentoo Linux with:
 - **Repository Cache** — SQLite-backed metadata cache (modernc.org/sqlite, pure Go)
 - **Integration Tests** — 2768 lines covering autotools, cmake, meson packages
 
-### v0.3.0 — PMS Compliance
+### Earlier Releases
 
-**Major release** with comprehensive PMS (Package Manager Specification) compliance:
-
-- **EAPI Feature Matrix** — Complete EAPI 0-8 support with 30+ feature flags
-- **PMS-Compliant Atom Parser** — Section 8.3 compliant parser with all operators
-- **Version Commands** — `ver_test`, `ver_cut`, `ver_rs` per PMS Algorithm 3.2-3.7
-- **Environment Variables** — PVR, ROOT, EROOT, SYSROOT, ESYSROOT, BROOT
-- **Error Handling** — `assert`, `nonfatal` commands
-- **Phase Functions** — `pkg_pretend`, `pkg_config`, `pkg_info`, `pkg_nofetch`
-- **Installation Helpers** — `into`, `doinfo`, `domo`
-- **Default Functions** — `default_src_*` implementations
-- **Banned Commands** — EAPI-aware validation with deprecation warnings
-- **mvdan.cc/sh Integration** — Direct bash compatibility (GoSh wrapper not needed)
-- **PMS Test Suite** — 1076 lines of compliance tests
-
-### v0.2.1 — PMS Version Comparison
-
-- PMS-compliant version comparison (Algorithm 3.2-3.7)
-- Version suffix ordering fix (`_alpha < _beta < _pre < _rc < release < _p`)
-- Leading zero and letter suffix handling
-
-### v0.2.0 — Ebuild Parser Improvements
-
-- Package variable expansion (${P}, ${PN}, ${PV}, ${PVR}, ${PF}, ${CATEGORY})
-- Removed builtin eclass handling (all eclasses from repository)
-- REST API socket improvements
-- Native xargs helper implementation
-
-### v0.1.1 — Module Architecture
-
-- Real eclass `inherit` with `EXPORT_FUNCTIONS`
-- Proper phase dispatch to custom functions
-- Hook phases working correctly
-- Enhanced `has_version`/`best_version`
-
-### v0.1.0 — Initial Public Release
-
-First public release with core functionality:
-
-- SAT-based dependency resolution (gophersat)
-- Daemon architecture (gRPC + REST API)
-- Native repository sync (rsync/git with GPG verification)
-- Binary package support (read/write GPKG and TBZ2)
-- Source building (emerge command with autotools workflow)
-- Profile system and configuration management
-- Package installation/removal with collision detection
+- **v0.3.0** — PMS Compliance (EAPI 0-8, ver_* commands, mvdan.cc/sh)
+- **v0.2.x** — Parser improvements, version comparison hotfixes
+- **v0.1.x** — Foundation, module architecture, initial release
 
 ---
 
-## Development Approach
+## Roadmap to v1.0.0
 
-GRPM follows iterative development with community feedback:
-
-1. **v0.x.x releases** — Feature development, API refinement, bug fixes
-2. **Community testing** — Real-world validation on Gentoo systems
-3. **API stabilization** — Freeze public APIs based on feedback
-4. **v1.0.0** — Production release after community validation and API freeze
-
-**v1.0.0 will be released only when:**
-- API is stable and frozen
-- Community has validated the software
-- No critical bugs remain
-- Documentation is complete
-
-No fixed timeline for v1.0.0 — quality and stability over deadlines.
-
----
-
-## Planned Features
-
-### Next (v0.6.0+)
-
-- [ ] Web UI for daemon management
-- [ ] Parallel package builds
-- [ ] Distributed build support
-- [ ] Plugin system for custom build systems
-- [ ] Performance optimization for large dependency graphs
-
-### Future (post-1.0)
-
-- [ ] Native GUI application
-- [ ] Cross-compilation support
-- [ ] Container integration
+```
+v0.5.2 ← CURRENT
+    ↓
+v0.6.0 — Infrastructure & Quality (5 tasks)
+    │   • Distfile fetching (P0 critical)
+    │   • Missing helper functions
+    │   • Eclass integration testing
+    │   • Coverage analyzer tool
+    │   • External tool detection
+    ↓
+v0.7.0 — Validation & Documentation (3 tasks)
+    │   • Eclass compatibility matrix
+    │   • Helper function gap analysis
+    │   • Error handling improvements
+    ↓
+v0.8.0 — Production Hardening (2 tasks)
+    │   • Performance optimization
+    │   • Structured logging
+    ↓
+v0.9.0 — Pre-Release (2 tasks)
+    │   • Community testing program
+    │   • Documentation finalization
+    ↓
+v1.0.0 — Production Release
+         90%+ coverage verified, community sign-off
+```
 
 ---
 
-## Completed Features
+## v0.6.0 — Infrastructure & Quality
 
-### v0.5.0 — Language Ecosystems
-- [x] Python eclasses (python-utils-r1, python-single-r1, python-r1, distutils-r1)
-- [x] Package sets (@world, @system, @selected, @preserved-rebuild)
-- [x] Multilib eclass (32-bit/64-bit ABI)
-- [x] REQUIRED_USE solver
-- [x] cargo.eclass (Rust)
-- [x] go-module.eclass (Go)
+**Focus:** Enable actual package building and verify coverage claims
 
-### v0.4.0 — Build Systems
-- [x] CMake build system support
-- [x] Meson build system support
-- [x] toolchain-funcs eclass
-- [x] flag-o-matic eclass
-- [x] Repository metadata cache
-- [x] Integration test framework
+| ID | Task | Priority | Impact |
+|----|------|----------|--------|
+| v0.6.0-001 | **Distfile Fetching** | P0 | Unblocks ~80% of packages |
+| v0.6.0-002 | Missing Helpers | P1 | debug-print, etc. |
+| v0.6.0-003 | Eclass Integration Testing | P1 | Validate coverage |
+| v0.6.0-004 | Coverage Analyzer | P2 | `grpm analyze` command |
+| v0.6.0-005 | External Tool Detection | P2 | Better error messages |
 
-### v0.3.0 — PMS Compliance
-- [x] EAPI 0-8 feature matrix
-- [x] PMS-compliant atom parser
-- [x] Version manipulation commands
-- [x] Error handling commands
-- [x] Default phase functions
-- [x] mvdan.cc/sh bash integration
+Key deliverables:
+- Automatic source tarball downloading (SRC_URI → distfiles)
+- Integration tests for top 20 eclasses
+- `grpm analyze` command for coverage reporting
+- Clear error messages for missing tools
+
+---
+
+## v0.7.0 — Validation & Documentation
+
+**Focus:** Document what works, identify remaining gaps
+
+| Task | Priority |
+|------|----------|
+| Eclass Compatibility Matrix | P1 |
+| Helper Function Gap Analysis | P1 |
+| Error Handling Improvements | P2 |
+
+Key deliverables:
+- docs/eclass-compatibility.md (machine + human readable)
+- Complete helper function catalog
+- Production-ready error messages
+
+---
+
+## v0.8.0 — Production Hardening
+
+**Focus:** Performance and operational quality
+
+| Task | Priority |
+|------|----------|
+| Performance Optimization | P1 |
+| Structured Logging | P2 |
+
+Key deliverables:
+- 2x faster dependency resolution
+- Structured logging with levels (-v, -vv, -vvv)
+- Per-package build logs
+
+---
+
+## v0.9.0 — Pre-Release
+
+**Focus:** Community validation
+
+| Task | Priority |
+|------|----------|
+| Community Testing Program | P0 |
+| Documentation Finalization | P1 |
+
+Key deliverables:
+- Alpha/beta testing with 50+ testers
+- 1,000+ packages tested on real systems
+- Complete user documentation and migration guide
+
+---
+
+## v1.0.0 — Production Release
+
+**Release Criteria:**
+- ✅ 90%+ tree coverage verified by community
+- ✅ 0 critical bugs, < 5 high bugs
+- ✅ API stable and documented
+- ✅ User guide and migration guide complete
+- ✅ Ebuild in GURU overlay
+- ✅ Community sign-off
 
 ---
 
@@ -178,19 +222,21 @@ No fixed timeline for v1.0.0 — quality and stability over deadlines.
 
 | Metric | Target |
 |--------|--------|
-| Test Coverage | 80%+ overall, 90%+ for domain logic |
+| Test Coverage | 70%+ overall, 90%+ for domain logic |
 | Performance | Competitive with emerge |
 | Documentation | Complete API docs + user guides |
 | Stability | Zero critical bugs |
+| Tree Coverage | 90%+ of Gentoo packages |
 
 ---
 
 ## How to Contribute
 
-1. Try GRPM and report issues
-2. Submit feature requests via GitHub Issues
-3. Contribute code following [CONTRIBUTING.md](CONTRIBUTING.md)
-4. Help with documentation and testing
+1. **Try GRPM** and report issues
+2. **Test eclasses** and report what works/doesn't
+3. Submit feature requests via GitHub Issues
+4. Contribute code following [CONTRIBUTING.md](CONTRIBUTING.md)
+5. Help with documentation and testing
 
 ---
 
@@ -198,8 +244,10 @@ No fixed timeline for v1.0.0 — quality and stability over deadlines.
 
 - **Repository:** https://github.com/grpmsoft/grpm
 - **Issues:** https://github.com/grpmsoft/grpm/issues
+- **Kanban Board:** [docs/dev/kanban/BOARD.md](docs/dev/kanban/BOARD.md)
 - **Documentation:** [docs/](docs/)
 
 ---
 
 *This roadmap evolves based on community feedback and project needs.*
+*Last updated: 2026-01-12*

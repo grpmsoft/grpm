@@ -50,3 +50,5 @@ go.work.sum
 
 docs/dev/
 INDEX.md
+
+*-cwd

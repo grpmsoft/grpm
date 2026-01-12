@@ -11,7 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Performance optimization for large dependency graphs
 - Web UI for daemon management
 - Native GUI application ([gogpu/ui](https://github.com/gogpu/ui))
-- Additional eclass implementations
+- Distfile fetching with mirror support (v0.6.0)
+- Coverage analyzer tool (v0.6.0)
 
 ---
 
@@ -474,8 +475,6 @@ GRPM (Go Resource Package Manager) is a modern reimplementation of Gentoo's Port
 - Full ebuild execution engine
 - PMS phase implementation (setup through install)
 - Autotools workflow support (configure/make/make install)
-- Distfile fetching with mirror failover and resume
-- Build sandboxing with Linux namespaces
 - Parallel compilation support
 
 #### System Integration
@@ -557,7 +556,8 @@ GRPM (Go Resource Package Manager) is a modern reimplementation of Gentoo's Port
 - **Issues**: https://github.com/grpmsoft/grpm/issues
 - **License**: [Apache-2.0](LICENSE)
 
-[Unreleased]: https://github.com/grpmsoft/grpm/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/grpmsoft/grpm/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/grpmsoft/grpm/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/grpmsoft/grpm/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/grpmsoft/grpm/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/grpmsoft/grpm/compare/v0.3.0...v0.4.0
