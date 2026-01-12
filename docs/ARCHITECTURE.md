@@ -30,7 +30,7 @@ flowchart TB
     subgraph Infrastructure["Infrastructure Layer"]
         REPO[Repository<br/>Portage/Mock]
         SYNC[Sync Module<br/>rsync/git]
-        FETCH[Fetch Module<br/>planned v0.6.0]
+        FETCH[Fetch Module<br/>mirror failover]
         INSTALL[Install Engine<br/>merge/unmerge]
         BINPKG[Binary Packages<br/>GPKG/TBZ2]
         STATE[System State<br/>VarDB]
@@ -104,13 +104,15 @@ flowchart TB
 ### Infrastructure Layer
 - **Repository**: Package metadata abstraction (Portage tree, mock)
 - **Sync Module**: Repository synchronization (native rsync, git with GPG)
-- **Fetch Module**: Distfile downloading *(planned for v0.6.0)*
+- **Fetch Module**: Distfile downloading with mirror failover (v0.6.0)
 - **Install Engine**: Package merge/unmerge operations
 - **Binary Packages**: GPKG and TBZ2 format support
 - **System State**: Installed package database (VarDB)
 - **Snapshot Manager**: Btrfs/ZFS transactional rollback
 - **Metadata Cache**: SQLite-backed fast lookups
 - **Eclass System**: Dynamic eclass loading via mvdan.cc/sh
+- **Analyze Module**: Repository coverage analysis (v0.6.0)
+- **Tools Module**: External tool detection and validation (v0.6.0)
 
 ### External Systems
 - **Portage Tree**: Gentoo package repository

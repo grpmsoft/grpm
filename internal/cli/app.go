@@ -79,6 +79,9 @@ func (a *App) Run(args []string) error {
 
 	// Route to command handler
 	switch command {
+	case "help", "--help", "-h":
+		a.PrintUsage()
+		return nil
 	case "resolve":
 		return a.runResolve(cmdArgs)
 	case "install":
@@ -99,8 +102,14 @@ func (a *App) Run(args []string) error {
 		return a.runEmerge(cmdArgs)
 	case "depclean":
 		return a.runDepclean(cmdArgs)
+	case "fetch":
+		return a.runFetch(cmdArgs)
+	case "analyze":
+		return a.runAnalyze(cmdArgs)
+	case "tools":
+		return a.runTools(cmdArgs)
 	default:
-		return fmt.Errorf("unknown command: %s (available: resolve, install, sync, search, info, update, remove, build, emerge, depclean)", command)
+		return fmt.Errorf("unknown command: %s\nRun 'grpm help' for usage", command)
 	}
 }
 
@@ -117,6 +126,36 @@ func (a *App) PrintVersion() {
 	} else {
 		fmt.Println("Daemon: not available")
 	}
+}
+
+// PrintUsage prints usage information
+func (a *App) PrintUsage() {
+	fmt.Printf(`GRPM - Go Resource Package Manager v%s
+
+Usage: grpm [global-options] <command> [command-options] [arguments...]
+
+Global Options:
+  -V, --version    Show version information
+  -v, -vv, -vvv    Verbose output (levels 1-3)
+
+Commands:
+  resolve    Resolve package dependencies
+  install    Install packages (binary or source)
+  emerge     Build packages from source
+  remove     Remove installed packages
+  search     Search for packages
+  info       Show package information
+  sync       Synchronize repository
+  update     Update installed packages
+  build      Create binary packages
+  depclean   Remove unused dependencies
+  fetch      Download source files (distfiles)
+  analyze    Analyze repository coverage
+  tools      Check external tool availability
+
+Run 'grpm <command> --help' for command-specific help.
+See docs/CLI_REFERENCE.md for detailed documentation.
+`, a.version)
 }
 
 // IsDaemonMode returns true if running via daemon

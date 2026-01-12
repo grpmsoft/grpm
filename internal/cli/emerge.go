@@ -15,6 +15,7 @@ import (
 	"github.com/grpmsoft/grpm/internal/fetch"
 	"github.com/grpmsoft/grpm/internal/install"
 	"github.com/grpmsoft/grpm/internal/pkg"
+	"github.com/grpmsoft/grpm/internal/tools"
 )
 
 // runEmerge handles the 'emerge' command - builds packages from source.
@@ -52,6 +53,7 @@ func (a *App) runEmerge(args []string) error {
 	fs.BoolVar(keepGoing, "k", false, "Alias for --keep-going")
 	keepWork := fs.Bool("keep-work", false, "Keep work directory after build")
 	enableTests := fs.Bool("test", false, "Run test phase")
+	skipToolCheck := fs.Bool("skip-tool-check", false, "Skip external tool availability check")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -87,6 +89,13 @@ func (a *App) runEmerge(args []string) error {
 	if len(solution) == 0 {
 		log.Println("Nothing to build")
 		return nil
+	}
+
+	// Check external tool availability (unless skipped)
+	if !*skipToolCheck {
+		if err := a.checkBuildTools(solution, *repoPath); err != nil {
+			return err
+		}
 	}
 
 	// Display build plan
@@ -533,4 +542,77 @@ func (a *App) findEbuildFile(p *pkg.Package, repoPath string) string {
 	}
 
 	return ""
+}
+
+// checkBuildTools verifies that all required external tools are available.
+//
+// Analyzes the ebuilds in the solution to determine which eclasses are inherited,
+// then checks if the tools required by those eclasses are present on the system.
+//
+// Returns an error if required tools are missing, with suggestions for installation.
+func (a *App) checkBuildTools(solution map[string]*pkg.Package, repoPath string) error {
+	log.Println("Checking external tool availability...")
+
+	checker := tools.NewChecker()
+
+	// Collect all eclasses from all packages
+	allEclasses := make(map[string]bool)
+	for _, p := range solution {
+		ebuildPath := a.findEbuildFile(p, repoPath)
+		if ebuildPath == "" {
+			continue
+		}
+
+		// Read ebuild and extract inherit
+		content, err := os.ReadFile(ebuildPath)
+		if err != nil {
+			if a.verbose {
+				log.Printf("Warning: could not read ebuild %s: %v", ebuildPath, err)
+			}
+			continue
+		}
+
+		eclasses := tools.ExtractInherit(string(content))
+		for _, eclass := range eclasses {
+			allEclasses[eclass] = true
+		}
+	}
+
+	if len(allEclasses) == 0 {
+		if a.verbose {
+			log.Println("No eclasses detected, skipping tool check")
+		}
+		return nil
+	}
+
+	// Convert to slice
+	eclassList := make([]string, 0, len(allEclasses))
+	for eclass := range allEclasses {
+		eclassList = append(eclassList, eclass)
+	}
+
+	// Check tools for all eclasses
+	result := checker.CheckForEclasses(eclassList)
+
+	if a.verbose {
+		log.Printf("Detected eclasses: %v", eclassList)
+		log.Printf("Required tools: %d, available: %d, missing: %d",
+			len(result.Required), len(result.Available), len(result.Missing))
+	}
+
+	if !result.CanBuild {
+		fmt.Println()
+		fmt.Println("*** Error: Missing required build tools")
+		fmt.Println()
+		fmt.Print(tools.FormatMissingTools(result.Missing))
+		fmt.Println()
+		fmt.Println("Use --skip-tool-check to bypass this check (not recommended)")
+		return fmt.Errorf("missing %d required build tool(s)", len(result.Missing))
+	}
+
+	if a.verbose && len(result.Required) > 0 {
+		log.Printf("All %d required tools are available", len(result.Required))
+	}
+
+	return nil
 }

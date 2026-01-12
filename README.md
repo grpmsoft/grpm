@@ -37,7 +37,9 @@ GRPM (Go Resource Package Manager) is a modern source-based package manager writ
 | **Language Ecosystems** | Python (distutils-r1), Rust (cargo.eclass), Go (go-module.eclass) |
 | **Multilib Support** | 32-bit/64-bit library support with ABI management |
 | **Package Sets** | @world, @system, @selected, @preserved-rebuild |
-| **Distfile Fetching** | *Planned* — Manual download currently required |
+| **Distfile Fetching** | Automatic source downloading with mirror failover |
+| **Coverage Analysis** | Repository compatibility analysis with `grpm analyze` |
+| **Tool Detection** | External tool checking with `grpm tools` |
 | **Daemon Architecture** | gRPC + REST API for background operations |
 | **Repository Sync** | Native rsync and Git sync with GPG verification |
 | **Virtual Packages** | Provider selection with configuration support |
@@ -81,14 +83,23 @@ grpm search firefox
 # Show package info
 grpm info dev-lang/go
 
+# Download sources (without building)
+grpm fetch app-misc/hello
+
+# Build from source (auto-fetches sources)
+sudo grpm emerge app-misc/hello
+
 # Install from binary
 sudo grpm install --binpkg app-misc/hello
 
-# Build from source
-sudo grpm emerge app-misc/hello
-
 # Remove package
 sudo grpm remove app-misc/hello
+
+# Analyze repository coverage
+grpm analyze --category app-misc
+
+# Check available tools
+grpm tools --missing
 ```
 
 See [docs/CLI_REFERENCE.md](docs/CLI_REFERENCE.md) for complete command reference.
@@ -104,7 +115,9 @@ GRPM operates as a single binary in two modes:
 ```
 grpm
 ├── CLI Mode (default)
-│   └── resolve, install, emerge, remove, search, info, sync
+│   ├── Package: resolve, install, emerge, remove, search, info
+│   ├── Repository: sync, fetch
+│   └── Analysis: analyze, tools
 │
 └── Daemon Mode (grpm daemon)
     ├── gRPC Server (unix:///var/run/grpm.sock)

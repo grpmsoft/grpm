@@ -211,3 +211,20 @@ func (c Config) WithMirrors(mirrors []string) Config {
 	copy(c.Mirrors, mirrors)
 	return c
 }
+
+// NewFetcher creates a new Fetcher with the given configuration.
+//
+// This is the preferred way to create a Fetcher. It returns an HTTPDownloader
+// configured with the provided settings.
+//
+// If config.Mirrors is empty, DefaultMirrors will be used.
+//
+// Example:
+//
+//	fetcher := fetch.NewFetcher(fetch.Config{
+//	    DistDir: "/var/cache/distfiles",
+//	    Mirrors: []string{"https://gentoo.osuosl.org/"},
+//	})
+func NewFetcher(config Config) Fetcher {
+	return NewHTTPDownloader(config)
+}

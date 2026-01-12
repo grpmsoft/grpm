@@ -11,8 +11,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Performance optimization for large dependency graphs
 - Web UI for daemon management
 - Native GUI application ([gogpu/ui](https://github.com/gogpu/ui))
-- Distfile fetching with mirror support (v0.6.0)
-- Coverage analyzer tool (v0.6.0)
+
+---
+
+## [0.6.0] - 2026-01-12
+
+### Infrastructure & Quality Release
+
+> **Production Readiness Focus**
+>
+> This release completes the infrastructure needed for real-world package building:
+> automatic source downloading, comprehensive eclass testing, coverage analysis,
+> and external tool detection.
+
+#### Added
+
+##### Distfile Fetching (v0.6.0-001)
+- **`grpm fetch` command** - Standalone distfile downloading
+  - `grpm fetch app-misc/hello` - Download sources for a package
+  - `--pretend/-p` - Dry-run mode showing what would be downloaded
+  - `--verify` - Verify existing distfiles without downloading
+- **Automatic fetching in emerge** - Sources downloaded before build
+- **Mirror support** - GENTOO_MIRRORS from make.conf
+- **Resume support** - Partial downloads can be resumed
+- **Checksum verification** - BLAKE2B, SHA512, SHA256 from Manifest
+
+##### Debug Helpers (v0.6.0-002)
+- `debug-print` - Debug output when PORTAGE_DEBUG=1 or GRPM_DEBUG=1
+- `debug-print-function` - Log function entry points
+- `debug-print-section` - Mark logical sections in execution
+- PMS Section 12.3.16 compliant implementation
+
+##### Eclass Integration Testing (v0.6.0-003)
+- **`tests/integration/eclass_test.go`** - Comprehensive eclass test suite
+- **21 eclasses tested** with mock content for CI
+- Test categories: Load, Execute, Inherit Chain, Metadata Accumulation
+- Build tag `integration` for conditional compilation
+- Coverage: toolchain-funcs, cmake, meson, python-*, cargo, go-module, xdg, systemd, etc.
+
+##### Coverage Analyzer (v0.6.0-004)
+- **`grpm analyze` command** - Repository coverage analysis
+  - `grpm analyze` - Analyze default Gentoo repository
+  - `--repo/-r PATH` - Custom repository path
+  - `--output/-o FORMAT` - Output: text, json, markdown
+  - `--category/-c NAME` - Filter by category
+  - `--verbose/-v` - Show per-package details
+- **Analysis engine** (`internal/analyze/`)
+  - EAPI validation (supports 0-8)
+  - Eclass availability checking
+  - Helper function coverage
+  - Blocker categorization
+- **Reports** - Actionable coverage reports with blocker breakdown
+
+##### External Tool Detection (v0.6.0-005)
+- **`grpm tools` command** - Tool availability management
+  - `grpm tools` - List all known tools with status
+  - `--check` - Summary of tool availability
+  - `--missing` - Show missing tools with install hints
+  - `--available` - Show available tools with paths
+  - `--category NAME` - Filter by category (compilers, build, etc.)
+  - `--for-eclass NAME` - Tools needed for specific eclass
+- **Tool registry** (`internal/tools/`)
+  - 50+ tools registered across 7 categories
+  - Gentoo package suggestions for missing tools
+  - Eclass-to-tool mappings
+- **Pre-build validation** - Check required tools before emerge
+  - `--skip-tool-check` flag to bypass validation
+
+#### Technical Details
+- New packages: `internal/analyze/`, `internal/tools/`
+- New CLI commands: `fetch`, `analyze`, `tools`
+- 70+ new tests across all features
+- All code passes golangci-lint with 0 issues
 
 ---
 
@@ -556,7 +626,8 @@ GRPM (Go Resource Package Manager) is a modern reimplementation of Gentoo's Port
 - **Issues**: https://github.com/grpmsoft/grpm/issues
 - **License**: [Apache-2.0](LICENSE)
 
-[Unreleased]: https://github.com/grpmsoft/grpm/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/grpmsoft/grpm/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/grpmsoft/grpm/compare/v0.5.2...v0.6.0
 [0.5.2]: https://github.com/grpmsoft/grpm/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/grpmsoft/grpm/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/grpmsoft/grpm/compare/v0.4.0...v0.5.0
