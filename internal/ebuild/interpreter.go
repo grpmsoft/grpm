@@ -170,6 +170,11 @@ func (i *Interpreter) buildCommandMap() map[string]helperFunc {
 		"eend":     i.helpers.Eend,
 		"nonfatal": i.helpers.Nonfatal, // PMS Section 12.3.1 - EAPI 4+
 
+		// Debug functions (PMS Section 12.3.16)
+		"debug-print":          i.helpers.DebugPrint,
+		"debug-print-function": i.helpers.DebugPrintFunction,
+		"debug-print-section":  i.helpers.DebugPrintSection,
+
 		// USE flag functions
 		"has":        i.helpers.Has,
 		"use":        i.helpers.Use,

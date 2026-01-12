@@ -145,8 +145,8 @@ func DefaultOptions() ExecutorOptions {
 		EnableSandbox:       true,
 		EnableTests:         false,
 		KeepWork:            false,
-		DenyNetwork:         true,  // network-sandbox by default
-		EnableDynamicEclass: true,  // dynamic eclass loading by default
+		DenyNetwork:         true, // network-sandbox by default
+		EnableDynamicEclass: true, // dynamic eclass loading by default
 	}
 }
 

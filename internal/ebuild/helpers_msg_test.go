@@ -651,3 +651,250 @@ func TestHelpers_Die_NotInNonfatalMode(t *testing.T) {
 		t.Errorf("expected DieError, got: %T", err)
 	}
 }
+
+// ============================================================================
+// Debug Print Tests (PMS Section 12.3.16)
+// ============================================================================
+
+func TestHelpers_DebugPrint_DisabledByDefault(t *testing.T) {
+	helpers, _, stderr := createTestHelpers(t)
+
+	// Debug mode should be disabled by default
+	err := helpers.DebugPrint([]string{"test message"})
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	// Output should be empty (no-op)
+	if stderr.Len() != 0 {
+		t.Errorf("expected empty stderr when debug disabled, got: %s", stderr.String())
+	}
+}
+
+func TestHelpers_DebugPrint_EnabledWithPortageDebug(t *testing.T) {
+	helpers, _, stderr := createTestHelpers(t)
+
+	// Set PORTAGE_DEBUG in environment via os.Setenv for this test
+	t.Setenv("PORTAGE_DEBUG", "1")
+
+	err := helpers.DebugPrint([]string{"test message"})
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	// Output should contain the message
+	output := stderr.String()
+	if !strings.Contains(output, "test message") {
+		t.Errorf("expected 'test message' in stderr, got: %s", output)
+	}
+	if !strings.Contains(output, "debug:") {
+		t.Errorf("expected 'debug:' prefix in stderr, got: %s", output)
+	}
+}
+
+func TestHelpers_DebugPrint_EnabledWithGrpmDebug(t *testing.T) {
+	helpers, _, stderr := createTestHelpers(t)
+
+	// Set GRPM_DEBUG in environment
+	t.Setenv("GRPM_DEBUG", "1")
+
+	err := helpers.DebugPrint([]string{"grpm test"})
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	// Output should contain the message
+	output := stderr.String()
+	if !strings.Contains(output, "grpm test") {
+		t.Errorf("expected 'grpm test' in stderr, got: %s", output)
+	}
+}
+
+func TestHelpers_DebugPrint_DisabledWithZero(t *testing.T) {
+	helpers, _, stderr := createTestHelpers(t)
+
+	// Set debug variables to "0" - should be disabled
+	t.Setenv("PORTAGE_DEBUG", "0")
+	t.Setenv("GRPM_DEBUG", "0")
+
+	err := helpers.DebugPrint([]string{"test"})
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	// Output should be empty
+	if stderr.Len() != 0 {
+		t.Errorf("expected empty stderr when debug=0, got: %s", stderr.String())
+	}
+}
+
+func TestHelpers_DebugPrint_MultipleArguments(t *testing.T) {
+	helpers, _, stderr := createTestHelpers(t)
+	t.Setenv("GRPM_DEBUG", "1")
+
+	err := helpers.DebugPrint([]string{"arg1", "arg2", "arg3"})
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	output := stderr.String()
+	if !strings.Contains(output, "arg1 arg2 arg3") {
+		t.Errorf("expected 'arg1 arg2 arg3' in stderr, got: %s", output)
+	}
+}
+
+func TestHelpers_DebugPrint_EmptyArgs(t *testing.T) {
+	helpers, _, stderr := createTestHelpers(t)
+	t.Setenv("GRPM_DEBUG", "1")
+
+	err := helpers.DebugPrint([]string{})
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	// Should output empty message with prefix
+	output := stderr.String()
+	if !strings.Contains(output, "debug:") {
+		t.Errorf("expected 'debug:' prefix in stderr, got: %s", output)
+	}
+}
+
+func TestHelpers_DebugPrintFunction_WithFunctionName(t *testing.T) {
+	helpers, _, stderr := createTestHelpers(t)
+	t.Setenv("GRPM_DEBUG", "1")
+
+	err := helpers.DebugPrintFunction([]string{"src_configure"})
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	output := stderr.String()
+	if !strings.Contains(output, "src_configure: entering function") {
+		t.Errorf("expected 'src_configure: entering function', got: %s", output)
+	}
+}
+
+func TestHelpers_DebugPrintFunction_WithExtraArgs(t *testing.T) {
+	helpers, _, stderr := createTestHelpers(t)
+	t.Setenv("GRPM_DEBUG", "1")
+
+	err := helpers.DebugPrintFunction([]string{"my_function", "param1", "param2"})
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	output := stderr.String()
+	if !strings.Contains(output, "my_function: entering function") {
+		t.Errorf("expected 'my_function: entering function', got: %s", output)
+	}
+	if !strings.Contains(output, "param1") {
+		t.Errorf("expected 'param1' in output, got: %s", output)
+	}
+	if !strings.Contains(output, "param2") {
+		t.Errorf("expected 'param2' in output, got: %s", output)
+	}
+}
+
+func TestHelpers_DebugPrintFunction_EmptyArgs(t *testing.T) {
+	helpers, _, stderr := createTestHelpers(t)
+	t.Setenv("GRPM_DEBUG", "1")
+
+	err := helpers.DebugPrintFunction([]string{})
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	output := stderr.String()
+	if !strings.Contains(output, "(unknown): entering function") {
+		t.Errorf("expected '(unknown): entering function', got: %s", output)
+	}
+}
+
+func TestHelpers_DebugPrintFunction_DisabledByDefault(t *testing.T) {
+	helpers, _, stderr := createTestHelpers(t)
+
+	err := helpers.DebugPrintFunction([]string{"some_function"})
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	// Should be silent when debug disabled
+	if stderr.Len() != 0 {
+		t.Errorf("expected empty stderr when debug disabled, got: %s", stderr.String())
+	}
+}
+
+func TestHelpers_DebugPrintSection_WithSection(t *testing.T) {
+	helpers, _, stderr := createTestHelpers(t)
+	t.Setenv("GRPM_DEBUG", "1")
+
+	err := helpers.DebugPrintSection([]string{"installation"})
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	output := stderr.String()
+	if !strings.Contains(output, "now in section installation") {
+		t.Errorf("expected 'now in section installation', got: %s", output)
+	}
+}
+
+func TestHelpers_DebugPrintSection_MultipleWords(t *testing.T) {
+	helpers, _, stderr := createTestHelpers(t)
+	t.Setenv("GRPM_DEBUG", "1")
+
+	err := helpers.DebugPrintSection([]string{"installing", "documentation", "files"})
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	output := stderr.String()
+	if !strings.Contains(output, "now in section installing documentation files") {
+		t.Errorf("expected 'now in section installing documentation files', got: %s", output)
+	}
+}
+
+func TestHelpers_DebugPrintSection_EmptyArgs(t *testing.T) {
+	helpers, _, stderr := createTestHelpers(t)
+	t.Setenv("GRPM_DEBUG", "1")
+
+	err := helpers.DebugPrintSection([]string{})
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	output := stderr.String()
+	if !strings.Contains(output, "now in section") {
+		t.Errorf("expected 'now in section' in output, got: %s", output)
+	}
+}
+
+func TestHelpers_DebugPrintSection_DisabledByDefault(t *testing.T) {
+	helpers, _, stderr := createTestHelpers(t)
+
+	err := helpers.DebugPrintSection([]string{"test section"})
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	// Should be silent when debug disabled
+	if stderr.Len() != 0 {
+		t.Errorf("expected empty stderr when debug disabled, got: %s", stderr.String())
+	}
+}
+
+func TestHelpers_DebugPrint_ColorOutput(t *testing.T) {
+	helpers, _, stderr := createTestHelpers(t)
+	t.Setenv("GRPM_DEBUG", "1")
+
+	err := helpers.DebugPrint([]string{"color test"})
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	output := stderr.String()
+	// Check for cyan color code
+	if !strings.Contains(output, "\033[36m") {
+		t.Errorf("expected cyan color code in output, got: %s", output)
+	}
+}

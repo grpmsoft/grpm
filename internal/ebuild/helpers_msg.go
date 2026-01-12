@@ -6,6 +6,7 @@ package ebuild
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"mvdan.cc/sh/v3/interp"
@@ -243,4 +244,110 @@ func (h *Helpers) Einfon(args []string) error {
 	msg := strings.Join(args, " ")
 	h.writeStdout(colorGreen + " * " + colorReset + msg)
 	return nil
+}
+
+// ============================================================================
+// Debug Commands (PMS Section 12.3.16)
+// ============================================================================
+
+// colorCyan is the ANSI color code for cyan (used for debug output).
+const colorCyan = "\033[36m"
+
+// DebugPrint outputs debug information when debug mode is enabled.
+//
+// Usage: debug-print "message" [args...]
+//
+// Per PMS Section 12.3.16: If in a special debug mode, the arguments should
+// be outputted or recorded using some kind of debug logging. Normally this
+// command should be a no-op.
+//
+// Debug mode is enabled by setting PORTAGE_DEBUG=1 or GRPM_DEBUG=1 in the
+// environment.
+//
+// These commands must be implemented internally as shell functions and may
+// be called in global scope.
+func (h *Helpers) DebugPrint(args []string) error {
+	// Check if debug mode is enabled via environment variables
+	if !h.isDebugEnabled() {
+		return nil // No-op in normal mode
+	}
+
+	msg := strings.Join(args, " ")
+	h.writeStderr(colorCyan + "debug: " + colorReset + msg + "\n")
+	return nil
+}
+
+// DebugPrintFunction outputs debug information for function entry.
+//
+// Usage: debug-print-function $FUNCNAME [args...]
+//
+// Per PMS Section 12.3.16: Calls debug-print with "$1: entering function"
+// as the first argument and the remaining arguments as additional arguments.
+//
+// Example:
+//
+//	src_configure() {
+//	    debug-print-function ${FUNCNAME} "$@"
+//	    # ... function body
+//	}
+func (h *Helpers) DebugPrintFunction(args []string) error {
+	if len(args) == 0 {
+		return h.DebugPrint([]string{"(unknown): entering function"})
+	}
+
+	funcName := args[0]
+	message := funcName + ": entering function"
+
+	// Build full message with remaining args
+	fullArgs := []string{message}
+	if len(args) > 1 {
+		fullArgs = append(fullArgs, args[1:]...)
+	}
+
+	return h.DebugPrint(fullArgs)
+}
+
+// DebugPrintSection outputs debug information for section markers.
+//
+// Usage: debug-print-section "section name"
+//
+// Per PMS Section 12.3.16: Calls debug-print with "now in section $*".
+//
+// Example:
+//
+//	debug-print-section "installing documentation"
+func (h *Helpers) DebugPrintSection(args []string) error {
+	section := strings.Join(args, " ")
+	return h.DebugPrint([]string{"now in section " + section})
+}
+
+// isDebugEnabled checks if debug mode is enabled via environment variables.
+//
+// Debug mode is enabled by setting either:
+//   - PORTAGE_DEBUG=1 (Portage compatibility)
+//   - GRPM_DEBUG=1 (GRPM native)
+//
+// Any non-empty, non-zero value enables debug mode.
+func (h *Helpers) isDebugEnabled() bool {
+	// Check environment from helpers
+	if h.env != nil {
+		// Check PORTAGE_DEBUG from environment map
+		envMap := h.env.ToMap()
+		if val, ok := envMap["PORTAGE_DEBUG"]; ok && val != "" && val != "0" {
+			return true
+		}
+		if val, ok := envMap["GRPM_DEBUG"]; ok && val != "" && val != "0" {
+			return true
+		}
+	}
+
+	// Also check OS environment (for cases where env is not set)
+	if val := os.Getenv("PORTAGE_DEBUG"); val != "" && val != "0" {
+		return true
+	}
+	if val := os.Getenv("GRPM_DEBUG"); val != "" && val != "0" {
+		return true
+	}
+
+	return false
 }

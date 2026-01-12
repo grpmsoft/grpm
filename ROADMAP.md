@@ -1,10 +1,11 @@
 # GRPM Roadmap
 
-> **Stabilization Phase Active (v0.5.2)**
+> **Infrastructure Complete (v0.6.0)**
 >
 > Rapid development complete (v0.1.0 → v0.5.0).
-> ~75% Gentoo package tree coverage achieved.
-> Now focusing on infrastructure, testing, and production readiness.
+> Infrastructure release complete (v0.6.0).
+> ~75% → 90% coverage path now clear.
+> Next: validation and production hardening.
 
 ---
 
@@ -52,18 +53,29 @@ Key insight: **Eclasses don't need Go implementations.** They are loaded dynamic
 
 ### What's Blocking 75% → 90%?
 
-| Blocker | Impact | Resolution |
-|---------|--------|------------|
-| **No distfile fetching** | ~4% | v0.6.0 |
-| **Missing debug-print functions** | < 1% | v0.6.0 |
-| **Untested eclasses** | Unknown | v0.6.0 |
-| **External tools on user's system** | Variable | v0.6.0 (detection) |
+| Blocker | Impact | Status |
+|---------|--------|--------|
+| ~~No distfile fetching~~ | ~4% | ✅ v0.6.0 |
+| ~~Missing debug-print functions~~ | < 1% | ✅ v0.6.0 |
+| ~~Untested eclasses~~ | Unknown | ✅ v0.6.0 (21 tested) |
+| ~~External tools on user's system~~ | Variable | ✅ v0.6.0 (detection) |
+| **Remaining gaps** | ~5% | v0.7.0 (analysis) |
 
 ---
 
 ## Release History
 
-### v0.5.2 — Dynamic Eclass Loading (Current)
+### v0.6.0 — Infrastructure & Quality (Current)
+
+**Production readiness infrastructure:**
+
+- **Distfile Fetching** — `grpm fetch` command, automatic source downloading
+- **Debug Helpers** — debug-print family (PMS 12.3.16 compliant)
+- **Eclass Testing** — 21 eclasses with integration tests
+- **Coverage Analyzer** — `grpm analyze` command with text/json/markdown output
+- **Tool Detection** — `grpm tools` command, 50+ tools registered
+
+### v0.5.2 — Dynamic Eclass Loading
 
 **Architecture overhaul** enabling universal eclass support:
 
@@ -109,14 +121,12 @@ Key insight: **Eclasses don't need Go implementations.** They are loaded dynamic
 ## Roadmap to v1.0.0
 
 ```
-v0.5.2 ← CURRENT
-    ↓
-v0.6.0 — Infrastructure & Quality (5 tasks)
-    │   • Distfile fetching (P0 critical)
-    │   • Missing helper functions
-    │   • Eclass integration testing
-    │   • Coverage analyzer tool
-    │   • External tool detection
+v0.6.0 ← CURRENT (Infrastructure Complete)
+    │   ✅ Distfile fetching
+    │   ✅ Debug helpers (debug-print)
+    │   ✅ Eclass integration testing (21 eclasses)
+    │   ✅ Coverage analyzer (grpm analyze)
+    │   ✅ External tool detection (grpm tools)
     ↓
 v0.7.0 — Validation & Documentation (3 tasks)
     │   • Eclass compatibility matrix
@@ -137,23 +147,24 @@ v1.0.0 — Production Release
 
 ---
 
-## v0.6.0 — Infrastructure & Quality
+## v0.6.0 — Infrastructure & Quality ✅ COMPLETE
 
 **Focus:** Enable actual package building and verify coverage claims
 
-| ID | Task | Priority | Impact |
+| ID | Task | Priority | Status |
 |----|------|----------|--------|
-| v0.6.0-001 | **Distfile Fetching** | P0 | Unblocks ~80% of packages |
-| v0.6.0-002 | Missing Helpers | P1 | debug-print, etc. |
-| v0.6.0-003 | Eclass Integration Testing | P1 | Validate coverage |
-| v0.6.0-004 | Coverage Analyzer | P2 | `grpm analyze` command |
-| v0.6.0-005 | External Tool Detection | P2 | Better error messages |
+| v0.6.0-001 | **Distfile Fetching** | P0 | ✅ Done |
+| v0.6.0-002 | Missing Helpers | P1 | ✅ Done |
+| v0.6.0-003 | Eclass Integration Testing | P1 | ✅ Done |
+| v0.6.0-004 | Coverage Analyzer | P2 | ✅ Done |
+| v0.6.0-005 | External Tool Detection | P2 | ✅ Done |
 
-Key deliverables:
-- Automatic source tarball downloading (SRC_URI → distfiles)
-- Integration tests for top 20 eclasses
-- `grpm analyze` command for coverage reporting
-- Clear error messages for missing tools
+**Delivered:**
+- `grpm fetch` — Automatic source downloading with mirror failover
+- `debug-print`, `debug-print-function`, `debug-print-section` helpers
+- 21 eclass integration tests (toolchain-funcs, cmake, meson, python-*, etc.)
+- `grpm analyze` — Repository coverage analysis (text/json/markdown)
+- `grpm tools` — External tool detection with install suggestions
 
 ---
 
@@ -250,4 +261,4 @@ Key deliverables:
 ---
 
 *This roadmap evolves based on community feedback and project needs.*
-*Last updated: 2026-01-12*
+*Last updated: 2026-01-12 (v0.6.0 release)*

@@ -99,8 +99,14 @@ func (a *App) Run(args []string) error {
 		return a.runEmerge(cmdArgs)
 	case "depclean":
 		return a.runDepclean(cmdArgs)
+	case "fetch":
+		return a.runFetch(cmdArgs)
+	case "analyze":
+		return a.runAnalyze(cmdArgs)
+	case "tools":
+		return a.runTools(cmdArgs)
 	default:
-		return fmt.Errorf("unknown command: %s (available: resolve, install, sync, search, info, update, remove, build, emerge, depclean)", command)
+		return fmt.Errorf("unknown command: %s (available: resolve, install, sync, search, info, update, remove, build, emerge, fetch, depclean, analyze, tools)", command)
 	}
 }
 

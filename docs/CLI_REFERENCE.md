@@ -1,6 +1,6 @@
 # GRPM CLI Reference
 
-Complete command-line reference for GRPM v0.5.2.
+Complete command-line reference for GRPM v0.6.0.
 
 ## Table of Contents
 
@@ -14,8 +14,11 @@ Complete command-line reference for GRPM v0.5.2.
   - [search](#search)
   - [info](#info)
   - [sync](#sync)
+  - [fetch](#fetch)
   - [build](#build)
   - [update](#update)
+  - [analyze](#analyze)
+  - [tools](#tools)
   - [status](#status)
   - [daemon](#daemon)
 - [Exit Codes](#exit-codes)
@@ -178,6 +181,7 @@ grpm emerge [options] <package>...
 | `--jobs <n>` | Number of parallel make jobs | From MAKEOPTS or 4 |
 | `--keep-work` | Keep work directory after build | `false` |
 | `--test` | Run test phase (make check/test) | `false` |
+| `--skip-tool-check` | Skip external tool validation | `false` |
 
 **Build Phases:**
 
@@ -394,6 +398,55 @@ sudo grpm sync --skip-gpg-verify
 
 ---
 
+### fetch
+
+Download source tarballs (distfiles) for packages.
+
+```
+grpm fetch [options] <package>...
+```
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--repo <path>` | Path to Portage repository | `/var/db/repos/gentoo` |
+| `-r <path>` | Alias for `--repo` | |
+| `--distdir <path>` | Directory for downloaded sources | `/var/cache/distfiles` |
+| `--pretend`, `-p` | Show what would be downloaded (dry-run) | `false` |
+| `--verify` | Only verify existing files, don't download | `false` |
+
+**Examples:**
+
+```bash
+# Download sources for a package
+grpm fetch app-misc/hello
+
+# Dry-run mode
+grpm fetch --pretend www-servers/nginx
+
+# Verify existing distfiles
+grpm fetch --verify sys-libs/zlib
+
+# Custom distdir
+grpm fetch --distdir /mnt/distfiles dev-lang/go
+```
+
+**Output (pretend):**
+```
+Would fetch: hello-2.10.tar.gz (45 KB)
+  URL: https://ftp.gnu.org/gnu/hello/hello-2.10.tar.gz
+  Checksums: BLAKE2B, SHA512
+```
+
+**Notes:**
+- Sources are automatically fetched during `grpm emerge`
+- Uses GENTOO_MIRRORS from make.conf
+- Supports resume for partial downloads
+- Verifies BLAKE2B, SHA512, SHA256 checksums from Manifest
+
+---
+
 ### build
 
 Create binary packages from installed packages.
@@ -457,6 +510,155 @@ grpm update --pretend
 # Include dependencies
 grpm update --deep --pretend
 ```
+
+---
+
+### analyze
+
+Analyze repository coverage and compatibility.
+
+```
+grpm analyze [options]
+```
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--repo <path>` | Path to Portage repository | `/var/db/repos/gentoo` |
+| `-r <path>` | Alias for `--repo` | |
+| `--output <format>` | Output format: text, json, markdown | `text` |
+| `-o <format>` | Alias for `--output` | |
+| `--category <name>` | Analyze specific category only | All |
+| `-c <name>` | Alias for `--category` | |
+| `--verbose`, `-v` | Show per-package details | `false` |
+
+**Examples:**
+
+```bash
+# Analyze default Gentoo repository
+grpm analyze
+
+# Analyze specific category
+grpm analyze --category app-misc
+
+# JSON output for automation
+grpm analyze --output json > coverage.json
+
+# Markdown report for documentation
+grpm analyze --output markdown > COVERAGE.md
+
+# Verbose mode with package details
+grpm analyze --verbose
+```
+
+**Output (text):**
+```
+GRPM Coverage Analysis
+======================
+Repository: /var/db/repos/gentoo
+Total packages: 31653
+Supported: 28488 (90.0%)
+Unsupported: 3165 (10.0%)
+
+Top blockers:
+  - missing_eclass:java-utils-2: 1234
+  - external_tool:latex: 567
+  ...
+
+By category:
+  app-misc: 234/256 (91.4%)
+  sys-libs: 189/201 (94.0%)
+  ...
+```
+
+**Blocker Types:**
+
+| Type | Description |
+|------|-------------|
+| `missing_eclass` | Eclass not available |
+| `missing_helper` | Helper function not implemented |
+| `unsupported_eapi` | EAPI version not supported |
+| `fetch_restricted` | RESTRICT=fetch is set |
+| `external_tool` | Required external tool missing |
+| `parse_error` | Ebuild parsing failed |
+
+---
+
+### tools
+
+Manage and check external tool availability.
+
+```
+grpm tools [options]
+```
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--check` | Show summary of tool availability | `false` |
+| `--missing` | Show only missing tools with install hints | `false` |
+| `--available` | Show only available tools with paths | `false` |
+| `--category <name>` | Filter by category | All |
+| `--for-eclass <name>` | Show tools needed for specific eclass | |
+| `--paths` | Show PATH directories being searched | `false` |
+
+**Tool Categories:**
+
+| Category | Examples |
+|----------|----------|
+| `compilers` | gcc, clang, rustc, go |
+| `build` | make, ninja, cmake, meson |
+| `languages` | python, perl, ruby, node |
+| `utilities` | patch, sed, awk, pkg-config |
+| `compression` | gzip, bzip2, xz, zstd |
+| `documentation` | doxygen, sphinx-build |
+| `vcs` | git, svn, hg |
+
+**Examples:**
+
+```bash
+# List all known tools with status
+grpm tools
+
+# Summary of availability
+grpm tools --check
+
+# Show missing tools with install suggestions
+grpm tools --missing
+
+# Show available tools with paths
+grpm tools --available
+
+# Filter by category
+grpm tools --category compilers
+
+# Tools needed for cmake.eclass
+grpm tools --for-eclass cmake
+
+# Show PATH directories
+grpm tools --paths
+```
+
+**Output (missing):**
+```
+Missing tools (install suggestions):
+
+  cmake - CMake build system
+    Install: grpm emerge dev-build/cmake
+
+  ninja - Ninja build tool
+    Install: grpm emerge dev-build/ninja
+
+  meson - Meson build system
+    Install: grpm emerge dev-build/meson
+```
+
+**Notes:**
+- Tools are checked in PATH automatically
+- `grpm emerge` validates required tools before building
+- Use `--skip-tool-check` with emerge to bypass validation
 
 ---
 
@@ -545,7 +747,11 @@ grpm status
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `GRPM_VERBOSE` | Enable verbose output (1=on) | `0` |
+| `GRPM_DEBUG` | Enable debug output (1=on) | `0` |
 | `GRPM_SOCKET` | Daemon socket path | `/var/run/grpm.sock` |
+| `PORTAGE_DEBUG` | Enable Portage-compatible debug (1=on) | `0` |
+| `GENTOO_MIRRORS` | Space-separated list of mirror URLs | Auto-detected |
+| `DISTDIR` | Directory for downloaded sources | `/var/cache/distfiles` |
 
 ---
 
