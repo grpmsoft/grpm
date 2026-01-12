@@ -14,6 +14,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.7.1] - 2026-01-13
+
+### Release Automation Fix
+
+#### Fixed
+- **Release workflow** - Proper GoReleaser integration with pre-built binaries
+- **Binary distribution** - Release now includes compiled binaries for all platforms:
+  - Linux: amd64, arm64, armv7, armv6, i386
+  - Checksums and signatures included
+
+#### Technical Details
+- Release created via `release/v*` branch workflow
+- All tests (unit, smoke, integration) passed before release
+- GoReleaser v2 with proper ldflags for version injection
+
+---
+
 ## [0.7.0] - 2026-01-13
 
 ### Portage-Style Logging Release
@@ -682,7 +699,8 @@ GRPM (Go Resource Package Manager) is a modern reimplementation of Gentoo's Port
 - **Issues**: https://github.com/grpmsoft/grpm/issues
 - **License**: [Apache-2.0](LICENSE)
 
-[Unreleased]: https://github.com/grpmsoft/grpm/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/grpmsoft/grpm/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/grpmsoft/grpm/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/grpmsoft/grpm/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/grpmsoft/grpm/compare/v0.5.2...v0.6.0
 [0.5.2]: https://github.com/grpmsoft/grpm/compare/v0.5.1...v0.5.2
