@@ -1,6 +1,6 @@
 # GRPM CLI Reference
 
-Complete command-line reference for GRPM v0.1.0.
+Complete command-line reference for GRPM v0.5.2.
 
 ## Table of Contents
 
