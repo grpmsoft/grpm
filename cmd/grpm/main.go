@@ -69,15 +69,21 @@ func runCLI() error {
 		verboseLevel = 1 // Environment variable sets level 1
 	}
 
-	// Count -v flags or check --verbose
+	// Count -v flags or check --verbose, and filter them from args
 	args := os.Args[1:]
+	filteredArgs := make([]string, 0, len(args))
 	for _, arg := range args {
-		if arg == "-v" || arg == "-vv" || arg == "-vvv" {
-			verboseLevel = len(arg) - 1 // -v=1, -vv=2, -vvv=3
-			break
-		} else if arg == "--verbose" {
+		switch arg {
+		case "-v":
 			verboseLevel = 1
-			break
+		case "-vv":
+			verboseLevel = 2
+		case "-vvv":
+			verboseLevel = 3
+		case "--verbose":
+			verboseLevel = 1
+		default:
+			filteredArgs = append(filteredArgs, arg)
 		}
 	}
 
@@ -91,8 +97,8 @@ func runCLI() error {
 	defer func() { _ = app.Close() }()
 
 	// Special handling for daemon subcommands
-	if len(os.Args) > 1 {
-		switch os.Args[1] {
+	if len(filteredArgs) > 0 {
+		switch filteredArgs[0] {
 		case "status":
 			return cmdStatus(app)
 		case "version":
@@ -101,8 +107,8 @@ func runCLI() error {
 		}
 	}
 
-	// Run application with remaining args
-	if err := app.Run(os.Args[1:]); err != nil {
+	// Run application with filtered args (verbose flags removed)
+	if err := app.Run(filteredArgs); err != nil {
 		return err
 	}
 

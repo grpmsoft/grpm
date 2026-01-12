@@ -30,6 +30,7 @@ type SyncResult struct {
 	BytesTransferred int64      // Total bytes transferred
 	Duration         string     // Duration of sync operation
 	GPGVerified      bool       // Whether GPG signature was verified
+	MirrorUsed       string     // Mirror URL that succeeded (for rsync)
 }
 
 // Syncer defines the interface for repository synchronization

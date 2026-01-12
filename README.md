@@ -41,6 +41,7 @@ GRPM (Go Resource Package Manager) is a modern source-based package manager writ
 | **Coverage Analysis** | Repository compatibility analysis with `grpm analyze` |
 | **Tool Detection** | External tool checking with `grpm tools` |
 | **Daemon Architecture** | gRPC + REST API for background operations |
+| **Portage-Style Output** | Professional colored logging matching emerge output |
 | **Repository Sync** | Native rsync and Git sync with GPG verification |
 | **Virtual Packages** | Provider selection with configuration support |
 | **Metadata Caching** | SQLite-backed cache for fast package lookups |
@@ -191,6 +192,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidelines and [AGENTS.md
 - ✅ Multilib support (32-bit/64-bit)
 - ✅ Binary package support (GPKG, TBZ2)
 - ✅ Repository sync (rsync, git) with GPG verification
+- ✅ Portage-style logging with colored output
 
 **v1.0.0** — Production ready after community validation (no fixed date).
 

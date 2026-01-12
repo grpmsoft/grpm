@@ -4,12 +4,12 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"syscall"
 
+	"github.com/grpmsoft/grpm/internal/logging"
 	"github.com/grpmsoft/grpm/internal/pkg"
 	"github.com/grpmsoft/grpm/internal/repo"
 	"github.com/grpmsoft/grpm/internal/solver"
@@ -23,6 +23,7 @@ type App struct {
 	version      string
 	verbose      bool
 	verboseLevel int // 0=off, 1=-v, 2=-vv, 3=-vvv
+	log          *logging.Logger
 }
 
 // AppConfig holds application configuration
@@ -43,15 +44,25 @@ func NewApp(config *AppConfig) *App {
 		clientConfig.SocketPath = DefaultClientConfig().SocketPath
 	}
 
+	logger := logging.New()
+
+	// Set logging level based on verbosity
+	switch config.VerboseLevel {
+	case 0:
+		logger.SetLevel(logging.LevelNormal)
+	case 1:
+		logger.SetLevel(logging.LevelVerbose)
+	default:
+		logger.SetLevel(logging.LevelDebug)
+	}
+
 	app := &App{
 		client:       NewClient(clientConfig),
 		version:      config.Version,
 		verbose:      config.Verbose,
 		verboseLevel: config.VerboseLevel,
+		log:          logger,
 	}
-
-	// Configure logging based on verbose level
-	app.SetVerbose(config.Verbose)
 
 	return app
 }
@@ -60,13 +71,9 @@ func NewApp(config *AppConfig) *App {
 func (a *App) Run(args []string) error {
 	// Check daemon availability
 	if a.client.IsDaemonAvailable() {
-		if a.verbose {
-			log.Printf("Connected to daemon at %s", a.client.GetSocketPath())
-		}
+		a.log.Verbose("Connected to daemon at %s", a.client.GetSocketPath())
 	} else {
-		if a.verbose {
-			log.Printf("Daemon not available, running in standalone mode")
-		}
+		a.log.Verbose("Daemon not available, running in standalone mode")
 	}
 
 	// Parse command
@@ -170,18 +177,14 @@ func (a *App) ExecuteViaDaemon(command string, args []string) error {
 	}
 
 	// TODO: Implement gRPC call in Phase 2
-	if a.verbose {
-		log.Printf("Executing via daemon: %s %v", command, args)
-	}
+	a.log.Verbose("Executing via daemon: %s %v", command, args)
 
 	return fmt.Errorf("not implemented yet (Phase 2)")
 }
 
 // ExecuteStandalone executes command in standalone mode
 func (a *App) ExecuteStandalone(command string, args []string) error {
-	if a.verbose {
-		log.Printf("Executing in standalone mode: %s %v", command, args)
-	}
+	a.log.Verbose("Executing in standalone mode: %s %v", command, args)
 
 	// TODO: Implement direct execution in Phase 4
 	return fmt.Errorf("not implemented yet (Phase 4)")
@@ -196,9 +199,7 @@ func (a *App) GetClient() *Client {
 func (a *App) SetVerbose(verbose bool) {
 	a.verbose = verbose
 	if verbose {
-		log.SetFlags(log.LstdFlags | log.Lshortfile)
-	} else {
-		log.SetOutput(os.Stderr)
+		a.log.SetLevel(logging.LevelVerbose)
 	}
 }
 
@@ -242,7 +243,7 @@ func (a *App) runResolve(args []string) error {
 	}
 
 	if len(solution) == 0 {
-		log.Println("No packages found in solution")
+		a.log.Info("No packages found in solution")
 		return nil
 	}
 
@@ -419,7 +420,7 @@ func (a *App) createInitialSnapshot(pretend, ask, noSnapshot bool, snapshotDir, 
 	if err != nil {
 		return "", fmt.Errorf("failed to create snapshot: %w", err)
 	}
-	log.Printf("Created system snapshot: %s", snapshotID)
+	a.log.Info("Created system snapshot: %s", snapshotID)
 	return snapshotID, nil
 }
 
@@ -430,16 +431,14 @@ func (a *App) createSnapshot(snapshotDir, fsType string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to create snapshot: %w", err)
 	}
-	log.Printf("Created system snapshot: %s", snapshotID)
+	a.log.Info("Created system snapshot: %s", snapshotID)
 	return snapshotID, nil
 }
 
 // initRepository initializes the package repository (mock or real)
 func (a *App) initRepository(useMock bool, repoPath string) (repo.Repository, error) {
 	if useMock {
-		if a.verbose {
-			log.Printf("Using mock repository")
-		}
+		a.log.Verbose("Using mock repository")
 		return repo.NewMockRepository(), nil
 	}
 
@@ -447,9 +446,7 @@ func (a *App) initRepository(useMock bool, repoPath string) (repo.Repository, er
 	if err != nil {
 		return nil, fmt.Errorf("invalid repository path: %w", err)
 	}
-	if a.verbose {
-		log.Printf("Using repository: %s", absRepoPath)
-	}
+	a.log.Verbose("Using repository: %s", absRepoPath)
 
 	r, err := repo.NewPortageRepository(absRepoPath)
 	if err != nil {
@@ -467,7 +464,7 @@ func (a *App) resolvePackageDependencies(r repo.Repository, packages []string) (
 	}
 
 	if len(solution) == 0 {
-		log.Println("No packages to install")
+		a.log.Info("No packages to install")
 		return nil, nil
 	}
 
@@ -520,18 +517,18 @@ func (a *App) executeInstallation(solution map[string]*pkg.Package, useBinpkg bo
 		return nil
 	}
 
-	log.Println("Installing packages:")
+	a.log.Action("Installing packages")
 	installedCount := 0
 
 	for name, p := range solution {
-		log.Printf(">>> Installing %s-%s (slot: %s)", name, p.Version, p.Slot)
+		a.log.Installing(installedCount+1, len(solution), fmt.Sprintf("%s-%s (slot: %s)", name, p.Version, p.Slot))
 
 		// Search for binary package if requested
 		binpkgPath := ""
 		if useBinpkg {
 			binpkgPath = a.findBinaryPackage(p, binpkgDir)
-			if binpkgPath != "" && a.verbose {
-				log.Printf("Found binary package: %s", binpkgPath)
+			if binpkgPath != "" {
+				a.log.Verbose("Found binary package: %s", binpkgPath)
 			}
 		}
 
@@ -541,10 +538,10 @@ func (a *App) executeInstallation(solution map[string]*pkg.Package, useBinpkg bo
 		}
 
 		installedCount++
-		log.Printf(">>> %s-%s installed successfully (%d/%d)", name, p.Version, installedCount, len(solution))
+		a.log.Success("%s-%s installed successfully (%d/%d)", name, p.Version, installedCount, len(solution))
 	}
 
-	log.Printf("\n✅ Installation completed successfully: %d package(s) installed", installedCount)
+	a.log.Success("Installation completed: %d package(s) installed", installedCount)
 	return nil
 }
 
@@ -632,22 +629,22 @@ func (a *App) runSync(args []string) error {
 		return fmt.Errorf("failed to create syncer: %w", err)
 	}
 
-	// Execute sync
-	log.Printf("🔄 Syncing Gentoo repository...")
+	// Execute sync (syncer handles its own logging)
 	result, err := syncer.Sync(ctx, syncConfig)
 	if err != nil {
+		a.log.Error("Sync failed: %v", err)
 		return fmt.Errorf("sync failed: %w", err)
 	}
 
 	// Display results
-	log.Printf("✅ Sync completed successfully")
-	log.Printf("   Method: %s", result.Method)
-	log.Printf("   Duration: %s", result.Duration)
+	a.log.Success("Sync completed successfully")
+	a.log.Info("Method: %s", result.Method)
+	a.log.Info("Duration: %s", result.Duration)
 	if syncConfig.VerifyGPG {
 		if result.GPGVerified {
-			log.Printf("   GPG: ✅ Verified")
+			a.log.Success("GPG: Verified")
 		} else {
-			log.Printf("   GPG: ⚠️  Not verified")
+			a.log.Warn("GPG: Not verified")
 		}
 	}
 
@@ -676,9 +673,7 @@ func (a *App) findBinaryPackage(p *pkg.Package, binpkgDir string) string {
 		}
 	}
 
-	if a.verbose {
-		log.Printf("Binary package not found for %s-%s in %s", p.Name, p.Version, binpkgDir)
-	}
+	a.log.Verbose("Binary package not found for %s-%s in %s", p.Name, p.Version, binpkgDir)
 
 	return ""
 }
