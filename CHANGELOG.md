@@ -14,6 +14,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.7.0] - 2026-01-13
+
+### Portage-Style Logging Release
+
+> **Professional Output**
+>
+> This release introduces Portage-style logging with colored output,
+> progress indicators, and professional formatting matching Gentoo's emerge output.
+
+#### Added
+
+##### Portage-Style Logging (`internal/logging/`)
+- **Logger package** - Professional logging with Portage-style formatting
+  - `>>>` prefix for actions (emerging, installing, syncing)
+  - ` * ` prefix for informational messages (green)
+  - ` ! ` prefix for warnings (yellow)
+  - `!!!` prefix for errors (red)
+- **ANSI color support** - Automatic terminal detection via `golang.org/x/term`
+- **Log levels** - Quiet, Normal, Verbose, Debug
+- **File logging** - Optional log file output (colors stripped automatically)
+- **Specialized methods** for package management:
+  - `Emerge(current, total, atom)` - Package emergence progress
+  - `Installing(current, total, atom)` - Installation progress
+  - `Syncing(repo)` - Repository sync start
+  - `SyncComplete(duration, filesChanged)` - Sync completion
+  - `Mirror(index, total, host)` - Mirror selection
+  - `MirrorFailed(host, err)` - Mirror failure
+  - `Retry(attempt, max, delay)` - Retry notification
+
+##### Progress Indicators (`internal/logging/progress.go`)
+- **Spinner** - Animated progress indicator with multiple styles
+  - Styles: dots, line, circle, square, arrow, bounce
+  - Configurable interval and message
+- **ProgressBar** - Percentage-based progress bar
+  - Customizable width and style
+  - ETA calculation support
+- **SyncProgress** - Repository sync-specific progress tracking
+
+##### CLI Improvements
+- **Verbose flag parsing** - `-v`, `-vv`, `-vvv` and `--verbose` support
+- **Log level mapping** - Verbose levels map to logger levels automatically
+- **Consistent output** - All CLI commands use unified logging
+
+#### Changed
+- `internal/cli/app.go` - Integrated Portage-style logger
+- `internal/sync/rsync.go` - Uses new logging for sync output
+- `cmd/grpm/main.go` - Improved verbose flag handling
+
+#### Technical Details
+- New dependency: `golang.org/x/term` for terminal detection
+- Thread-safe logging with mutex protection
+- Zero external dependencies for core logging (stdlib only)
+- Verified against Portage reference (`lib/portage/output.py`)
+
+---
+
 ## [0.6.0] - 2026-01-12
 
 ### Infrastructure & Quality Release
@@ -626,7 +682,8 @@ GRPM (Go Resource Package Manager) is a modern reimplementation of Gentoo's Port
 - **Issues**: https://github.com/grpmsoft/grpm/issues
 - **License**: [Apache-2.0](LICENSE)
 
-[Unreleased]: https://github.com/grpmsoft/grpm/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/grpmsoft/grpm/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/grpmsoft/grpm/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/grpmsoft/grpm/compare/v0.5.2...v0.6.0
 [0.5.2]: https://github.com/grpmsoft/grpm/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/grpmsoft/grpm/compare/v0.5.0...v0.5.1

@@ -2,9 +2,11 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // TestRsyncSyncer_Name tests syncer name
@@ -148,4 +150,224 @@ func containsHelper(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+// =============================================================================
+// Smart Retry and Mirror Fallback Tests
+// =============================================================================
+
+func TestDefaultStrategy(t *testing.T) {
+	s := DefaultStrategy()
+
+	if s.MaxRetries != 3 {
+		t.Errorf("expected MaxRetries=3, got %d", s.MaxRetries)
+	}
+	if s.RetryDelay != 2*time.Second {
+		t.Errorf("expected RetryDelay=2s, got %v", s.RetryDelay)
+	}
+	if s.MaxMirrors != 5 {
+		t.Errorf("expected MaxMirrors=5, got %d", s.MaxMirrors)
+	}
+	if s.ConnectionTimeout != 30*time.Second {
+		t.Errorf("expected ConnectionTimeout=30s, got %v", s.ConnectionTimeout)
+	}
+}
+
+func TestWithStrategy(t *testing.T) {
+	syncer := NewRsyncSyncer()
+	customStrategy := SyncStrategy{
+		MaxRetries:        5,
+		RetryDelay:        1 * time.Second,
+		MaxMirrors:        10,
+		ConnectionTimeout: 60 * time.Second,
+	}
+
+	result := syncer.WithStrategy(customStrategy)
+
+	if result != syncer {
+		t.Error("expected WithStrategy to return same syncer")
+	}
+	if syncer.strategy.MaxRetries != 5 {
+		t.Errorf("expected MaxRetries=5, got %d", syncer.strategy.MaxRetries)
+	}
+}
+
+func TestBuildMirrorList(t *testing.T) {
+	tests := []struct {
+		name       string
+		customURL  string
+		maxMirrors int
+		wantFirst  string
+		wantLen    int
+	}{
+		{
+			name:       "default mirrors",
+			customURL:  "",
+			maxMirrors: 5,
+			wantFirst:  "rsync://rsync.gentoo.org/gentoo-portage",
+			wantLen:    5,
+		},
+		{
+			name:       "custom URL first",
+			customURL:  "rsync://custom.example.com/repo",
+			maxMirrors: 3,
+			wantFirst:  "rsync://custom.example.com/repo",
+			wantLen:    3,
+		},
+		{
+			name:       "default URL not duplicated",
+			customURL:  "rsync://rsync.gentoo.org/gentoo-portage",
+			maxMirrors: 5,
+			wantFirst:  "rsync://rsync.gentoo.org/gentoo-portage",
+			wantLen:    5,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			syncer := NewRsyncSyncer()
+			syncer.strategy.MaxMirrors = tt.maxMirrors
+
+			mirrors := syncer.buildMirrorList(tt.customURL)
+
+			if len(mirrors) != tt.wantLen {
+				t.Errorf("expected %d mirrors, got %d", tt.wantLen, len(mirrors))
+			}
+			if len(mirrors) > 0 && mirrors[0] != tt.wantFirst {
+				t.Errorf("expected first mirror '%s', got '%s'", tt.wantFirst, mirrors[0])
+			}
+		})
+	}
+}
+
+func TestIsRetryableError(t *testing.T) {
+	syncer := NewRsyncSyncer()
+
+	tests := []struct {
+		name      string
+		err       error
+		retryable bool
+	}{
+		{"nil error", nil, false},
+		{"connection reset", errors.New("connection reset by peer"), true},
+		{"connection refused", errors.New("dial tcp: connection refused"), true},
+		{"timeout", errors.New("i/o timeout"), true},
+		{"EOF", errors.New("unexpected EOF"), true},
+		{"broken pipe", errors.New("write: broken pipe"), true},
+		{"forcibly closed", errors.New("forcibly closed by the remote host"), true},
+		{"permission denied", errors.New("permission denied"), false},
+		{"disk full", errors.New("no space left on device"), false},
+		{"generic error", errors.New("something went wrong"), false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := syncer.isRetryableError(tt.err)
+			if result != tt.retryable {
+				t.Errorf("expected retryable=%v, got %v for error: %v",
+					tt.retryable, result, tt.err)
+			}
+		})
+	}
+}
+
+func TestIsPermanentError(t *testing.T) {
+	syncer := NewRsyncSyncer()
+
+	tests := []struct {
+		name      string
+		err       error
+		permanent bool
+	}{
+		{"nil error", nil, false},
+		{"permission denied", errors.New("permission denied"), true},
+		{"disk full", errors.New("disk full"), true},
+		{"no space left", errors.New("no space left on device"), true},
+		{"read-only fs", errors.New("read-only file system"), true},
+		{"connection reset", errors.New("connection reset"), false},
+		{"timeout", errors.New("timeout"), false},
+		{"generic error", errors.New("some error"), false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := syncer.isPermanentError(tt.err)
+			if result != tt.permanent {
+				t.Errorf("expected permanent=%v, got %v for error: %v",
+					tt.permanent, result, tt.err)
+			}
+		})
+	}
+}
+
+func TestExtractHost(t *testing.T) {
+	syncer := NewRsyncSyncer()
+
+	tests := []struct {
+		url      string
+		wantHost string
+	}{
+		{"rsync://rsync.gentoo.org/gentoo-portage", "rsync.gentoo.org"},
+		{"rsync://mirror.example.com/repo", "mirror.example.com"},
+		{"rsync://host:873/module", "host:873"},
+		{"rsync://", ""},
+		{"", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.url, func(t *testing.T) {
+			host := syncer.extractHost(tt.url)
+			if host != tt.wantHost {
+				t.Errorf("expected host '%s', got '%s'", tt.wantHost, host)
+			}
+		})
+	}
+}
+
+func TestGentooMirrorsNotEmpty(t *testing.T) {
+	if len(GentooMirrors) == 0 {
+		t.Error("GentooMirrors should not be empty")
+	}
+
+	// Verify all mirrors have correct format
+	for i, mirror := range GentooMirrors {
+		if mirror == "" {
+			t.Errorf("mirror %d is empty", i)
+		}
+		if !contains(mirror, "rsync://") {
+			t.Errorf("mirror %d should start with rsync://: %s", i, mirror)
+		}
+		if !contains(mirror, "gentoo-portage") {
+			t.Errorf("mirror %d should contain gentoo-portage: %s", i, mirror)
+		}
+	}
+}
+
+func TestSyncStrategyValidation(t *testing.T) {
+	s := DefaultStrategy()
+
+	if s.MaxRetries < 1 {
+		t.Error("MaxRetries should be at least 1")
+	}
+	if s.MaxRetries > 10 {
+		t.Error("MaxRetries should not exceed 10")
+	}
+	if s.RetryDelay < time.Second {
+		t.Error("RetryDelay should be at least 1 second")
+	}
+	if s.ConnectionTimeout < 10*time.Second {
+		t.Error("ConnectionTimeout should be at least 10 seconds")
+	}
+}
+
+func TestBuildMirrorListNoLimit(t *testing.T) {
+	syncer := NewRsyncSyncer()
+	syncer.strategy.MaxMirrors = 0 // No limit
+
+	mirrors := syncer.buildMirrorList("")
+
+	// Should include all Gentoo mirrors
+	if len(mirrors) != len(GentooMirrors) {
+		t.Errorf("expected %d mirrors, got %d", len(GentooMirrors), len(mirrors))
+	}
 }
