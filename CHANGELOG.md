@@ -14,6 +14,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.7.3] - 2026-01-13
+
+### Documentation Hotfix
+
+> **Documentation and Process Improvements**
+
+#### Fixed
+- **README.md** - REST API endpoint corrected to Unix socket (`/var/run/grpm-rest.sock`)
+- **ROADMAP.md** - Updated to reflect v0.7.2 as current release with 98.2% coverage
+
+#### Changed
+- Release process documentation improved with clear pre-release checklist
+
+---
+
 ## [0.7.2] - 2026-01-13
 
 ### Portage Compatibility Hotfix
@@ -721,7 +736,8 @@ GRPM (Go Resource Package Manager) is a modern reimplementation of Gentoo's Port
 - **Issues**: https://github.com/grpmsoft/grpm/issues
 - **License**: [Apache-2.0](LICENSE)
 
-[Unreleased]: https://github.com/grpmsoft/grpm/compare/v0.7.2...HEAD
+[Unreleased]: https://github.com/grpmsoft/grpm/compare/v0.7.3...HEAD
+[0.7.3]: https://github.com/grpmsoft/grpm/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/grpmsoft/grpm/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/grpmsoft/grpm/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/grpmsoft/grpm/compare/v0.6.0...v0.7.0
