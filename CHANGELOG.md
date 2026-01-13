@@ -14,6 +14,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.7.6] - 2026-01-13
+
+### Critical Bug Fix: Version Selection
+
+> **Fixes incorrect package version selection**
+>
+> GRPM was selecting `hello-2.12` instead of `hello-2.12.2` because versions
+> were sorted alphabetically, not by Portage version comparison algorithm.
+
+### Fixed
+
+#### Version Selection Bug
+- **Correct Portage version sorting** — LoadPackage now uses `pkg.CompareVersions()` for proper version ordering
+  - Previously: `versions[len(versions)-1]` took last element alphabetically
+  - Alphabetically: `"2.12.2" < "2.12"` (string comparison), selecting wrong version
+  - Now: Sorts using PMS Chapter 3 version comparison algorithm
+  - Example: `2.12.2 > 2.12 > 2.10 > 2.9` (correct numeric ordering)
+  - Fixed in both `PortageRepository` and `CachedPortageRepository`
+
+### Added
+
+#### Emerge CLI Flags
+- **`--replace` / `-R`** — Replace existing package (ignore collisions with same package)
+  - Unmerges old version before installing new one
+  - Implements Portage's "protect-owned" behavior
+- **`--force` / `-f`** — Force installation (skip collision checks)
+  - Useful for overwriting untracked files from previous failed installs
+  - Bypasses file existence checks during merge
+
+#### Comprehensive Version Selection Tests
+- **New test file**: `internal/repo/version_selection_test.go`
+  - `TestLoadPackage_SelectsHighestVersion` — 8 test cases covering:
+    - Patch versions (`2.12` vs `2.12.2`)
+    - Minor versions (`1.9` vs `1.10`)
+    - Major versions (`2.0` vs `10.0`)
+    - Suffix ordering (`1.0_alpha` < `1.0_beta` < `1.0_rc1` < `1.0`)
+    - Revisions (`1.0` < `1.0-r1` < `1.0-r2`)
+    - Letter suffixes (`1.0a` < `1.0b` < `1.0`)
+    - Post-release patches (`1.0` < `1.0_p1` < `1.0_p2`)
+  - `TestLoadPackage_SingleVersion` — Single ebuild handling
+  - `TestLoadPackage_NoEbuilds` — Error handling for empty packages
+  - `BenchmarkLoadPackage_ManyVersions` — Performance benchmark
+
+### Changed
+- `internal/cli/emerge.go` — Added `--replace`, `--force` flags with full pipeline support
+- `internal/repo/portage.go` — Version sorting before selection
+- `internal/repo/cached_portage.go` — Version sorting + logging migration
+- `internal/repo/cache/cached_repo.go` — Logging migration to `internal/logging`
+- `internal/repo/manager.go` — Logging migration to `internal/logging`
+
+### Technical Details
+- Bug discovered during real Gentoo WSL2 testing
+- Portage shows `hello-2.12.2`, GRPM was building `hello-2.12`
+- Root cause: alphabetic sorting instead of version comparison
+- Fix verified with comprehensive test suite
+- Zero issues from `golangci-lint`
+
+---
+
 ## [0.7.5] - 2026-01-13
 
 ### Build Process & Output Quality Release

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
@@ -95,9 +96,14 @@ func (pr *PortageRepository) LoadPackage(name string) (*pkg.Package, error) {
 		return nil, fmt.Errorf("no ebuilds found for %s", name)
 	}
 
-	// Take the latest version (for example)
-	latestVersion := versions[len(versions)-1]
-	return pr.parseEbuild(name, filepath.Join(pkgDir, pkgName+"-"+latestVersion+".ebuild")) // Pass package name
+	// Sort versions using Portage version comparison (highest first)
+	sort.Slice(versions, func(i, j int) bool {
+		return pkg.CompareVersions(versions[i], versions[j]) > 0
+	})
+
+	// Take the highest version
+	latestVersion := versions[0]
+	return pr.parseEbuild(name, filepath.Join(pkgDir, pkgName+"-"+latestVersion+".ebuild"))
 }
 
 func (pr *PortageRepository) parseEbuild(name, path string) (*pkg.Package, error) {
