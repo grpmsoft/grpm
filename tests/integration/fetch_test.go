@@ -12,7 +12,7 @@ import (
 
 // TestFetch_SrcURIParsing tests SRC_URI parsing with variable expansion.
 //
-// This validates the v0.7.2 fix for proper SRC_URI extraction with
+// This validates the v0.7.3 fix for proper SRC_URI extraction with
 // package metadata variables (P, PN, PV, etc.).
 func TestFetch_SrcURIParsing(t *testing.T) {
 	tests := []struct {
@@ -139,7 +139,7 @@ KEYWORDS="amd64"
 
 // TestFetch_SrcURIConditionals tests USE flag conditional handling in SRC_URI.
 //
-// This validates the v0.7.2 fix where nil activeFlags includes ALL conditionals,
+// This validates the v0.7.3 fix where nil activeFlags includes ALL conditionals,
 // which is essential for fetching all distfiles regardless of USE flags.
 func TestFetch_SrcURIConditionals(t *testing.T) {
 	tests := []struct {
