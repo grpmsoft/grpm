@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Tar/Zip timestamp preservation** — Archive extraction now preserves original file timestamps
+  - Critical fix for automake-based packages (hello, glibc, etc.)
+  - Added `os.Chtimes()` calls after file extraction
+  - Directory timestamps restored in reverse order (deepest first)
+  - Previously all files got current timestamp, causing `make` to trigger regeneration
+  - Symptom: `aclocal-1.16: command not found` during build
+- **Package replacement mode** — Replace mode now works correctly
+  - Fixed collision detection to compare by package name (not full atom)
+  - Files owned by same package (any version) no longer cause collisions
+  - Added `findInstalledVersion()` to detect existing installations
+  - When `--replace`/`-R` used: old package is unmerged before new merge
+  - Implements Portage's "protect-owned" behavior
+
 ### Planned
 - Performance optimization for large dependency graphs
 - Web UI for daemon management
