@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Ebuild S variable parsing** — Custom source directories are now properly handled
+  - Added `ParseSVariable()` with bash parameter expansion support
+  - Supports `${var/pattern/replacement}`, `${var^}`, `${var%pattern}`, etc.
+  - Enables packages like `screenfetch` with `S=${WORKDIR}/${PN/f/F}-${PV}`
+  - Previously always used default `S=${WORKDIR}/${P}`, causing "no such file" errors
 - **Tar/Zip timestamp preservation** — Archive extraction now preserves original file timestamps
   - Critical fix for automake-based packages (hello, glibc, etc.)
   - Added `os.Chtimes()` calls after file extraction

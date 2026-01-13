@@ -809,6 +809,49 @@ func (e *Executor) ParseEbuild() error {
 		log.Printf("[ebuild] inherits: %v", parsed.InheritedEclasses)
 	}
 
+	// Parse and evaluate S variable if defined in ebuild
+	if err := e.parseSVariable(); err != nil {
+		log.Printf("[ebuild] warning: failed to parse S variable: %v", err)
+	}
+
+	return nil
+}
+
+// parseSVariable parses and evaluates the S variable from ebuild content.
+//
+// Many packages define custom S (source directory) using bash parameter expansion:
+//   - S=${WORKDIR}/${PN/f/F}-${PV} (e.g., screenfetch -> screenFetch)
+//   - S=${WORKDIR}/${MY_P}
+//   - S=${WORKDIR}/source
+//
+// This method reads the ebuild, extracts S, expands variables and parameter
+// substitutions, and updates e.Env.S if different from default.
+func (e *Executor) parseSVariable() error {
+	if e.EbuildPath == "" {
+		return nil
+	}
+
+	// Read ebuild content
+	content, err := os.ReadFile(e.EbuildPath)
+	if err != nil {
+		return fmt.Errorf("reading ebuild: %w", err)
+	}
+
+	// Build variable map for expansion
+	vars := e.Env.ToMap()
+
+	// Parse S variable with bash parameter expansion
+	sValue := ParseSVariable(string(content), vars)
+	if sValue == "" {
+		return nil // S not defined, use default
+	}
+
+	// Update S if different from default
+	if sValue != e.Env.S {
+		log.Printf("[ebuild] custom S detected: %s (default was: %s)", sValue, e.Env.S)
+		e.Env.S = sValue
+	}
+
 	return nil
 }
 
