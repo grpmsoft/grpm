@@ -37,7 +37,7 @@ func ParseThirdPartyMirrors(repoPath string) ThirdPartyMirrors {
 	if err != nil {
 		return make(ThirdPartyMirrors)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	mirrors := make(ThirdPartyMirrors)
 
