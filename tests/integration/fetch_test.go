@@ -38,17 +38,18 @@ func TestFetch_SrcURIParsing(t *testing.T) {
 			},
 		},
 		{
-			name:     "multiple files",
+			name:     "multiple files with different names",
 			category: "sys-libs",
 			pkgName:  "zlib",
 			version:  "1.3.1",
 			srcURI: `SRC_URI="
 				https://zlib.net/${P}.tar.xz
-				https://github.com/madler/zlib/releases/download/v${PV}/${P}.tar.xz
+				https://zlib.net/${P}.tar.xz.asc
 			"`,
-			expectedFiles: []string{"zlib-1.3.1.tar.xz"},
+			expectedFiles: []string{"zlib-1.3.1.tar.xz", "zlib-1.3.1.tar.xz.asc"},
 			expectedURLs: map[string]string{
-				"zlib-1.3.1.tar.xz": "zlib.net",
+				"zlib-1.3.1.tar.xz":     "zlib.net",
+				"zlib-1.3.1.tar.xz.asc": "zlib.net",
 			},
 		},
 		{
