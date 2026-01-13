@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Integration tests for fetch/SRC_URI parsing** — Validates v0.7.2 functionality
+  - Tests for variable expansion (P, PN, PV, etc.)
+  - Tests for USE flag conditionals (nil = include all)
+  - Tests for arrow rename syntax
+  - Tests against real Gentoo repository
+- **Integration tests for config directories** — Validates directory handling
+  - Tests for package.mask as directory (EAPI 7+)
+  - Tests for package.use as directory
+  - Tests for dotfiles/backups being ignored
+  - Tests for subdirectories not being recursed
+- **Integration tests for profile directories**
+  - Tests for use.force/use.mask as directories
+  - Tests for lexicographic file ordering (PMS compliance)
+
 ### Planned
 - Performance optimization for large dependency graphs
 - Web UI for daemon management
