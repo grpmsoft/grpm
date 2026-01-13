@@ -1,10 +1,10 @@
 # GRPM Roadmap
 
-> **Documentation Hotfix (v0.7.3)**
+> **Critical Hotfix (v0.7.4)**
 >
 > Rapid development complete (v0.1.0 → v0.5.0).
 > Infrastructure release complete (v0.6.0).
-> Portage-style logging (v0.7.0) + compatibility fixes (v0.7.2) + docs (v0.7.3).
+> Portage-style logging (v0.7.0) + compatibility fixes (v0.7.2 → v0.7.4).
 > **98.2% tree coverage verified on real Gentoo!**
 
 ---
@@ -65,7 +65,14 @@ Key insight: **Eclasses don't need Go implementations.** They are loaded dynamic
 
 ## Release History
 
-### v0.7.2 — Portage Compatibility Hotfix (Current)
+### v0.7.4 — Critical Hotfix (Current)
+
+**Fixes for real-world Gentoo usage:**
+
+- **mirror:// URL expansion** — Third-party mirror URLs now properly expanded
+- **rsync sync hanging** — Native Go rsync no longer hangs, fallback to system rsync
+
+### v0.7.2/v0.7.3 — Portage Compatibility Hotfix
 
 **Critical fixes for real-world Portage compatibility:**
 
@@ -137,11 +144,12 @@ Key insight: **Eclasses don't need Go implementations.** They are loaded dynamic
 ## Roadmap to v1.0.0
 
 ```
-v0.7.3 ← CURRENT (Documentation Hotfix)
+v0.7.4 ← CURRENT (Critical Hotfix)
     │   ✅ v0.6.0: Distfile fetching, debug helpers, coverage analyzer
     │   ✅ v0.7.0: Portage-style logging
     │   ✅ v0.7.2: package.mask directories, SRC_URI parsing
     │   ✅ v0.7.3: Documentation fixes
+    │   ✅ v0.7.4: mirror:// URLs, rsync hang fix
     │   ✅ 98.2% tree coverage on real Gentoo!
     ↓
 v0.8.0 — Production Hardening (2 tasks)

@@ -1,6 +1,6 @@
 # GRPM CLI Reference
 
-Complete command-line reference for GRPM v0.6.0.
+Complete command-line reference for GRPM. See [CHANGELOG](../CHANGELOG.md) for version history.
 
 ## Table of Contents
 

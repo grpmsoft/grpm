@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Planned
+- Performance optimization for large dependency graphs
+- Web UI for daemon management
+- Native GUI application ([gogpu/ui](https://github.com/gogpu/ui))
+
+---
+
+## [0.7.4] - 2026-01-13
+
+### Critical Hotfix Release
+
+> **Fixes for Real-World Gentoo Usage**
+>
+> Two critical bugs discovered during Gentoo WSL2 testing are now fixed:
+> mirror:// URL expansion and rsync sync hanging.
+
+### Fixed
+- **mirror:// URL expansion** — Third-party mirror URLs are now properly expanded
+  - Added `ThirdPartyMirrors` parser for `profiles/thirdpartymirrors` file
+  - `mirror://gnu/`, `mirror://sourceforge/`, etc. now resolve to real HTTP URLs
+  - Previously `grpm fetch` failed with "unsupported protocol scheme mirror"
+  - Example: `mirror://gnu/hello/hello-2.12.tar.gz` now expands to
+    `https://ftp.gnu.org/gnu/hello/hello-2.12.tar.gz` and fallback mirrors
+- **rsync sync hanging** — Native Go rsync no longer hangs on real Gentoo mirrors
+  - Removed debug code that limited sync to 10 files
+  - Added timeout handling with connection deadline
+  - Added fallback to system rsync binary if native implementation times out
+  - Context cancellation now properly closes connection to unblock operations
+
 ### Added
 - **Integration tests for fetch/SRC_URI parsing** — Validates v0.7.3 functionality
   - Tests for variable expansion (P, PN, PV, etc.)
@@ -21,11 +50,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Integration tests for profile directories**
   - Tests for use.force/use.mask as directories
   - Tests for lexicographic file ordering (PMS compliance)
-
-### Planned
-- Performance optimization for large dependency graphs
-- Web UI for daemon management
-- Native GUI application ([gogpu/ui](https://github.com/gogpu/ui))
+- **Integration tests for v0.7.4 fixes**
+  - Tests for mirror:// URL expansion with real repository
+  - Tests for rsync syncer timeout and fallback behavior
 
 ---
 

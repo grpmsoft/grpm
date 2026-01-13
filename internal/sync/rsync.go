@@ -213,7 +213,33 @@ func (r *RsyncSyncer) syncWithRetry(ctx context.Context, mirrorURL, destDir stri
 }
 
 // doSync performs the actual rsync operation.
+// It first tries native Go rsync, then falls back to system rsync if available.
 func (r *RsyncSyncer) doSync(ctx context.Context, mirrorURL, destDir string) error {
+	// Try native Go rsync first with a shorter timeout
+	nativeTimeout := r.strategy.ConnectionTimeout
+	if nativeTimeout > 30*time.Second {
+		nativeTimeout = 30 * time.Second // Cap native timeout at 30s
+	}
+
+	nativeCtx, cancel := context.WithTimeout(ctx, nativeTimeout)
+	defer cancel()
+
+	err := r.doSyncNative(nativeCtx, mirrorURL, destDir)
+	if err == nil {
+		return nil
+	}
+
+	// If native rsync failed, try system rsync as fallback
+	if r.hasSystemRsync() {
+		r.log.Verbose("Native rsync failed (%v), trying system rsync", err)
+		return r.doSyncSystem(ctx, mirrorURL, destDir)
+	}
+
+	return err
+}
+
+// doSyncNative performs rsync using native Go implementation.
+func (r *RsyncSyncer) doSyncNative(ctx context.Context, mirrorURL, destDir string) error {
 	client := rsync.NewClient()
 	client.Compress = false // Many mirrors don't support compression
 	client.Delete = true
@@ -221,6 +247,55 @@ func (r *RsyncSyncer) doSync(ctx context.Context, mirrorURL, destDir string) err
 	client.Logger = rsyncLogger{log: r.log, verbose: r.verbose}
 
 	return client.Sync(ctx, mirrorURL, destDir)
+}
+
+// hasSystemRsync checks if system rsync binary is available.
+func (r *RsyncSyncer) hasSystemRsync() bool {
+	_, err := exec.LookPath("rsync")
+	return err == nil
+}
+
+// doSyncSystem performs rsync using system binary.
+func (r *RsyncSyncer) doSyncSystem(ctx context.Context, mirrorURL, destDir string) error {
+	r.log.Info("Using system rsync for sync")
+
+	// Build rsync arguments
+	// -r: recursive
+	// -l: copy symlinks as symlinks
+	// -p: preserve permissions
+	// -t: preserve times
+	// -D: preserve device and special files
+	// -v: verbose (if enabled)
+	// -z: compress during transfer
+	// --delete: delete files not on source
+	// --timeout: timeout in seconds
+	args := []string{
+		"-rlptD",
+		"--delete",
+		"--timeout=180",
+	}
+
+	if r.verbose {
+		args = append(args, "-v", "--progress")
+	}
+
+	// Add source and destination
+	// rsync://host/module/ -> rsync://host/module
+	source := strings.TrimSuffix(mirrorURL, "/") + "/"
+	args = append(args, source, destDir+"/")
+
+	cmd := exec.CommandContext(ctx, "rsync", args...)
+
+	if r.verbose {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+	}
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("system rsync failed: %w", err)
+	}
+
+	return nil
 }
 
 // isRetryableError checks if an error is worth retrying.
