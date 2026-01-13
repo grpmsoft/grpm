@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **Integration tests for fetch/SRC_URI parsing** — Validates v0.7.2 functionality
+- **Integration tests for fetch/SRC_URI parsing** — Validates v0.7.3 functionality
   - Tests for variable expansion (P, PN, PV, etc.)
   - Tests for USE flag conditionals (nil = include all)
   - Tests for arrow rename syntax
@@ -31,25 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.7.3] - 2026-01-13
 
-### Documentation Hotfix
-
-> **Documentation and Process Improvements**
-
-#### Fixed
-- **README.md** - REST API endpoint corrected to Unix socket (`/var/run/grpm-rest.sock`)
-- **ROADMAP.md** - Updated to reflect v0.7.2 as current release with 98.2% coverage
-
-#### Changed
-- Release process documentation improved with clear pre-release checklist
-
----
-
-## [0.7.2] - 2026-01-13
-
-### Portage Compatibility Hotfix
+### Portage Compatibility Release
 
 > **Critical Fixes for Portage Compatibility**
 >
+> This is the definitive Portage compatibility release with code properly on main branch.
 > Fixes two important issues discovered during real-world testing on Gentoo WSL2:
 > proper handling of `package.mask` directories and signature file (`.asc`) fetching.
 
@@ -69,6 +55,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Upstream URLs** - Signature files use explicit upstream URLs instead of trying Gentoo mirrors
 - Example: `zlib-1.3.1.tar.xz.asc` now fetches from `https://zlib.net/` and GitHub
 
+##### Documentation
+- **README.md** - REST API endpoint corrected to Unix socket (`/var/run/grpm-rest.sock`)
+- **ROADMAP.md** - Updated to reflect current state with 98.2% coverage
+
 #### Changed
 - `internal/config/config.go` - `loadPackageMask()` now supports file or directory
 - `internal/profile/parser.go` - `parseListFile()` handles directory traversal
@@ -80,6 +70,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Follows PMS specification for profile directory handling
 - New test cases: `TestParseSrcURI_NilActiveFlags`, `TestParseSrcURI_FetchAllDistfiles`
 - Tested on real Gentoo WSL2 installation with sys-libs/zlib
+
+---
+
+## [0.7.2] - 2026-01-13
+
+### Superseded Release
+
+> ⚠️ **This release was superseded by v0.7.3.**
+>
+> Released before PR was properly merged to main. While binaries contain the code,
+> **please use v0.7.3** for proper git history and documentation.
 
 ---
 

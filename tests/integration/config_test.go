@@ -14,7 +14,7 @@ import (
 
 // TestConfig_PackageMaskDirectory tests package.mask as a directory (EAPI 7+).
 //
-// This validates the v0.7.2 fix for directory handling where package.mask
+// This validates the v0.7.3 fix for directory handling where package.mask
 // can be either a file or a directory containing multiple files.
 func TestConfig_PackageMaskDirectory(t *testing.T) {
 	tests := []struct {
