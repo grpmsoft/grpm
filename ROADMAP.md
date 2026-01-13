@@ -1,6 +1,6 @@
 # GRPM Roadmap
 
-> **E2E Integration Tests (v0.7.7)**
+> **Alternative Root Installation (v0.7.8)**
 >
 > Rapid development complete (v0.1.0 → v0.5.0).
 > Infrastructure release complete (v0.6.0).
@@ -8,6 +8,7 @@
 > Build reliability and output quality improvements (v0.7.5).
 > Critical version selection bug fix + emerge flags (v0.7.6).
 > Professional E2E test suite with CI integration (v0.7.7).
+> `--root` flag for chroot/stage tarball builds (v0.7.8).
 > **98.2% tree coverage verified on real Gentoo!**
 
 ---
@@ -68,7 +69,15 @@ Key insight: **Eclasses don't need Go implementations.** They are loaded dynamic
 
 ## Release History
 
-### v0.7.7 — E2E Integration Tests (Current)
+### v0.7.8 — Alternative Root Installation (Current)
+
+**Install packages to chroot, stage tarballs, or cross-compilation targets:**
+
+- **`--root` flag** — Equivalent to `$ROOT` in Portage
+- **VarDB isolation** — Package database at `{root}/var/db/pkg`
+- **Use case** — Building stage tarballs, chroots, cross-compilation
+
+### v0.7.7 — E2E Integration Tests
 
 **Professional E2E test suite with CI integration:**
 
@@ -160,13 +169,14 @@ Key insight: **Eclasses don't need Go implementations.** They are loaded dynamic
 ## Roadmap to v1.0.0
 
 ```
-v0.7.7 ← CURRENT (E2E Integration Tests)
+v0.7.8 ← CURRENT (Alternative Root Installation)
     │   ✅ v0.6.0: Distfile fetching, debug helpers, coverage analyzer
     │   ✅ v0.7.0: Portage-style logging
     │   ✅ v0.7.2-v0.7.4: Portage compatibility fixes
     │   ✅ v0.7.5: Unified logging, source build reliability
     │   ✅ v0.7.6: Version selection fix, emerge flags
     │   ✅ v0.7.7: E2E tests + CI integration
+    │   ✅ v0.7.8: --root flag for chroot/stage builds
     │   ✅ 98.2% tree coverage on real Gentoo!
     ↓
 v0.8.0 — Production Hardening (2 tasks)
@@ -297,4 +307,4 @@ Key deliverables:
 ---
 
 *This roadmap evolves based on community feedback and project needs.*
-*Last updated: 2026-01-13 (v0.7.7 release)*
+*Last updated: 2026-01-14 (v0.7.8 release)*

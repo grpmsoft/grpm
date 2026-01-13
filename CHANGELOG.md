@@ -7,17 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Planned
+- Performance optimization for large dependency graphs
+- Web UI for daemon management
+- Native GUI application ([gogpu/ui](https://github.com/gogpu/ui))
+
+---
+
+## [0.7.8] - 2026-01-14
+
+### Alternative Root Installation
+
+> **Install packages to chroot, stage tarballs, or cross-compilation targets**
+
 ### Added
 - **`--root` flag for emerge** — Install packages to alternative root directory
   - Equivalent to `$ROOT` environment variable in Portage
   - Useful for building stage tarballs, chroots, cross-compilation
   - VarDB created at `{root}/var/db/pkg`
   - Example: `grpm emerge --root /mnt/gentoo app-misc/hello`
-
-### Planned
-- Performance optimization for large dependency graphs
-- Web UI for daemon management
-- Native GUI application ([gogpu/ui](https://github.com/gogpu/ui))
 
 ---
 
