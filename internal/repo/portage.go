@@ -2,13 +2,13 @@ package repo
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 
 	"github.com/coregx/coregex"
+	"github.com/grpmsoft/grpm/internal/logging"
 	"github.com/grpmsoft/grpm/internal/pkg"
 )
 
@@ -71,7 +71,7 @@ func (pr *PortageRepository) LoadPackage(name string) (*pkg.Package, error) {
 
 	// Add path logging
 	absPath, _ := filepath.Abs(pkgDir)
-	log.Printf("Looking for package in: %s", absPath)
+	logging.Debug("Looking for package in: %s", absPath)
 
 	files, err := os.ReadDir(pkgDir)
 	if err != nil {
@@ -103,14 +103,14 @@ func (pr *PortageRepository) LoadPackage(name string) (*pkg.Package, error) {
 func (pr *PortageRepository) parseEbuild(name, path string) (*pkg.Package, error) {
 	// Check cache first
 	if cached, ok := pr.cache.Load(path); ok {
-		log.Printf("Cache hit for ebuild: %s", path)
+		logging.Debug("Cache hit for ebuild: %s", path)
 		return cached.(*pkg.Package), nil
 	}
 
-	log.Printf("Parsing ebuild: %s", path)
+	logging.Debug("Parsing ebuild: %s", path)
 	content, err := os.ReadFile(path)
 	if err != nil {
-		log.Printf("Error reading ebuild file: %v", err)
+		logging.Debug("Error reading ebuild file: %v", err)
 		return nil, err
 	}
 
@@ -156,7 +156,7 @@ func (pr *PortageRepository) parseEbuild(name, path string) (*pkg.Package, error
 		for _, pd := range parsedDeps {
 			if pd.IsBlocker {
 				// TODO: Add to p.Conflicts instead of p.Deps
-				log.Printf("Skipping blocker: %s for %s", pd.Constraint.Name, name)
+				logging.Debug("Skipping blocker: %s for %s", pd.Constraint.Name, name)
 				continue
 			}
 			constraint := pd.Constraint
@@ -165,7 +165,7 @@ func (pr *PortageRepository) parseEbuild(name, path string) (*pkg.Package, error
 			realDepsCount++
 		}
 		if realDepsCount > 0 {
-			log.Printf("Parsed %d dependencies for %s (%d blockers skipped)",
+			logging.Debug("Parsed %d dependencies for %s (%d blockers skipped)",
 				realDepsCount, name, len(parsedDeps)-realDepsCount)
 		}
 	}
@@ -277,7 +277,7 @@ func (pr *PortageRepository) GetAllVersions(packageName string) ([]*pkg.Package,
 		ebuildPath := filepath.Join(pkgDir, file.Name())
 		p, err := pr.parseEbuild(packageName, ebuildPath)
 		if err != nil {
-			log.Printf("Warning: failed to parse %s: %v", file.Name(), err)
+			logging.Debug("Warning: failed to parse %s: %v", file.Name(), err)
 			continue
 		}
 

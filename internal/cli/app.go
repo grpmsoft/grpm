@@ -48,14 +48,18 @@ func NewApp(config *AppConfig) *App {
 	logger := logging.New()
 
 	// Set logging level based on verbosity
+	// Set on both the app logger and the global default logger
+	var level logging.Level
 	switch config.VerboseLevel {
 	case 0:
-		logger.SetLevel(logging.LevelNormal)
+		level = logging.LevelNormal
 	case 1:
-		logger.SetLevel(logging.LevelVerbose)
+		level = logging.LevelVerbose
 	default:
-		logger.SetLevel(logging.LevelDebug)
+		level = logging.LevelDebug
 	}
+	logger.SetLevel(level)
+	logging.SetLevel(level) // Also set global default
 
 	app := &App{
 		client:       NewClient(clientConfig),
