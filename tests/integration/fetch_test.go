@@ -5,8 +5,10 @@ package integration
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/grpmsoft/grpm/internal/fetch"
 	"github.com/grpmsoft/grpm/internal/repo"
 )
 
@@ -342,4 +344,101 @@ func getRepoPath() string {
 		return path
 	}
 	return DefaultRepoPath
+}
+
+// TestThirdPartyMirrorExpansion_RealRepository tests mirror:// URL expansion
+// against a real Gentoo repository's thirdpartymirrors file.
+//
+// This test validates the fix for:
+//
+//	"grpm fetch app-misc/hello" failing with "unsupported protocol scheme mirror"
+//
+// The fix properly expands mirror://gnu/, mirror://sourceforge/, etc. to real HTTP URLs.
+func TestThirdPartyMirrorExpansion_RealRepository(t *testing.T) {
+	repoPath := os.Getenv("PORTDIR")
+	if repoPath == "" {
+		repoPath = "/var/db/repos/gentoo"
+	}
+
+	thirdPartyPath := filepath.Join(repoPath, "profiles", "thirdpartymirrors")
+	if _, err := os.Stat(thirdPartyPath); os.IsNotExist(err) {
+		t.Skip("Skipping: real Portage repository not available at", repoPath)
+	}
+
+	mirrors := fetch.ParseThirdPartyMirrors(repoPath)
+
+	// Verify GNU mirror exists (most essential, used by many packages)
+	// Other mirrors may not exist in all repository configurations
+	if urls, ok := mirrors["gnu"]; !ok || len(urls) == 0 {
+		t.Fatal("Essential mirror 'gnu' not found or has no URLs")
+	}
+
+	// Log which mirrors are available
+	t.Logf("Found %d mirrors in thirdpartymirrors", len(mirrors))
+
+	// Test GNU mirror expansion (most common)
+	gnuURLs := mirrors.ExpandMirrorURL("mirror://gnu/hello/hello-2.12.tar.gz")
+	if len(gnuURLs) == 0 {
+		t.Fatal("GNU mirror expansion returned empty list")
+	}
+
+	// All expanded URLs should be HTTP/HTTPS, not mirror://
+	for _, url := range gnuURLs {
+		if strings.HasPrefix(url, "mirror://") {
+			t.Errorf("Expansion failed: URL still has mirror:// scheme: %s", url)
+		}
+		if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+			t.Errorf("Unexpected scheme in expanded URL: %s", url)
+		}
+		if !strings.HasSuffix(url, "hello/hello-2.12.tar.gz") {
+			t.Errorf("Path not preserved in expanded URL: %s", url)
+		}
+	}
+
+	t.Logf("GNU mirror expanded to %d URLs, first: %s", len(gnuURLs), gnuURLs[0])
+
+	// Test SourceForge mirror
+	sfURLs := mirrors.ExpandMirrorURL("mirror://sourceforge/project/file.tar.gz")
+	if len(sfURLs) == 0 {
+		t.Error("SourceForge mirror expansion returned empty list")
+	}
+	t.Logf("SourceForge mirror expanded to %d URLs", len(sfURLs))
+}
+
+// TestThirdPartyMirrorExpansion_UnknownMirror tests graceful handling
+// of unknown mirror names.
+func TestThirdPartyMirrorExpansion_UnknownMirror(t *testing.T) {
+	mirrors := fetch.ThirdPartyMirrors{
+		"gnu": {"https://ftp.gnu.org/gnu/"},
+	}
+
+	// Unknown mirror should return original URL unchanged
+	result := mirrors.ExpandMirrorURL("mirror://unknown-mirror-12345/path/file.tar.gz")
+	if len(result) != 1 {
+		t.Fatalf("Expected 1 URL for unknown mirror, got %d", len(result))
+	}
+	if result[0] != "mirror://unknown-mirror-12345/path/file.tar.gz" {
+		t.Errorf("Unknown mirror should return original URL, got: %s", result[0])
+	}
+}
+
+// TestThirdPartyMirrorExpansion_NonMirrorURL tests that non-mirror URLs
+// pass through unchanged.
+func TestThirdPartyMirrorExpansion_NonMirrorURL(t *testing.T) {
+	mirrors := fetch.ThirdPartyMirrors{
+		"gnu": {"https://ftp.gnu.org/gnu/"},
+	}
+
+	testCases := []string{
+		"https://github.com/project/archive/v1.0.tar.gz",
+		"http://example.com/file.tar.gz",
+		"ftp://ftp.example.com/pub/file.tar.gz",
+	}
+
+	for _, url := range testCases {
+		result := mirrors.ExpandMirrorURL(url)
+		if len(result) != 1 || result[0] != url {
+			t.Errorf("Non-mirror URL should pass through unchanged: %s -> %v", url, result)
+		}
+	}
 }
