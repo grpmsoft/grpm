@@ -56,8 +56,10 @@ type SrcURIParser struct {
 // The activeFlags parameter indicates which USE flags are enabled.
 func NewSrcURIParser(vars map[string]string, activeFlags map[string]bool) *SrcURIParser {
 	p := &SrcURIParser{
-		vars:        make(map[string]string),
-		activeFlags: make(map[string]bool),
+		vars: make(map[string]string),
+		// activeFlags: nil means "include all conditionals" (for fetch operations)
+		// Empty map means "no flags enabled" (for normal USE evaluation)
+		activeFlags: nil,
 	}
 
 	// Copy vars to avoid external modification
@@ -65,9 +67,12 @@ func NewSrcURIParser(vars map[string]string, activeFlags map[string]bool) *SrcUR
 		p.vars[k] = v
 	}
 
-	// Copy activeFlags
-	for k, v := range activeFlags {
-		p.activeFlags[k] = v
+	// Only copy activeFlags if provided (preserve nil semantics)
+	if activeFlags != nil {
+		p.activeFlags = make(map[string]bool)
+		for k, v := range activeFlags {
+			p.activeFlags[k] = v
+		}
 	}
 
 	return p
@@ -182,7 +187,17 @@ func (p *SrcURIParser) parseURLEntry(tokens []string, i int, useFlag string, neg
 }
 
 // conditionMet checks if a USE flag condition is satisfied.
+//
+// Special case: if activeFlags is nil, ALL conditions are considered met.
+// This is useful for fetching all distfiles regardless of USE flags,
+// since Manifest contains checksums for ALL files.
 func (p *SrcURIParser) conditionMet(flag string, negate bool) bool {
+	// nil activeFlags means "include everything" - useful for fetch operations
+	// where we want to download all distfiles in the Manifest
+	if p.activeFlags == nil {
+		return true
+	}
+
 	active := p.activeFlags[flag]
 	if negate {
 		return !active

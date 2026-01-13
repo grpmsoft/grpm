@@ -823,3 +823,137 @@ sys-libs/zlib -debug
 		t.Errorf("Expected 2 flags, got %d", len(flags))
 	}
 }
+
+// TestLoadPackageMask_Directory tests loading package.mask as a directory (EAPI 7+).
+// This is how many Gentoo installations configure package masks.
+func TestLoadPackageMask_Directory(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create package.mask as a directory
+	maskDir := filepath.Join(tmpDir, "package.mask")
+	if err := os.MkdirAll(maskDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create multiple mask files - should be read in sorted order
+	files := map[string]string{
+		"10-system":   ">=sys-libs/glibc-2.35\n",
+		"20-unstable": "~sys-apps/systemd-250\n# comment\n",
+		"30-broken":   "dev-libs/broken-pkg\ndev-libs/another-broken\n",
+	}
+
+	for name, content := range files {
+		path := filepath.Join(maskDir, name)
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Create files that should be ignored
+	ignoredFiles := []string{".hidden", "backup~", ".git"}
+	for _, name := range ignoredFiles {
+		path := filepath.Join(maskDir, name)
+		if err := os.WriteFile(path, []byte("should-be-ignored\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+
+	// Should have 4 masks total (1 + 1 + 2), ignoring comments and hidden files
+	if len(cfg.PackageMask) != 4 {
+		t.Errorf("Expected 4 masks from directory, got %d: %v", len(cfg.PackageMask), cfg.PackageMask)
+	}
+
+	// Verify order: files should be read in sorted order (10-system, 20-unstable, 30-broken)
+	expectedOrder := []string{
+		">=sys-libs/glibc-2.35",
+		"~sys-apps/systemd-250",
+		"dev-libs/broken-pkg",
+		"dev-libs/another-broken",
+	}
+
+	for i, expected := range expectedOrder {
+		if i >= len(cfg.PackageMask) {
+			t.Errorf("Missing mask at index %d: expected %s", i, expected)
+			continue
+		}
+		if cfg.PackageMask[i] != expected {
+			t.Errorf("Mask[%d] = %q, expected %q", i, cfg.PackageMask[i], expected)
+		}
+	}
+}
+
+// TestLoadPackageMask_EmptyDirectory tests loading an empty package.mask directory.
+func TestLoadPackageMask_EmptyDirectory(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create empty package.mask directory
+	maskDir := filepath.Join(tmpDir, "package.mask")
+	if err := os.MkdirAll(maskDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+
+	// Should have no masks
+	if len(cfg.PackageMask) != 0 {
+		t.Errorf("Expected 0 masks from empty directory, got %d", len(cfg.PackageMask))
+	}
+}
+
+// TestLoadPackageMask_MixedContent tests that subdirectories inside package.mask are ignored.
+func TestLoadPackageMask_SubdirectoriesIgnored(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create package.mask as a directory
+	maskDir := filepath.Join(tmpDir, "package.mask")
+	if err := os.MkdirAll(maskDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a regular file
+	if err := os.WriteFile(filepath.Join(maskDir, "main"), []byte("sys-libs/test\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a subdirectory with content (should be ignored per PMS)
+	subDir := filepath.Join(maskDir, "subdir")
+	if err := os.MkdirAll(subDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subDir, "nested"), []byte("should-be-ignored\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+
+	// Should only have 1 mask (from "main"), not from subdirectory
+	if len(cfg.PackageMask) != 1 {
+		t.Errorf("Expected 1 mask (subdirs ignored), got %d: %v", len(cfg.PackageMask), cfg.PackageMask)
+	}
+
+	if len(cfg.PackageMask) > 0 && cfg.PackageMask[0] != "sys-libs/test" {
+		t.Errorf("Expected mask 'sys-libs/test', got %q", cfg.PackageMask[0])
+	}
+}
+
+// TestReadPortageConfigPath_NonExistent tests that non-existent paths return nil, not error.
+func TestReadPortageConfigPath_NonExistent(t *testing.T) {
+	lines, err := readPortageConfigPath("/nonexistent/path/package.mask")
+	if err != nil {
+		t.Errorf("Expected nil error for non-existent path, got: %v", err)
+	}
+	if lines != nil {
+		t.Errorf("Expected nil lines for non-existent path, got: %v", lines)
+	}
+}

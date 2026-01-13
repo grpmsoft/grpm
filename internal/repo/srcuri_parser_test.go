@@ -855,3 +855,159 @@ func BenchmarkTokenizeSrcURI(b *testing.B) {
 		tokenizeSrcURI(input)
 	}
 }
+
+// TestParseSrcURI_NilActiveFlags tests that nil activeFlags includes ALL conditional blocks.
+// This is essential for fetch operations where we want to download all distfiles
+// in the Manifest, regardless of USE flag settings.
+//
+// Real-world example: zlib's .asc signature file is inside verify-sig? ( ... )
+// but should still be fetched when downloading all distfiles.
+func TestParseSrcURI_NilActiveFlags(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		input           string
+		activeFlags     map[string]bool
+		wantFilenames   []string
+		wantDescription string
+	}{
+		{
+			name: "nil flags includes all conditionals",
+			input: `
+				https://example.com/main.tar.xz
+				ssl? ( https://example.com/ssl-extra.tar.xz )
+				verify-sig? ( https://example.com/main.tar.xz.asc )
+			`,
+			activeFlags:     nil, // nil = include everything
+			wantFilenames:   []string{"main.tar.xz", "ssl-extra.tar.xz", "main.tar.xz.asc"},
+			wantDescription: "nil activeFlags should include all conditional blocks for fetch operations",
+		},
+		{
+			name: "empty flags excludes conditionals",
+			input: `
+				https://example.com/main.tar.xz
+				ssl? ( https://example.com/ssl-extra.tar.xz )
+			`,
+			activeFlags:     map[string]bool{}, // empty = no flags enabled
+			wantFilenames:   []string{"main.tar.xz"},
+			wantDescription: "empty activeFlags (not nil) should exclude unmet conditionals",
+		},
+		{
+			name: "nil flags handles nested conditionals",
+			input: `
+				https://example.com/base.tar.xz
+				ssl? (
+					gnutls? ( https://example.com/gnutls.tar.xz )
+					openssl? ( https://example.com/openssl.tar.xz )
+				)
+			`,
+			activeFlags:     nil,
+			wantFilenames:   []string{"base.tar.xz", "gnutls.tar.xz", "openssl.tar.xz"},
+			wantDescription: "nil activeFlags should include all nested conditionals",
+		},
+		{
+			name: "nil flags handles negated conditionals",
+			input: `
+				https://example.com/main.tar.xz
+				!minimal? ( https://example.com/extras.tar.xz )
+			`,
+			activeFlags:     nil,
+			wantFilenames:   []string{"main.tar.xz", "extras.tar.xz"},
+			wantDescription: "nil activeFlags should include negated conditionals (they're still conditionals)",
+		},
+		{
+			name: "real-world zlib pattern",
+			input: `
+				https://zlib.net/zlib-1.3.1.tar.xz
+				https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.xz
+				verify-sig? (
+					https://zlib.net/zlib-1.3.1.tar.xz.asc
+					https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.xz.asc
+				)
+			`,
+			activeFlags:     nil,
+			wantFilenames:   []string{"zlib-1.3.1.tar.xz", "zlib-1.3.1.tar.xz", "zlib-1.3.1.tar.xz.asc", "zlib-1.3.1.tar.xz.asc"},
+			wantDescription: "should extract all distfiles from zlib-style SRC_URI including .asc signatures",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			entries, err := ParseSrcURI(tt.input, tt.activeFlags, nil)
+			if err != nil {
+				t.Fatalf("ParseSrcURI failed: %v", err)
+			}
+
+			if len(entries) != len(tt.wantFilenames) {
+				t.Errorf("%s: got %d entries, want %d\nGot: %v",
+					tt.wantDescription, len(entries), len(tt.wantFilenames), entryFilenames(entries))
+			}
+
+			for i, wantFile := range tt.wantFilenames {
+				if i >= len(entries) {
+					break
+				}
+				if entries[i].Filename != wantFile {
+					t.Errorf("entry[%d].Filename = %q, want %q", i, entries[i].Filename, wantFile)
+				}
+			}
+		})
+	}
+}
+
+// TestParseSrcURI_FetchAllDistfiles tests the typical fetch workflow where
+// we need ALL distfiles from SRC_URI regardless of USE flags, because
+// the Manifest contains checksums for all files.
+//
+// Note: Variable expansion in filenames only works with arrow syntax (URL -> filename).
+// Without arrow syntax, the filename is the URL basename without expansion.
+func TestParseSrcURI_FetchAllDistfiles(t *testing.T) {
+	t.Parallel()
+
+	// Simulates a package with multiple conditional distfiles
+	// Using literal filenames in URLs (as in real ebuilds after variable expansion)
+	srcURI := `
+		https://example.com/myapp-1.0.tar.xz
+		doc? ( https://example.com/myapp-1.0-docs.tar.xz )
+		examples? ( https://example.com/myapp-1.0-examples.tar.xz )
+		verify-sig? ( https://example.com/myapp-1.0.tar.xz.asc )
+		test? ( https://example.com/myapp-1.0-tests.tar.xz )
+	`
+
+	// Fetch mode: nil activeFlags = get everything
+	entries, err := ParseSrcURI(srcURI, nil, nil)
+	if err != nil {
+		t.Fatalf("ParseSrcURI failed: %v", err)
+	}
+
+	expectedFiles := []string{
+		"myapp-1.0.tar.xz",
+		"myapp-1.0-docs.tar.xz",
+		"myapp-1.0-examples.tar.xz",
+		"myapp-1.0.tar.xz.asc",
+		"myapp-1.0-tests.tar.xz",
+	}
+
+	if len(entries) != len(expectedFiles) {
+		t.Fatalf("Expected %d distfiles, got %d: %v",
+			len(expectedFiles), len(entries), entryFilenames(entries))
+	}
+
+	for i, expected := range expectedFiles {
+		if entries[i].Filename != expected {
+			t.Errorf("Distfile %d: expected %q, got %q", i, expected, entries[i].Filename)
+		}
+	}
+}
+
+// entryFilenames extracts filenames from SrcURIEntry slice for error reporting.
+func entryFilenames(entries []SrcURIEntry) []string {
+	result := make([]string, len(entries))
+	for i, e := range entries {
+		result[i] = e.Filename
+	}
+	return result
+}

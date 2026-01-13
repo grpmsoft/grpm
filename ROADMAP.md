@@ -1,11 +1,11 @@
 # GRPM Roadmap
 
-> **Infrastructure Complete (v0.6.0)**
+> **Portage Compatibility Hotfix (v0.7.2)**
 >
 > Rapid development complete (v0.1.0 → v0.5.0).
 > Infrastructure release complete (v0.6.0).
-> ~75% → 90% coverage path now clear.
-> Next: validation and production hardening.
+> Portage-style logging (v0.7.0) + compatibility fixes (v0.7.2).
+> **98.2% tree coverage verified on real Gentoo!**
 
 ---
 
@@ -65,7 +65,23 @@ Key insight: **Eclasses don't need Go implementations.** They are loaded dynamic
 
 ## Release History
 
-### v0.6.0 — Infrastructure & Quality (Current)
+### v0.7.2 — Portage Compatibility Hotfix (Current)
+
+**Critical fixes for real-world Portage compatibility:**
+
+- **package.mask directory** — EAPI 7+ supports directories, not just files
+- **SRC_URI parsing for fetch** — Explicit upstream URLs for .asc signatures
+- **USE conditional handling** — `nil` activeFlags includes ALL conditionals
+
+### v0.7.0 — Portage-Style Logging
+
+**Professional terminal output:**
+
+- **Portage-style prefixes** — `>>>`, `***`, `!!!` for different message types
+- **Colored output** — Green (success), Yellow (warning), Red (error)
+- **Phase headers** — Clear separation of build phases
+
+### v0.6.0 — Infrastructure & Quality
 
 **Production readiness infrastructure:**
 
@@ -121,17 +137,11 @@ Key insight: **Eclasses don't need Go implementations.** They are loaded dynamic
 ## Roadmap to v1.0.0
 
 ```
-v0.6.0 ← CURRENT (Infrastructure Complete)
-    │   ✅ Distfile fetching
-    │   ✅ Debug helpers (debug-print)
-    │   ✅ Eclass integration testing (21 eclasses)
-    │   ✅ Coverage analyzer (grpm analyze)
-    │   ✅ External tool detection (grpm tools)
-    ↓
-v0.7.0 — Validation & Documentation (3 tasks)
-    │   • Eclass compatibility matrix
-    │   • Helper function gap analysis
-    │   • Error handling improvements
+v0.7.2 ← CURRENT (Portage Compatibility Hotfix)
+    │   ✅ v0.6.0: Distfile fetching, debug helpers, coverage analyzer
+    │   ✅ v0.7.0: Portage-style logging
+    │   ✅ v0.7.2: package.mask directories, SRC_URI parsing
+    │   ✅ 98.2% tree coverage on real Gentoo!
     ↓
 v0.8.0 — Production Hardening (2 tasks)
     │   • Performance optimization

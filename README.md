@@ -122,7 +122,7 @@ grpm
 │
 └── Daemon Mode (grpm daemon)
     ├── gRPC Server (unix:///var/run/grpm.sock)
-    ├── REST API (http://127.0.0.1:8080)
+    ├── REST API (unix:///var/run/grpm-rest.sock)
     └── Job Queue with conflict detection
 ```
 

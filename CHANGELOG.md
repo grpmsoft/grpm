@@ -14,6 +14,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.7.2] - 2026-01-13
+
+### Portage Compatibility Hotfix
+
+> **Critical Fixes for Portage Compatibility**
+>
+> Fixes two important issues discovered during real-world testing on Gentoo WSL2:
+> proper handling of `package.mask` directories and signature file (`.asc`) fetching.
+
+#### Fixed
+
+##### package.mask Directory Handling (EAPI 7+)
+- **Directory support** - `package.mask` can now be a directory containing multiple files
+- **PMS-compliant file ordering** - Files sorted lexicographically (POSIX locale)
+- **Skip patterns** - Dotfiles (`.hidden`) and backup files (`file~`) are ignored
+- **Subdirectory handling** - Subdirectories are not recursed into (matches Portage behavior)
+- Applied same fix to `package.use`, `package.accept_keywords`, and profile files
+
+##### Signature File (.asc) Fetching
+- **SRC_URI parsing for fetch** - Now parses ebuild's SRC_URI to get explicit URLs
+- **USE conditional handling** - Passing `nil` for activeFlags now includes ALL conditionals
+- **verify-sig support** - `.asc` files inside `verify-sig? ( ... )` are now properly extracted
+- **Upstream URLs** - Signature files use explicit upstream URLs instead of trying Gentoo mirrors
+- Example: `zlib-1.3.1.tar.xz.asc` now fetches from `https://zlib.net/` and GitHub
+
+#### Changed
+- `internal/config/config.go` - `loadPackageMask()` now supports file or directory
+- `internal/profile/parser.go` - `parseListFile()` handles directory traversal
+- `internal/repo/srcuri_parser.go` - `nil` activeFlags means "include all conditionals"
+- `internal/cli/fetch.go` - `getDistfilesWithURIs()` parses SRC_URI from ebuild
+
+#### Technical Details
+- Verified against Portage source code (`lib/portage/util/__init__.py:grabfile`)
+- Follows PMS specification for profile directory handling
+- New test cases: `TestParseSrcURI_NilActiveFlags`, `TestParseSrcURI_FetchAllDistfiles`
+- Tested on real Gentoo WSL2 installation with sys-libs/zlib
+
+---
+
 ## [0.7.0] - 2026-01-13
 
 ### Portage-Style Logging Release
@@ -682,7 +721,9 @@ GRPM (Go Resource Package Manager) is a modern reimplementation of Gentoo's Port
 - **Issues**: https://github.com/grpmsoft/grpm/issues
 - **License**: [Apache-2.0](LICENSE)
 
-[Unreleased]: https://github.com/grpmsoft/grpm/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/grpmsoft/grpm/compare/v0.7.2...HEAD
+[0.7.2]: https://github.com/grpmsoft/grpm/compare/v0.7.1...v0.7.2
+[0.7.1]: https://github.com/grpmsoft/grpm/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/grpmsoft/grpm/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/grpmsoft/grpm/compare/v0.5.2...v0.6.0
 [0.5.2]: https://github.com/grpmsoft/grpm/compare/v0.5.1...v0.5.2
