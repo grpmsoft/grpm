@@ -16,7 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       test_filter:
-        description: 'Test filter (e.g., TestAutotools, TestCMake, TestMeson)'
+        description: 'Test filter (e.g., E2E, Autotools, CMake, Meson)'
         required: false
         default: ''
       timeout_minutes:
@@ -75,6 +75,19 @@ jobs:
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           go build -v -o bin/grpm ./cmd/grpm
           ./bin/grpm version || echo "Version check completed"
+
+      - name: Run E2E Tests
+        if: ${{ !github.event.inputs.test_filter || contains(github.event.inputs.test_filter, 'E2E') }}
+        run: |
+          echo "=== E2E Integration Tests ==="
+          echo "Testing version selection, resolve workflow, dependency chains..."
+          go test -v -tags=integration -timeout=10m \
+            -run 'TestE2E' \
+            ./tests/integration/...
+        env:
+          GRPM_REPO_PATH: /var/db/repos/gentoo
+          GRPM_DIST_DIR: /var/cache/distfiles
+          GRPM_TMP_DIR: /var/tmp/portage
 
       - name: Run Autotools Tests
         if: ${{ !github.event.inputs.test_filter || contains(github.event.inputs.test_filter, 'Autotools') }}
