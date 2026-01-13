@@ -1,10 +1,10 @@
 # GRPM Roadmap
 
-> **Portage Compatibility Hotfix (v0.7.2)**
+> **Documentation Hotfix (v0.7.3)**
 >
 > Rapid development complete (v0.1.0 → v0.5.0).
 > Infrastructure release complete (v0.6.0).
-> Portage-style logging (v0.7.0) + compatibility fixes (v0.7.2).
+> Portage-style logging (v0.7.0) + compatibility fixes (v0.7.2) + docs (v0.7.3).
 > **98.2% tree coverage verified on real Gentoo!**
 
 ---
@@ -137,10 +137,11 @@ Key insight: **Eclasses don't need Go implementations.** They are loaded dynamic
 ## Roadmap to v1.0.0
 
 ```
-v0.7.2 ← CURRENT (Portage Compatibility Hotfix)
+v0.7.3 ← CURRENT (Documentation Hotfix)
     │   ✅ v0.6.0: Distfile fetching, debug helpers, coverage analyzer
     │   ✅ v0.7.0: Portage-style logging
     │   ✅ v0.7.2: package.mask directories, SRC_URI parsing
+    │   ✅ v0.7.3: Documentation fixes
     │   ✅ 98.2% tree coverage on real Gentoo!
     ↓
 v0.8.0 — Production Hardening (2 tasks)
