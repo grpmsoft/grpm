@@ -7,9 +7,13 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 
 	"github.com/grpmsoft/grpm/internal/config"
 	"github.com/grpmsoft/grpm/internal/fetch"
+	"github.com/grpmsoft/grpm/internal/pkg"
+	"github.com/grpmsoft/grpm/internal/repo"
 )
 
 // runFetch handles the 'fetch' command - downloads source tarballs for packages.
@@ -65,6 +69,9 @@ func (a *App) runFetch(args []string) error {
 }
 
 // fetchPackageDistfiles fetches distfiles for a single package.
+//
+// This function properly handles SRC_URI parsing to get explicit URLs
+// for distfiles that are not available on Gentoo mirrors (e.g., .asc signature files).
 func (a *App) fetchPackageDistfiles(atom, repoPath, distDir string, pretend, verifyOnly bool, cfg *config.Config) error {
 	log.Printf(">>> Fetching distfiles for %s", atom)
 
@@ -81,7 +88,15 @@ func (a *App) fetchPackageDistfiles(atom, repoPath, distDir string, pretend, ver
 		return fmt.Errorf("failed to parse Manifest for %s: %w", catPkg, err)
 	}
 
-	distfiles := manifest.GetDistfiles()
+	// Parse SRC_URI from ebuild to get explicit URLs for distfiles
+	distfiles, err := a.getDistfilesWithURIs(catPkg, repoPath, manifest)
+	if err != nil {
+		// Fallback to manifest-only distfiles (without explicit URIs)
+		log.Printf("  Warning: could not parse SRC_URI: %v", err)
+		log.Printf("  Falling back to mirror-only downloads")
+		distfiles = manifest.GetDistfiles()
+	}
+
 	if len(distfiles) == 0 {
 		log.Printf("  No distfiles for %s", catPkg)
 		return nil
@@ -92,7 +107,14 @@ func (a *App) fetchPackageDistfiles(atom, repoPath, distDir string, pretend, ver
 		fmt.Printf("\nDistfiles for %s:\n", atom)
 		for _, df := range distfiles {
 			algo, _ := df.Checksums.Preferred()
-			fmt.Printf("  %s (%d bytes, %s)\n", df.Filename, df.Size, algo)
+			if len(df.URIs) > 0 {
+				fmt.Printf("  %s (%d bytes, %s)\n", df.Filename, df.Size, algo)
+				for _, uri := range df.URIs {
+					fmt.Printf("    -> %s\n", uri)
+				}
+			} else {
+				fmt.Printf("  %s (%d bytes, %s) [mirrors]\n", df.Filename, df.Size, algo)
+			}
 		}
 		return nil
 	}
@@ -104,6 +126,134 @@ func (a *App) fetchPackageDistfiles(atom, repoPath, distDir string, pretend, ver
 
 	// Download mode
 	return a.downloadDistfiles(distfiles, distDir, cfg)
+}
+
+// getDistfilesWithURIs parses SRC_URI from the best ebuild version
+// and returns distfiles with explicit URLs where available.
+//
+// This is essential for files like .asc signatures that have explicit
+// upstream URLs and are NOT available on Gentoo mirrors.
+func (a *App) getDistfilesWithURIs(catPkg, repoPath string, manifest *fetch.Manifest) ([]fetch.Distfile, error) {
+	// Split category/package
+	parts := strings.SplitN(catPkg, "/", 2)
+	if len(parts) != 2 {
+		return nil, fmt.Errorf("invalid package format: %s", catPkg)
+	}
+	category, pkgName := parts[0], parts[1]
+
+	// Find best ebuild version
+	pkgDir := filepath.Join(repoPath, catPkg)
+	ebuildPath, version, err := a.findBestEbuild(pkgDir, pkgName)
+	if err != nil {
+		return nil, fmt.Errorf("finding ebuild: %w", err)
+	}
+
+	// Read ebuild content
+	content, err := os.ReadFile(ebuildPath)
+	if err != nil {
+		return nil, fmt.Errorf("reading ebuild: %w", err)
+	}
+
+	// Create parser with package metadata for variable expansion
+	meta := repo.NewPackageMetadata(category, pkgName, version)
+	parser := repo.NewEbuildParserWithMetadata(string(content), meta)
+
+	// Extract SRC_URI
+	srcURI := parser.ExtractVariable("SRC_URI")
+	if srcURI == "" {
+		// No SRC_URI - return manifest distfiles without URIs
+		return manifest.GetDistfiles(), nil
+	}
+
+	// Build variable map for SRC_URI parsing
+	vars := map[string]string{
+		"P":        meta.P,
+		"PN":       meta.PN,
+		"PV":       meta.PV,
+		"PR":       meta.PR,
+		"PVR":      meta.PVR,
+		"PF":       meta.PF,
+		"CATEGORY": meta.Category,
+	}
+
+	// Parse SRC_URI entries (no USE flag filtering for fetch - get all files)
+	entries, err := repo.ParseSrcURI(srcURI, nil, vars)
+	if err != nil {
+		return nil, fmt.Errorf("parsing SRC_URI: %w", err)
+	}
+
+	// Build map of filename -> URIs from SRC_URI entries
+	uriMap := make(map[string][]string)
+	for _, entry := range entries {
+		if entry.URL != "" {
+			uriMap[entry.Filename] = append(uriMap[entry.Filename], entry.URL)
+		}
+	}
+
+	// Create distfiles with checksums from manifest and URIs from SRC_URI
+	var distfiles []fetch.Distfile
+	for _, entry := range manifest.DistFiles {
+		df := fetch.NewDistfile(entry.Filename, entry.Size, entry.Checksums)
+
+		// Add explicit URIs if available
+		if uris, ok := uriMap[entry.Filename]; ok && len(uris) > 0 {
+			df = df.WithURIs(uris)
+		}
+
+		distfiles = append(distfiles, df)
+	}
+
+	return distfiles, nil
+}
+
+// findBestEbuild finds the best (highest version) ebuild in the package directory.
+//
+// Returns the ebuild path and extracted version string.
+func (a *App) findBestEbuild(pkgDir, pkgName string) (string, string, error) {
+	entries, err := os.ReadDir(pkgDir)
+	if err != nil {
+		return "", "", fmt.Errorf("reading package directory: %w", err)
+	}
+
+	// Collect all ebuild versions
+	type ebuildInfo struct {
+		path    string
+		version string
+	}
+	var ebuilds []ebuildInfo
+
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".ebuild") {
+			continue
+		}
+
+		// Extract version from filename: pkgName-version.ebuild
+		name := strings.TrimSuffix(entry.Name(), ".ebuild")
+		if !strings.HasPrefix(name, pkgName+"-") {
+			continue
+		}
+
+		version := strings.TrimPrefix(name, pkgName+"-")
+		ebuilds = append(ebuilds, ebuildInfo{
+			path:    filepath.Join(pkgDir, entry.Name()),
+			version: version,
+		})
+	}
+
+	if len(ebuilds) == 0 {
+		return "", "", fmt.Errorf("no ebuilds found in %s", pkgDir)
+	}
+
+	// Sort by version (highest first) using Portage version comparison
+	sort.Slice(ebuilds, func(i, j int) bool {
+		cmp := pkg.CompareVersions(ebuilds[i].version, ebuilds[j].version)
+		return cmp > 0 // Descending order
+	})
+
+	best := ebuilds[0]
+	log.Printf("  Best ebuild: %s (version %s)", filepath.Base(best.path), best.version)
+
+	return best.path, best.version, nil
 }
 
 // parsePackageAtom parses a package atom and returns category/package.
