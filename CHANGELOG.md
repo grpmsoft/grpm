@@ -29,6 +29,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Uses `profiles/thirdpartymirrors` for URL expansion
   - Example: `mirror://gnu/hello/hello-2.12.tar.gz` → `https://ftp.gnu.org/gnu/hello/hello-2.12.tar.gz`
   - Previously only fetch command supported mirror expansion, now emerge does too
+- **Ebuild phase function detection** — Custom ebuild functions are now properly detected
+  - Added `ParseEbuild()` call in emerge command to populate `ParsedEbuild`
+  - Enables proper dispatch to custom `src_configure`, `src_install`, etc. functions
+  - Previously always used default phase implementations
+- **Work directory cleanup timing** — Fixed premature cleanup of build directory
+  - Build directory now preserved until after installation completes
+  - Cleanup happens in `installFromImageDir` after successful merge
+  - Previously cleanup occurred immediately after `ExecutePhases`, before install
 
 ### Planned
 - Performance optimization for large dependency graphs

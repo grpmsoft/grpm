@@ -449,6 +449,8 @@ func (a *App) buildPackageFromSource(p *pkg.Package, repoPath, distDir, tmpDir s
 	}
 
 	// Create executor options with fetcher for automatic distfile download
+	// NOTE: KeepWork is always true here because we need the image directory
+	// for installation. Cleanup happens after install in installFromImageDir.
 	opts := ebuild.ExecutorOptions{
 		TmpDir:        tmpDir,
 		PortDir:       repoPath,
@@ -456,7 +458,7 @@ func (a *App) buildPackageFromSource(p *pkg.Package, repoPath, distDir, tmpDir s
 		EbuildPath:    ebuildPath,
 		EnableSandbox: true,
 		EnableTests:   enableTests,
-		KeepWork:      keepWork,
+		KeepWork:      true, // Must be true - cleanup after install
 		Fetcher:       fetcher,
 	}
 
@@ -464,6 +466,14 @@ func (a *App) buildPackageFromSource(p *pkg.Package, repoPath, distDir, tmpDir s
 	executor, err := ebuild.NewExecutor(p, opts)
 	if err != nil {
 		return "", fmt.Errorf("failed to create executor: %w", err)
+	}
+
+	// Parse ebuild to detect custom phase functions
+	if err := executor.ParseEbuild(); err != nil {
+		if a.verbose {
+			log.Printf("Warning: failed to parse ebuild: %v", err)
+		}
+		// Continue anyway - will use default phases
 	}
 
 	// Set progress callback
@@ -525,6 +535,14 @@ func (a *App) installFromImageDir(installer *install.Installer, p *pkg.Package, 
 
 	if err := installer.Install(p, opts); err != nil {
 		return fmt.Errorf("installation failed: %w", err)
+	}
+
+	// Cleanup work directory after successful install (unless keepWork is set)
+	if !keepWork {
+		if err := os.RemoveAll(workDir); err != nil {
+			// Non-fatal - log warning but don't fail
+			log.Printf("Warning: failed to cleanup work directory %s: %v", workDir, err)
+		}
 	}
 
 	return nil
