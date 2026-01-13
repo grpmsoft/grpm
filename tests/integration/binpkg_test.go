@@ -3,9 +3,6 @@ package integration
 import (
 	"archive/tar"
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
-	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -13,60 +10,6 @@ import (
 	"github.com/grpmsoft/grpm/internal/binpkg"
 	"github.com/grpmsoft/grpm/internal/pkg"
 )
-
-// TestBinpkg_SHA256Checksum tests SHA256 checksum generation for binary packages.
-func TestBinpkg_SHA256Checksum(t *testing.T) {
-	tests := []struct {
-		name    string
-		content []byte
-	}{
-		{"empty file", []byte{}},
-		{"hello world", []byte("hello world\n")},
-		{"binary content", []byte{0x00, 0x01, 0x02, 0xff, 0xfe, 0xfd}},
-		{"large content (1KB)", bytes.Repeat([]byte("GRPM test content "), 57)},
-		{"unicode content", []byte("Package manager: GRPM")},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			tmpDir := t.TempDir()
-			testFile := filepath.Join(tmpDir, "testfile")
-			if err := os.WriteFile(testFile, tc.content, 0644); err != nil {
-				t.Fatalf("failed to create test file: %v", err)
-			}
-
-			expectedHash := sha256.Sum256(tc.content)
-			expected := hex.EncodeToString(expectedHash[:])
-
-			f, err := os.Open(testFile)
-			if err != nil {
-				t.Fatalf("failed to open test file: %v", err)
-			}
-			defer func() { _ = f.Close() }()
-
-			h := sha256.New()
-			if _, err := io.Copy(h, f); err != nil {
-				t.Fatalf("failed to hash file: %v", err)
-			}
-			computed := hex.EncodeToString(h.Sum(nil))
-
-			if computed != expected {
-				t.Errorf("SHA256 mismatch: got %s, expected %s", computed, expected)
-			}
-			if len(computed) != 64 {
-				t.Errorf("SHA256 hash length: got %d, expected 64", len(computed))
-			}
-		})
-	}
-
-	t.Run("known_empty_file_hash", func(t *testing.T) {
-		knownEmptyHash := "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-		computed := sha256.Sum256([]byte{})
-		if hex.EncodeToString(computed[:]) != knownEmptyHash {
-			t.Errorf("empty file hash mismatch")
-		}
-	})
-}
 
 // TestBinpkg_GPKGMetadataParsing tests GPKG metadata parsing from tar archives.
 func TestBinpkg_GPKGMetadataParsing(t *testing.T) {
