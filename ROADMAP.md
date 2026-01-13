@@ -1,12 +1,13 @@
 # GRPM Roadmap
 
-> **Version Selection Fix (v0.7.6)**
+> **E2E Integration Tests (v0.7.7)**
 >
 > Rapid development complete (v0.1.0 → v0.5.0).
 > Infrastructure release complete (v0.6.0).
 > Portage-style logging (v0.7.0) + compatibility fixes (v0.7.2 → v0.7.4).
 > Build reliability and output quality improvements (v0.7.5).
 > Critical version selection bug fix + emerge flags (v0.7.6).
+> Professional E2E test suite with CI integration (v0.7.7).
 > **98.2% tree coverage verified on real Gentoo!**
 
 ---
@@ -67,14 +68,18 @@ Key insight: **Eclasses don't need Go implementations.** They are loaded dynamic
 
 ## Release History
 
-### v0.7.5 — Build Quality Release (Current)
+### v0.7.7 — E2E Integration Tests (Current)
 
-**Professional output and reliable builds:**
+**Professional E2E test suite with CI integration:**
 
-- **Unified logging infrastructure** — All output uses `internal/logging/` package
-- **Debug output suppressed** — Clean output by default, verbose with `-v`
-- **Source build fixes** — S variable parsing, timestamp preservation, replace mode
-- **CLI improvements** — --help exit code fix, mirror:// expansion in emerge
+- **6 E2E tests** — Version selection, resolve workflow, dependency chains, atom matching
+- **CI integration** — Tests run in Gentoo container on every release
+- **Regression prevention** — Would have caught v0.7.6 version selection bug automatically
+
+### v0.7.5/v0.7.6 — Build Quality & Bug Fixes
+
+- **v0.7.6** — Critical version selection bug fix, --replace/--force flags
+- **v0.7.5** — Unified logging, debug output suppressed, source build fixes
 
 ### v0.7.4 — Critical Hotfix
 
@@ -155,11 +160,13 @@ Key insight: **Eclasses don't need Go implementations.** They are loaded dynamic
 ## Roadmap to v1.0.0
 
 ```
-v0.7.5 ← CURRENT (Build Quality Release)
+v0.7.7 ← CURRENT (E2E Integration Tests)
     │   ✅ v0.6.0: Distfile fetching, debug helpers, coverage analyzer
     │   ✅ v0.7.0: Portage-style logging
     │   ✅ v0.7.2-v0.7.4: Portage compatibility fixes
     │   ✅ v0.7.5: Unified logging, source build reliability
+    │   ✅ v0.7.6: Version selection fix, emerge flags
+    │   ✅ v0.7.7: E2E tests + CI integration
     │   ✅ 98.2% tree coverage on real Gentoo!
     ↓
 v0.8.0 — Production Hardening (2 tasks)
@@ -290,4 +297,4 @@ Key deliverables:
 ---
 
 *This roadmap evolves based on community feedback and project needs.*
-*Last updated: 2026-01-13 (v0.7.5 release)*
+*Last updated: 2026-01-13 (v0.7.7 release)*

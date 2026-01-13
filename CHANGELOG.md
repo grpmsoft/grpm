@@ -14,6 +14,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.7.7] - 2026-01-13
+
+### E2E Integration Tests & CI Enhancement
+
+> **Professional E2E test suite for full workflow validation**
+>
+> Adds comprehensive end-to-end tests that would have caught the v0.7.6
+> version selection bug automatically. Tests run in CI with real Gentoo.
+
+### Added
+
+#### E2E Integration Tests (`tests/integration/e2e_test.go`)
+- **TestE2E_VersionSelection_RealRepository** — Version selection on real Gentoo tree
+  - Validates correct version is selected for app-misc/hello, dev-libs/openssl, app-shells/bash
+  - Catches alphabetical vs PMS version comparison bugs
+- **TestE2E_VersionSelection_EdgeCases** — 5 edge cases with controlled repository
+  - `patch_vs_base`: 2.12 vs 2.12.2
+  - `numeric_comparison`: 1.9 vs 1.10 vs 1.11
+  - `suffix_ordering`: 1.0_alpha < 1.0_beta < 1.0_rc1 < 1.0
+  - `revision_comparison`: 2.0-r1 vs 2.0-r10 (numeric, not string)
+  - `complex_gentoo_real`: Real-world version sets
+- **TestE2E_ResolveWorkflow** — Full dependency resolution workflow
+- **TestE2E_DependencyChain** — Deep dependency chain resolution
+- **TestE2E_AtomMatching** — Atom constraints (>=, <, =)
+- **TestE2E_CachedRepository** — Cache consistency verification
+
+#### CI Integration
+- **E2E tests added to integration.yml** — Runs in Gentoo container
+  - New step "Run E2E Tests" before Autotools/CMake/Meson tests
+  - Uses real `/var/db/repos/gentoo` repository
+  - 10-minute timeout (E2E tests are fast)
+- **Manual trigger support** — Filter with `E2E` in workflow dispatch
+
+### Test Results (Gentoo WSL2)
+```
+TestE2E_VersionSelection_RealRepository: PASS (0.18s)
+  - app-misc/hello: 2.12.2 (correct!)
+  - dev-libs/openssl: 3.6.9999 (from 14 versions)
+  - app-shells/bash: 9999 (from 20 versions)
+TestE2E_VersionSelection_EdgeCases: PASS (0.01s)
+TestE2E_ResolveWorkflow: PASS (0.02s)
+TestE2E_AtomMatching: PASS (0.00s)
+TestE2E_CachedRepository: PASS (0.16s)
+```
+
+### Changed
+- `.github/workflows/integration.yml` — Added E2E test step with Gentoo environment
+
+---
+
 ## [0.7.6] - 2026-01-13
 
 ### Critical Bug Fix: Version Selection
