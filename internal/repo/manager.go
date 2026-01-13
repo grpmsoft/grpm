@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"sort"
 	"sync"
 
+	"github.com/grpmsoft/grpm/internal/logging"
 	"github.com/grpmsoft/grpm/internal/pkg"
 	syncer "github.com/grpmsoft/grpm/internal/sync"
 )
@@ -121,7 +121,7 @@ func (m *Manager) LoadReposConf(path string) error {
 	for _, cfg := range configs {
 		if err := m.AddRepository(cfg); err != nil {
 			// Log warning but continue with other repos
-			log.Printf("Warning: failed to add repository %s: %v", cfg.Name, err)
+			logging.Debug("Warning: failed to add repository %s: %v", cfg.Name, err)
 		}
 	}
 
@@ -218,7 +218,7 @@ func (m *Manager) SyncAll(ctx context.Context) error {
 
 	for _, cfg := range configs {
 		if !cfg.AutoSync {
-			log.Printf("Skipping %s (auto-sync disabled)", cfg.Name)
+			logging.Debug("Skipping %s (auto-sync disabled)", cfg.Name)
 			continue
 		}
 
@@ -250,7 +250,7 @@ func (m *Manager) SyncRepository(ctx context.Context, name string) error {
 // syncRepository performs the actual sync operation.
 func (m *Manager) syncRepository(ctx context.Context, cfg *RepoConfig) error {
 	if cfg.SyncURI == "" {
-		log.Printf("Skipping %s (no sync-uri)", cfg.Name)
+		logging.Debug("Skipping %s (no sync-uri)", cfg.Name)
 		return nil
 	}
 
@@ -275,13 +275,13 @@ func (m *Manager) syncRepository(ctx context.Context, cfg *RepoConfig) error {
 		Verbose:   true,
 	}
 
-	log.Printf("Syncing %s from %s...", cfg.Name, cfg.SyncURI)
+	logging.Debug("Syncing %s from %s...", cfg.Name, cfg.SyncURI)
 	result, err := s.Sync(ctx, syncConfig)
 	if err != nil {
 		return err
 	}
 
-	log.Printf("Synced %s: %d files changed in %s", cfg.Name, result.FilesChanged, result.Duration)
+	logging.Debug("Synced %s: %d files changed in %s", cfg.Name, result.FilesChanged, result.Duration)
 	return nil
 }
 

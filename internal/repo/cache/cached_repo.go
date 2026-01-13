@@ -3,13 +3,13 @@ package cache
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
 
 	basecache "github.com/grpmsoft/grpm/internal/cache"
+	"github.com/grpmsoft/grpm/internal/logging"
 	"github.com/grpmsoft/grpm/internal/pkg"
 )
 
@@ -129,7 +129,7 @@ func (cr *CachedRepository) EnsureIndex(ctx context.Context) error {
 	}
 
 	// Rebuild stale index
-	log.Printf("Repository index is stale, rebuilding...")
+	logging.Debug("Repository index is stale, rebuilding...")
 	return cr.RebuildIndex(ctx)
 }
 

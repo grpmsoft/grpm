@@ -3,9 +3,9 @@ package repo
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -13,6 +13,7 @@ import (
 	basecache "github.com/grpmsoft/grpm/internal/cache"
 	repocache "github.com/grpmsoft/grpm/internal/repo/cache"
 
+	"github.com/grpmsoft/grpm/internal/logging"
 	"github.com/grpmsoft/grpm/internal/pkg"
 )
 
@@ -75,13 +76,13 @@ func NewCachedPortageRepository(cfg *CachedPortageConfig) (*CachedPortageReposit
 	if cfg.EnableCache {
 		repoCache, err := repocache.NewCachedRepository(cfg.RepoPath, cfg.CachePath)
 		if err != nil {
-			log.Printf("Warning: cache initialization failed, running without cache: %v", err)
+			logging.Debug("Warning: cache initialization failed, running without cache: %v", err)
 		} else {
 			cpr.repoCache = repoCache
 			cpr.cacheEnabled = repoCache.IsEnabled()
 
 			if cpr.cacheEnabled {
-				log.Printf("Repository cache enabled: %s", cfg.CachePath)
+				logging.Debug("Repository cache enabled: %s", cfg.CachePath)
 			}
 		}
 	}
@@ -98,11 +99,15 @@ func (cpr *CachedPortageRepository) LoadPackage(name string) (*pkg.Package, erro
 
 	// Try cache first if enabled
 	if cpr.cacheEnabled && cpr.repoCache != nil {
-		// Get latest version
+		// Get all versions from index
 		versions, err := cpr.getVersionsFromIndex(category, pkgName)
 		if err == nil && len(versions) > 0 {
-			// Use latest version from index
-			latestVersion := versions[len(versions)-1]
+			// Sort versions using Portage version comparison (highest first)
+			sort.Slice(versions, func(i, j int) bool {
+				return pkg.CompareVersions(versions[i], versions[j]) > 0
+			})
+			// Use highest version
+			latestVersion := versions[0]
 			p, err := cpr.loadPackageWithCache(category, pkgName, latestVersion)
 			if err == nil {
 				return p, nil
@@ -192,7 +197,7 @@ func (cpr *CachedPortageRepository) loadPackageWithCache(category, name, version
 
 	// Store in cache
 	if err := cpr.repoCache.CachePackage(ctx, p); err != nil {
-		log.Printf("Warning: failed to cache package %s: %v", packageName, err)
+		logging.Debug("Warning: failed to cache package %s: %v", packageName, err)
 	}
 
 	return p, nil
@@ -294,7 +299,7 @@ func (cpr *CachedPortageRepository) RebuildCache(ctx context.Context) error {
 		return nil
 	}
 
-	log.Printf("Rebuilding repository cache...")
+	logging.Debug("Rebuilding repository cache...")
 	start := time.Now()
 
 	if err := cpr.repoCache.RebuildIndex(ctx); err != nil {
@@ -304,7 +309,7 @@ func (cpr *CachedPortageRepository) RebuildCache(ctx context.Context) error {
 	// Clear in-memory cache
 	cpr.parsedPackage = sync.Map{}
 
-	log.Printf("Cache rebuilt in %v", time.Since(start))
+	logging.Debug("Cache rebuilt in %v", time.Since(start))
 	return nil
 }
 
