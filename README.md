@@ -90,6 +90,9 @@ grpm fetch app-misc/hello
 # Build from source (auto-fetches sources)
 sudo grpm emerge app-misc/hello
 
+# Build to alternative root (chroot, stage tarball)
+sudo grpm emerge --root /mnt/gentoo app-misc/hello
+
 # Install from binary
 sudo grpm install --binpkg app-misc/hello
 
