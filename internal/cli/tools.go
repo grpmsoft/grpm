@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -45,6 +46,9 @@ func (a *App) runTools(args []string) error {
 	showPaths := fs.Bool("paths", false, "Show PATH directories")
 
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 

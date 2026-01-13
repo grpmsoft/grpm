@@ -14,13 +14,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 
 	"github.com/grpmsoft/grpm/internal/eclass"
 	"github.com/grpmsoft/grpm/internal/fetch"
+	"github.com/grpmsoft/grpm/internal/logging"
 	"github.com/grpmsoft/grpm/internal/pkg"
 	"github.com/grpmsoft/grpm/internal/sandbox"
 )
@@ -216,7 +216,7 @@ func NewExecutor(pkg *pkg.Package, opts ExecutorOptions) (*Executor, error) {
 		cache, err := eclass.NewCacheWithLocations(locations)
 		if err != nil {
 			// Non-fatal: fall back to Go implementations
-			log.Printf("[ebuild] warning: failed to create eclass cache: %v (using Go fallbacks)", err)
+			logging.Debug("[ebuild] warning: failed to create eclass cache: %v (using Go fallbacks)", err)
 		} else {
 			executor.eclassCache = cache
 		}
@@ -251,14 +251,14 @@ func (e *Executor) ExecutePhases(phases []Phase) ([]PhaseResult, error) {
 	if e.Sandbox != nil {
 		defer func() {
 			if err := e.Sandbox.Close(); err != nil {
-				log.Printf("[sandbox] cleanup error: %v", err)
+				logging.Debug("[sandbox] cleanup error: %v", err)
 			}
 			// Report any violations
 			violations := e.Sandbox.Violations()
 			if len(violations) > 0 {
-				log.Printf("[sandbox] %d violation(s) detected:", len(violations))
+				logging.Debug("[sandbox] %d violation(s) detected:", len(violations))
 				for _, v := range violations {
-					log.Printf("[sandbox]   %s", v.String())
+					logging.Debug("[sandbox]   %s", v.String())
 				}
 			}
 		}()
@@ -313,8 +313,14 @@ func (e *Executor) ExecutePhases(phases []Phase) ([]PhaseResult, error) {
 // Process:
 //  1. Parse Manifest file from repository
 //  2. Extract DIST entries (distfiles to download)
-//  3. Download using configured Fetcher
-//  4. Verify checksums (handled by Fetcher)
+//  3. Parse SRC_URI from ebuild to get explicit download URLs
+//  4. Expand mirror:// URLs to real HTTP(S) URLs
+//  5. Download using configured Fetcher with expanded URLs
+//  6. Verify checksums (handled by Fetcher)
+//
+// Mirror URL expansion (v0.7.4+):
+//   - mirror://gnu/... → https://ftp.gnu.org/gnu/..., https://mirrors.kernel.org/gnu/...
+//   - mirror://sourceforge/... → https://downloads.sourceforge.net/...
 //
 // Returns nil if no distfiles are needed or fetch succeeds.
 func (e *Executor) fetchDistfiles(ctx context.Context) error {
@@ -336,8 +342,14 @@ func (e *Executor) fetchDistfiles(ctx context.Context) error {
 		return fmt.Errorf("parsing Manifest: %w", err)
 	}
 
-	// Get distfiles to download
-	distfiles := manifest.GetDistfiles()
+	// Get distfiles with expanded URIs from SRC_URI
+	distfiles, err := e.getDistfilesWithURIs(manifest)
+	if err != nil {
+		// Fallback to manifest-only distfiles if SRC_URI parsing fails
+		logging.Debug("[ebuild] Warning: SRC_URI parsing failed: %v, using manifest-only", err)
+		distfiles = manifest.GetDistfiles()
+	}
+
 	if len(distfiles) == 0 {
 		e.progress(PhaseFetch, "no distfiles required")
 		return nil
@@ -354,6 +366,305 @@ func (e *Executor) fetchDistfiles(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// getDistfilesWithURIs parses SRC_URI from ebuild and creates distfiles with
+// expanded mirror:// URLs.
+//
+// This is critical for packages using mirror://gnu/, mirror://sourceforge/, etc.
+// Without this expansion, downloads would fail as "mirror://" is not a valid protocol.
+func (e *Executor) getDistfilesWithURIs(manifest *fetch.Manifest) ([]fetch.Distfile, error) {
+	// If no ebuild path, return manifest distfiles
+	if e.EbuildPath == "" {
+		return manifest.GetDistfiles(), nil
+	}
+
+	// Read ebuild content
+	content, err := os.ReadFile(e.EbuildPath)
+	if err != nil {
+		return nil, fmt.Errorf("reading ebuild: %w", err)
+	}
+
+	// Extract SRC_URI from ebuild
+	srcURI := extractEbuildVariable(string(content), "SRC_URI")
+	if srcURI == "" {
+		// No SRC_URI - return manifest distfiles without URIs
+		return manifest.GetDistfiles(), nil
+	}
+
+	// Build variable map for SRC_URI expansion
+	vars := map[string]string{
+		"P":        e.Env.P,
+		"PN":       e.Env.PN,
+		"PV":       e.Env.PV,
+		"PR":       e.Env.PR,
+		"PVR":      e.Env.PVR,
+		"PF":       e.Env.PF,
+		"CATEGORY": e.Env.CATEGORY,
+	}
+
+	// Expand variables in SRC_URI
+	expandedSrcURI := expandVariables(srcURI, vars)
+
+	// Load third-party mirrors for mirror:// URL expansion
+	thirdPartyMirrors := fetch.ParseThirdPartyMirrors(e.RepoPath)
+
+	// Parse SRC_URI entries and build URI map
+	uriMap := e.parseSrcURIEntries(expandedSrcURI, thirdPartyMirrors)
+
+	// Create distfiles with checksums from manifest and URIs from SRC_URI
+	var distfiles []fetch.Distfile
+	for _, entry := range manifest.DistFiles {
+		df := fetch.NewDistfile(entry.Filename, entry.Size, entry.Checksums)
+
+		// Add explicit URIs if available
+		if uris, ok := uriMap[entry.Filename]; ok && len(uris) > 0 {
+			df = df.WithURIs(uris)
+		}
+
+		distfiles = append(distfiles, df)
+	}
+
+	return distfiles, nil
+}
+
+// parseSrcURIEntries parses SRC_URI string and returns a map of filename to URLs.
+//
+// Handles:
+//   - Simple URLs: https://example.com/file.tar.gz
+//   - Mirror URLs: mirror://gnu/hello/hello-2.12.tar.gz (expanded)
+//   - Rename syntax: URL -> filename
+//   - USE conditionals: flag? ( URL ) (included when flag is nil)
+func (e *Executor) parseSrcURIEntries(srcURI string, mirrors fetch.ThirdPartyMirrors) map[string][]string {
+	uriMap := make(map[string][]string)
+
+	// Simple tokenization of SRC_URI
+	// TODO: Use proper parser for complex USE conditionals
+	tokens := tokenizeSrcURI(srcURI)
+
+	var currentURL string
+	expectFilename := false
+
+	for _, token := range tokens {
+		// Skip USE conditional syntax
+		if token == "(" || token == ")" || token == "?" {
+			continue
+		}
+		if len(token) > 0 && (token[len(token)-1] == '?' || token == "!") {
+			continue
+		}
+
+		// Handle -> rename syntax
+		if token == "->" {
+			expectFilename = true
+			continue
+		}
+
+		if expectFilename {
+			// Token is the new filename
+			if currentURL != "" {
+				expandedURLs := mirrors.ExpandMirrorURL(currentURL)
+				uriMap[token] = append(uriMap[token], expandedURLs...)
+			}
+			currentURL = ""
+			expectFilename = false
+			continue
+		}
+
+		// Token is a URL
+		if isURL(token) {
+			currentURL = token
+			filename := extractFilename(token)
+			expandedURLs := mirrors.ExpandMirrorURL(token)
+			uriMap[filename] = append(uriMap[filename], expandedURLs...)
+		}
+	}
+
+	return uriMap
+}
+
+// extractEbuildVariable extracts a variable value from ebuild content.
+//
+// Handles both single-line and multi-line assignments:
+//   - VAR="value"
+//   - VAR='value'
+//   - VAR="line1
+//     line2"
+func extractEbuildVariable(content, varName string) string {
+	// Find variable assignment
+	patterns := []string{
+		varName + `="`,
+		varName + `='`,
+		varName + `=`,
+	}
+
+	for _, pattern := range patterns {
+		// Search for pattern at word boundary (start of line or after whitespace)
+		idx := findVariableAssignment(content, pattern)
+		if idx == -1 {
+			continue
+		}
+
+		start := idx + len(pattern)
+		quote := byte(0)
+		if pattern[len(pattern)-1] == '"' || pattern[len(pattern)-1] == '\'' {
+			quote = pattern[len(pattern)-1]
+		}
+
+		// Find end of value
+		var value []byte
+		escaped := false
+		for i := start; i < len(content); i++ {
+			c := content[i]
+
+			if escaped {
+				value = append(value, c)
+				escaped = false
+				continue
+			}
+
+			if c == '\\' {
+				escaped = true
+				continue
+			}
+
+			if quote != 0 && c == quote {
+				return string(value)
+			}
+
+			if quote == 0 && (c == ' ' || c == '\t' || c == '\n') {
+				return string(value)
+			}
+
+			value = append(value, c)
+		}
+
+		return string(value)
+	}
+
+	return ""
+}
+
+// expandVariables expands ${VAR} and $VAR references in string.
+func expandVariables(s string, vars map[string]string) string {
+	result := s
+
+	// Expand ${VAR} syntax
+	for name, value := range vars {
+		result = replaceAll(result, "${"+name+"}", value)
+	}
+
+	// Expand $VAR syntax (only followed by non-alphanumeric)
+	for name, value := range vars {
+		result = replaceAll(result, "$"+name+"/", value+"/")
+		result = replaceAll(result, "$"+name+".", value+".")
+		result = replaceAll(result, "$"+name+"-", value+"-")
+		result = replaceAll(result, "$"+name+" ", value+" ")
+		result = replaceAll(result, "$"+name+"\t", value+"\t")
+		result = replaceAll(result, "$"+name+"\n", value+"\n")
+	}
+
+	return result
+}
+
+// tokenizeSrcURI splits SRC_URI into tokens.
+func tokenizeSrcURI(srcURI string) []string {
+	var tokens []string
+	var current []byte
+	inQuote := byte(0)
+
+	for i := 0; i < len(srcURI); i++ {
+		c := srcURI[i]
+
+		if inQuote != 0 {
+			if c == inQuote {
+				inQuote = 0
+			} else {
+				current = append(current, c)
+			}
+			continue
+		}
+
+		switch c {
+		case '"', '\'':
+			inQuote = c
+		case ' ', '\t', '\n', '\r':
+			if len(current) > 0 {
+				tokens = append(tokens, string(current))
+				current = nil
+			}
+		default:
+			current = append(current, c)
+		}
+	}
+
+	if len(current) > 0 {
+		tokens = append(tokens, string(current))
+	}
+
+	return tokens
+}
+
+// isURL checks if a string looks like a URL.
+func isURL(s string) bool {
+	return len(s) > 8 && (s[:7] == "http://" || s[:8] == "https://" ||
+		s[:6] == "ftp://" || s[:9] == "mirror://")
+}
+
+// extractFilename extracts filename from URL.
+func extractFilename(url string) string {
+	// Find last / in URL
+	lastSlash := -1
+	for i := len(url) - 1; i >= 0; i-- {
+		if url[i] == '/' {
+			lastSlash = i
+			break
+		}
+	}
+
+	if lastSlash >= 0 && lastSlash < len(url)-1 {
+		return url[lastSlash+1:]
+	}
+	return url
+}
+
+// findVariableAssignment finds a variable assignment pattern at word boundary.
+// Returns -1 if not found.
+// A valid word boundary is: start of string, newline, or tab/space.
+// This prevents matching "S=" inside "KEYWORDS=" for example.
+func findVariableAssignment(s, pattern string) int {
+	for i := 0; i <= len(s)-len(pattern); i++ {
+		if s[i:i+len(pattern)] == pattern {
+			// Check if at word boundary
+			if i == 0 {
+				return i // Start of string
+			}
+			prevChar := s[i-1]
+			if prevChar == '\n' || prevChar == '\t' || prevChar == ' ' {
+				return i // After whitespace/newline
+			}
+			// Not at word boundary, continue searching
+		}
+	}
+	return -1
+}
+
+// replaceAll replaces all occurrences of old with new in s.
+func replaceAll(s, old, new string) string {
+	if old == "" {
+		return s
+	}
+	result := make([]byte, 0, len(s))
+	for i := 0; i < len(s); {
+		if i <= len(s)-len(old) && s[i:i+len(old)] == old {
+			result = append(result, new...)
+			i += len(old)
+		} else {
+			result = append(result, s[i])
+			i++
+		}
+	}
+	return string(result)
 }
 
 // updateArchiveList sets the A environment variable with archive filenames.
@@ -458,7 +769,7 @@ func (e *Executor) ParseEbuild() error {
 	if _, err := os.Stat(e.EbuildPath); err != nil {
 		if os.IsNotExist(err) {
 			// No ebuild file - this is OK, use defaults
-			log.Printf("[ebuild] no ebuild file found at %s, using defaults", e.EbuildPath)
+			logging.Debug("[ebuild] no ebuild file found at %s, using defaults", e.EbuildPath)
 			return nil
 		}
 		return fmt.Errorf("checking ebuild file: %w", err)
@@ -493,21 +804,64 @@ func (e *Executor) ParseEbuild() error {
 	}
 	e.EAPIFeatures = eapiFeatures
 
-	log.Printf("[ebuild] EAPI %s: bash %s, features: BDEPEND=%v, IDEPEND=%v, SlotOperators=%v",
+	logging.Debug("[ebuild] EAPI %s: bash %s, features: BDEPEND=%v, IDEPEND=%v, SlotOperators=%v",
 		eapiFeatures.Version, eapiFeatures.BashVersion,
 		eapiFeatures.BDEPEND, eapiFeatures.IDEPEND, eapiFeatures.SlotOperators)
 
 	// Log discovered phase functions
 	if len(parsed.DefinedFunctions) > 0 {
-		log.Printf("[ebuild] discovered %d functions in %s", len(parsed.DefinedFunctions), filepath.Base(e.EbuildPath))
+		logging.Debug("[ebuild] discovered %d functions in %s", len(parsed.DefinedFunctions), filepath.Base(e.EbuildPath))
 		for name := range parsed.DefinedFunctions {
-			log.Printf("[ebuild]   - %s", name)
+			logging.Debug("[ebuild]   - %s", name)
 		}
 	}
 
 	// Log inherited eclasses
 	if len(parsed.InheritedEclasses) > 0 {
-		log.Printf("[ebuild] inherits: %v", parsed.InheritedEclasses)
+		logging.Debug("[ebuild] inherits: %v", parsed.InheritedEclasses)
+	}
+
+	// Parse and evaluate S variable if defined in ebuild
+	if err := e.parseSVariable(); err != nil {
+		logging.Debug("[ebuild] warning: failed to parse S variable: %v", err)
+	}
+
+	return nil
+}
+
+// parseSVariable parses and evaluates the S variable from ebuild content.
+//
+// Many packages define custom S (source directory) using bash parameter expansion:
+//   - S=${WORKDIR}/${PN/f/F}-${PV} (e.g., screenfetch -> screenFetch)
+//   - S=${WORKDIR}/${MY_P}
+//   - S=${WORKDIR}/source
+//
+// This method reads the ebuild, extracts S, expands variables and parameter
+// substitutions, and updates e.Env.S if different from default.
+func (e *Executor) parseSVariable() error {
+	if e.EbuildPath == "" {
+		return nil
+	}
+
+	// Read ebuild content
+	content, err := os.ReadFile(e.EbuildPath)
+	if err != nil {
+		return fmt.Errorf("reading ebuild: %w", err)
+	}
+
+	// Build variable map for expansion
+	vars := e.Env.ToMap()
+
+	// Parse S variable with bash parameter expansion
+	sValue := ParseSVariable(string(content), vars)
+	if sValue == "" {
+		return nil // S not defined, use default
+	}
+
+	// Update S if different from default
+	if sValue != e.Env.S {
+		logging.Debug("[ebuild] custom S detected: %s (default was: %s)", sValue, e.Env.S)
+		e.Env.S = sValue
 	}
 
 	return nil
@@ -649,7 +1003,7 @@ func (e *Executor) RunPhaseFunction(phase Phase) (string, error) {
 
 	// Set EBUILD_PHASE environment variable for subprocesses
 	if err := os.Setenv("EBUILD_PHASE", string(phase)); err != nil {
-		log.Printf("[ebuild] warning: failed to set EBUILD_PHASE: %v", err)
+		logging.Debug("[ebuild] warning: failed to set EBUILD_PHASE: %v", err)
 	}
 	defer func() { _ = os.Unsetenv("EBUILD_PHASE") }()
 
@@ -702,9 +1056,9 @@ func (e *Executor) RunPhaseFunction(phase Phase) (string, error) {
 		// Eclass exported this phase, call eclass's prefixed version
 		// e.g., cmake_src_configure instead of src_configure
 		targetFunc = fmt.Sprintf("%s_%s", eclassName, funcName)
-		log.Printf("[ebuild] calling eclass function: %s (from %s.eclass)", targetFunc, eclassName)
+		logging.Debug("[ebuild] calling eclass function: %s (from %s.eclass)", targetFunc, eclassName)
 	} else {
-		log.Printf("[ebuild] calling ebuild function: %s", funcName)
+		logging.Debug("[ebuild] calling ebuild function: %s", funcName)
 	}
 
 	// Call the phase function
@@ -734,10 +1088,10 @@ func (e *Executor) initInterpreter() error {
 		loader, err := SetupDynamicEclassLoading(e.interpreter, e.eclassCache)
 		if err != nil {
 			// Non-fatal: fall back to Go implementations
-			log.Printf("[ebuild] warning: failed to setup dynamic eclass loading: %v", err)
+			logging.Debug("[ebuild] warning: failed to setup dynamic eclass loading: %v", err)
 		} else {
 			e.dynamicLoader = loader
-			log.Printf("[ebuild] dynamic eclass loading enabled (%d locations)",
+			logging.Debug("[ebuild] dynamic eclass loading enabled (%d locations)",
 				len(e.eclassCache.Locations()))
 		}
 	}
@@ -761,7 +1115,7 @@ func (e *Executor) SetCurrentPhase(phase Phase) {
 
 	// Also set in OS environment for subprocesses
 	if err := os.Setenv("EBUILD_PHASE", string(phase)); err != nil {
-		log.Printf("[ebuild] warning: failed to set EBUILD_PHASE: %v", err)
+		logging.Debug("[ebuild] warning: failed to set EBUILD_PHASE: %v", err)
 	}
 }
 

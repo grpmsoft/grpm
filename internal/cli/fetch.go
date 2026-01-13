@@ -2,9 +2,9 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -12,6 +12,7 @@ import (
 
 	"github.com/grpmsoft/grpm/internal/config"
 	"github.com/grpmsoft/grpm/internal/fetch"
+	"github.com/grpmsoft/grpm/internal/logging"
 	"github.com/grpmsoft/grpm/internal/pkg"
 	"github.com/grpmsoft/grpm/internal/repo"
 )
@@ -50,6 +51,9 @@ func (a *App) runFetch(args []string) error {
 	verifyOnly := fs.Bool("verify", false, "Only verify existing files, don't download")
 
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 
@@ -73,7 +77,7 @@ func (a *App) runFetch(args []string) error {
 // This function properly handles SRC_URI parsing to get explicit URLs
 // for distfiles that are not available on Gentoo mirrors (e.g., .asc signature files).
 func (a *App) fetchPackageDistfiles(atom, repoPath, distDir string, pretend, verifyOnly bool, cfg *config.Config) error {
-	log.Printf(">>> Fetching distfiles for %s", atom)
+	logging.Action("Fetching distfiles for %s", atom)
 
 	// Parse atom to get category/package
 	catPkg, err := a.parsePackageAtom(atom)
@@ -92,13 +96,13 @@ func (a *App) fetchPackageDistfiles(atom, repoPath, distDir string, pretend, ver
 	distfiles, err := a.getDistfilesWithURIs(catPkg, repoPath, manifest)
 	if err != nil {
 		// Fallback to manifest-only distfiles (without explicit URIs)
-		log.Printf("  Warning: could not parse SRC_URI: %v", err)
-		log.Printf("  Falling back to mirror-only downloads")
+		logging.Warn("could not parse SRC_URI: %v", err)
+		logging.Info("  Falling back to mirror-only downloads")
 		distfiles = manifest.GetDistfiles()
 	}
 
 	if len(distfiles) == 0 {
-		log.Printf("  No distfiles for %s", catPkg)
+		logging.Info("  No distfiles for %s", catPkg)
 		return nil
 	}
 
@@ -257,7 +261,7 @@ func (a *App) findBestEbuild(pkgDir, pkgName string) (string, string, error) {
 	})
 
 	best := ebuilds[0]
-	log.Printf("  Best ebuild: %s (version %s)", filepath.Base(best.path), best.version)
+	logging.Debug("  Best ebuild: %s (version %s)", filepath.Base(best.path), best.version)
 
 	return best.path, best.version, nil
 }
@@ -296,7 +300,7 @@ func (a *App) parsePackageAtom(atom string) (string, error) {
 
 // verifyDistfiles checks existing distfiles against their checksums.
 func (a *App) verifyDistfiles(distfiles []fetch.Distfile, distDir, atom string) error {
-	log.Printf("  Verifying distfiles for %s...", atom)
+	logging.Info("  Verifying distfiles for %s...", atom)
 
 	allValid := true
 	for _, df := range distfiles {
@@ -321,7 +325,7 @@ func (a *App) verifyDistfiles(distfiles []fetch.Distfile, distDir, atom string) 
 		return fmt.Errorf("some distfiles failed verification")
 	}
 
-	log.Printf("  All distfiles verified successfully")
+	logging.Info("  All distfiles verified successfully")
 	return nil
 }
 
@@ -335,9 +339,9 @@ func (a *App) downloadDistfiles(distfiles []fetch.Distfile, distDir string, cfg 
 		downloader.SetProgressCallback(func(filename string, downloaded, total int64) {
 			if total > 0 {
 				pct := float64(downloaded) / float64(total) * 100
-				log.Printf("    %s: %.1f%% (%d/%d bytes)", filename, pct, downloaded, total)
+				logging.Verbose("    %s: %.1f%% (%d/%d bytes)", filename, pct, downloaded, total)
 			} else {
-				log.Printf("    %s: %d bytes", filename, downloaded)
+				logging.Verbose("    %s: %d bytes", filename, downloaded)
 			}
 		})
 	}
@@ -348,7 +352,7 @@ func (a *App) downloadDistfiles(distfiles []fetch.Distfile, distDir string, cfg 
 		return fmt.Errorf("download failed: %w", err)
 	}
 
-	log.Printf("  Downloaded %d distfile(s) to %s", len(distfiles), distDir)
+	logging.Info("  Downloaded %d distfile(s) to %s", len(distfiles), distDir)
 	return nil
 }
 

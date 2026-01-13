@@ -363,3 +363,209 @@ func BenchmarkNewInstaller(b *testing.B) {
 		_ = NewInstaller(root, db)
 	}
 }
+
+// TestExtractPackageNameFromAtom tests package name extraction.
+func TestExtractPackageNameFromAtom(t *testing.T) {
+	testCases := []struct {
+		atom     string
+		expected string
+	}{
+		{"app-misc/hello-2.12", "app-misc/hello"},
+		{"sys-libs/zlib-1.2.13", "sys-libs/zlib"},
+		{"sys-libs/zlib-1.2.13-r1", "sys-libs/zlib"},
+		{"dev-lang/python-3.11.5", "dev-lang/python"},
+		{"app-misc/hello", "app-misc/hello"}, // no version
+		{"x11-libs/gtk+-3.24.38", "x11-libs/gtk+"},
+		{"app-misc/hello-world-1.0", "app-misc/hello-world"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.atom, func(t *testing.T) {
+			result := extractPackageNameFromAtom(tc.atom)
+			if result != tc.expected {
+				t.Errorf("extractPackageNameFromAtom(%q) = %q, want %q",
+					tc.atom, result, tc.expected)
+			}
+		})
+	}
+}
+
+// TestFindInstalledVersion tests finding installed package version.
+func TestFindInstalledVersion(t *testing.T) {
+	tmpDir := t.TempDir()
+	db := state.NewPackageDatabase(tmpDir)
+	installer := NewInstaller(tmpDir, db)
+
+	// No packages installed
+	result := installer.findInstalledVersion("app-misc/hello")
+	if result != "" {
+		t.Errorf("expected empty string for non-installed package, got %q", result)
+	}
+
+	// Install hello-2.10
+	helloPkg := &state.InstalledPackage{
+		Package: &pkg.Package{
+			Name:    "app-misc/hello",
+			Version: "2.10",
+			Slot:    pkg.Slot{Name: "0"},
+		},
+		InstallTime: time.Now(),
+		Files:       []state.InstalledFile{},
+	}
+	if err := db.Add(helloPkg); err != nil {
+		t.Fatal(err)
+	}
+
+	// Should find hello-2.10
+	result = installer.findInstalledVersion("app-misc/hello")
+	if result != "app-misc/hello-2.10" {
+		t.Errorf("expected app-misc/hello-2.10, got %q", result)
+	}
+
+	// Should not find different package
+	result = installer.findInstalledVersion("app-misc/world")
+	if result != "" {
+		t.Errorf("expected empty string for different package, got %q", result)
+	}
+}
+
+// TestFindInstalledVersionNilDB tests findInstalledVersion with nil DB.
+func TestFindInstalledVersionNilDB(t *testing.T) {
+	installer := &Installer{
+		Root: "/test",
+		DB:   nil,
+	}
+
+	result := installer.findInstalledVersion("app-misc/hello")
+	if result != "" {
+		t.Errorf("expected empty string with nil DB, got %q", result)
+	}
+}
+
+// TestInstallRequiresReplaceWhenAlreadyInstalled tests that install requires
+// --replace flag when package is already installed.
+func TestInstallRequiresReplaceWhenAlreadyInstalled(t *testing.T) {
+	tmpDir := t.TempDir()
+	db := state.NewPackageDatabase(tmpDir)
+	installer := NewInstaller(tmpDir, db)
+
+	// Install hello-2.10
+	helloPkg := &state.InstalledPackage{
+		Package: &pkg.Package{
+			Name:    "app-misc/hello",
+			Version: "2.10",
+			Slot:    pkg.Slot{Name: "0"},
+		},
+		InstallTime: time.Now(),
+		Files:       []state.InstalledFile{},
+	}
+	if err := db.Add(helloPkg); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create work directory
+	workDir := filepath.Join(tmpDir, "work")
+	if err := os.MkdirAll(workDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Try to install hello-2.12 without Replace flag
+	newPkg := &pkg.Package{
+		Name:    "app-misc/hello",
+		Version: "2.12",
+		Slot:    pkg.Slot{Name: "0"},
+	}
+
+	opts := InstallOptions{
+		WorkDir: workDir,
+		Replace: false, // No replace!
+	}
+
+	err := installer.Install(newPkg, opts)
+	if err == nil {
+		t.Error("expected error when installing already-installed package without --replace")
+	}
+
+	// Error should mention --replace
+	if err != nil && !contains(err.Error(), "replace") && !contains(err.Error(), "-R") {
+		t.Errorf("error should mention --replace, got: %v", err)
+	}
+}
+
+// TestInstallPretendModeShowsReplace tests pretend mode shows replacement.
+func TestInstallPretendModeShowsReplace(t *testing.T) {
+	tmpDir := t.TempDir()
+	db := state.NewPackageDatabase(tmpDir)
+	installer := NewInstaller(tmpDir, db)
+
+	var progressMessages []string
+	installer.OnProgress = func(status string) {
+		progressMessages = append(progressMessages, status)
+	}
+
+	// Install hello-2.10
+	helloPkg := &state.InstalledPackage{
+		Package: &pkg.Package{
+			Name:    "app-misc/hello",
+			Version: "2.10",
+			Slot:    pkg.Slot{Name: "0"},
+		},
+		InstallTime: time.Now(),
+		Files:       []state.InstalledFile{},
+	}
+	if err := db.Add(helloPkg); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create work directory
+	workDir := filepath.Join(tmpDir, "work")
+	if err := os.MkdirAll(workDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Pretend to install hello-2.12 with Replace
+	newPkg := &pkg.Package{
+		Name:    "app-misc/hello",
+		Version: "2.12",
+		Slot:    pkg.Slot{Name: "0"},
+	}
+
+	opts := InstallOptions{
+		WorkDir: workDir,
+		Replace: true,
+		Pretend: true,
+	}
+
+	err := installer.Install(newPkg, opts)
+	if err != nil {
+		t.Fatalf("pretend install failed: %v", err)
+	}
+
+	// Should show replacement message
+	found := false
+	for _, msg := range progressMessages {
+		if contains(msg, "replace") || contains(msg, "Replace") {
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		t.Errorf("expected replacement message in progress, got: %v", progressMessages)
+	}
+}
+
+// contains checks if string contains substring (case-insensitive not needed here).
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr ||
+		len(s) > 0 && containsHelper(s, substr))
+}
+
+func containsHelper(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}

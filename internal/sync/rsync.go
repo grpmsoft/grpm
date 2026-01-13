@@ -41,7 +41,7 @@ func DefaultStrategy() SyncStrategy {
 		MaxRetries:        3,
 		RetryDelay:        2 * time.Second,
 		MaxMirrors:        5,
-		ConnectionTimeout: 30 * time.Second,
+		ConnectionTimeout: 10 * time.Minute, // Full sync takes several minutes
 	}
 }
 
@@ -215,16 +215,9 @@ func (r *RsyncSyncer) syncWithRetry(ctx context.Context, mirrorURL, destDir stri
 // doSync performs the actual rsync operation.
 // It first tries native Go rsync, then falls back to system rsync if available.
 func (r *RsyncSyncer) doSync(ctx context.Context, mirrorURL, destDir string) error {
-	// Try native Go rsync first with a shorter timeout
-	nativeTimeout := r.strategy.ConnectionTimeout
-	if nativeTimeout > 30*time.Second {
-		nativeTimeout = 30 * time.Second // Cap native timeout at 30s
-	}
-
-	nativeCtx, cancel := context.WithTimeout(ctx, nativeTimeout)
-	defer cancel()
-
-	err := r.doSyncNative(nativeCtx, mirrorURL, destDir)
+	// Try native Go rsync with full timeout (no cap)
+	// Syncing 150k+ files takes minutes, not seconds
+	err := r.doSyncNative(ctx, mirrorURL, destDir)
 	if err == nil {
 		return nil
 	}

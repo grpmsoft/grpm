@@ -2,11 +2,11 @@ package solver
 
 import (
 	"fmt"
-	"log"
 	"sort"
 	"strings"
 
 	"github.com/crillab/gophersat/solver"
+	"github.com/grpmsoft/grpm/internal/logging"
 	"github.com/grpmsoft/grpm/internal/pkg"
 )
 
@@ -54,7 +54,7 @@ func (g *GophersatAdapter) addClause(clause []int) {
 
 	g.clauses = append(g.clauses, clause)
 	g.addedClauses[key] = struct{}{}
-	log.Printf("Added clause: %v", clause)
+	logging.Debug("Added clause: %v", clause)
 }
 
 // AddPackage registers a package version as a SAT variable
@@ -79,7 +79,7 @@ func (g *GophersatAdapter) AddPackage(p *pkg.Package) {
 	g.getVarID(key)
 
 	// Logging
-	log.Printf("Added package: %s-%s", p.Name, p.Version)
+	logging.Debug("Added package: %s-%s", p.Name, p.Version)
 }
 
 func (g *GophersatAdapter) AddConstraint(c pkg.Constraint) error {
@@ -103,7 +103,7 @@ func (g *GophersatAdapter) AddAtomConstraint(atom *pkg.Atom) error {
 	}
 
 	pkgName := atom.CP()
-	log.Printf("Processing atom constraint: %s", atom.String())
+	logging.Debug("Processing atom constraint: %s", atom.String())
 
 	// Collect all packages that match this atom
 	var satisfiedVars []int
@@ -112,15 +112,15 @@ func (g *GophersatAdapter) AddAtomConstraint(atom *pkg.Atom) error {
 			key := p.Name + "@" + p.Version
 			varID := g.getVarID(key)
 			satisfiedVars = append(satisfiedVars, varID)
-			log.Printf("Package %s satisfies atom %s", key, atom.String())
+			logging.Debug("Package %s satisfies atom %s", key, atom.String())
 		} else {
-			log.Printf("Package %s does NOT satisfy atom %s",
+			logging.Debug("Package %s does NOT satisfy atom %s",
 				p.Name+"@"+p.Version, atom.String())
 		}
 	}
 
 	if len(satisfiedVars) == 0 {
-		log.Printf("Warning: no package satisfies atom %s", atom.String())
+		logging.Debug("Warning: no package satisfies atom %s", atom.String())
 		return nil
 	}
 
@@ -156,7 +156,7 @@ func (g *GophersatAdapter) AddOrGroupConstraint(alternatives []pkg.Constraint) e
 			}
 		}
 
-		log.Printf("  Alternative %s: %d matching versions", alt.Name, len(altVars))
+		logging.Debug("  Alternative %s: %d matching versions", alt.Name, len(altVars))
 		allSatisfyingVars = append(allSatisfyingVars, altVars...)
 	}
 
@@ -165,13 +165,13 @@ func (g *GophersatAdapter) AddOrGroupConstraint(alternatives []pkg.Constraint) e
 	}
 
 	// Add single clause: at-least-one from all alternatives
-	log.Printf("Adding OR-group clause with %d total options", len(allSatisfyingVars))
+	logging.Debug("Adding OR-group clause with %d total options", len(allSatisfyingVars))
 	g.addClause(allSatisfyingVars)
 	return nil
 }
 
 func (g *GophersatAdapter) addVersionConstraint(c pkg.Constraint) error {
-	log.Printf("Processing constraint: %s %s", c.Name, c.Version)
+	logging.Debug("Processing constraint: %s %s", c.Name, c.Version)
 
 	// For simple constraints without version
 	if c.Version == nil {
@@ -185,15 +185,15 @@ func (g *GophersatAdapter) addVersionConstraint(c pkg.Constraint) error {
 			key := p.Name + "@" + p.Version
 			varID := g.getVarID(key)
 			satisfiedVars = append(satisfiedVars, varID)
-			log.Printf("Package %s satisfies constraint %s %s", key, c.Name, c.Version.String())
+			logging.Debug("Package %s satisfies constraint %s %s", key, c.Name, c.Version.String())
 		} else {
-			log.Printf("Package %s does NOT satisfy constraint %s %s",
+			logging.Debug("Package %s does NOT satisfy constraint %s %s",
 				p.Name+"@"+p.Version, c.Name, c.Version.String())
 		}
 	}
 
 	if len(satisfiedVars) == 0 {
-		log.Printf("Warning: no package satisfies %s %s", c.Name, c.Version.String())
+		logging.Debug("Warning: no package satisfies %s %s", c.Name, c.Version.String())
 		return nil
 	}
 
@@ -234,7 +234,7 @@ func (g *GophersatAdapter) AddExactlyOneConstraint(pkgName string, versions []st
 	// For a single package - just mandatory installation
 	if len(versionVars) == 1 {
 		g.addClause([]int{versionVars[0]})
-		log.Printf("Added mandatory constraint for %s: [%d]", pkgName, versionVars[0])
+		logging.Debug("Added mandatory constraint for %s: [%d]", pkgName, versionVars[0])
 		return
 	}
 
@@ -242,7 +242,7 @@ func (g *GophersatAdapter) AddExactlyOneConstraint(pkgName string, versions []st
 	for _, clause := range exactlyOne(versionVars) {
 		g.addClause(clause)
 	}
-	log.Printf("Added exactly-one constraint for %s: %d versions", pkgName, len(versions))
+	logging.Debug("Added exactly-one constraint for %s: %d versions", pkgName, len(versions))
 }
 
 func (g *GophersatAdapter) addSlotConstraint(c pkg.Constraint) error {
@@ -295,7 +295,7 @@ func exactlyOne(vars []int) [][]int {
 // Solve runs the SAT solver and returns the solution
 func (g *GophersatAdapter) Solve() (pkg.Status, map[string]string, error) {
 	// Logging before solving
-	log.Printf("Solving SAT problem with %d variables and %d clauses", len(g.vars), len(g.clauses))
+	logging.Debug("Solving SAT problem with %d variables and %d clauses", len(g.vars), len(g.clauses))
 
 	// REMOVE: duplicate "exactly one version" constraints
 	// (this is already done in AddExactlyOneConstraint)
@@ -330,7 +330,7 @@ func (g *GophersatAdapter) Solve() (pkg.Status, map[string]string, error) {
 	status := s.Solve()
 
 	if status == solver.Sat {
-		log.Printf("SAT solution found")
+		logging.Debug("SAT solution found")
 		solution := make(map[string]string)
 		model := s.Model()
 
@@ -347,11 +347,11 @@ func (g *GophersatAdapter) Solve() (pkg.Status, map[string]string, error) {
 	}
 
 	if status == solver.Unsat {
-		log.Printf("UNSAT: no solution possible")
+		logging.Debug("UNSAT: no solution possible")
 		return pkg.StatusUnsat, nil, nil
 	}
 
-	log.Printf("INDETERMINATE: solver timeout")
+	logging.Debug("INDETERMINATE: solver timeout")
 	return pkg.StatusIndet, nil, fmt.Errorf("solver timeout")
 }
 

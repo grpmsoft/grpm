@@ -2,9 +2,9 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -14,6 +14,7 @@ import (
 	"github.com/grpmsoft/grpm/internal/ebuild"
 	"github.com/grpmsoft/grpm/internal/fetch"
 	"github.com/grpmsoft/grpm/internal/install"
+	"github.com/grpmsoft/grpm/internal/logging"
 	"github.com/grpmsoft/grpm/internal/pkg"
 	"github.com/grpmsoft/grpm/internal/tools"
 )
@@ -56,6 +57,9 @@ func (a *App) runEmerge(args []string) error {
 	skipToolCheck := fs.Bool("skip-tool-check", false, "Skip external tool availability check")
 
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil // Help was requested, not an error
+		}
 		return err
 	}
 
@@ -69,7 +73,7 @@ func (a *App) runEmerge(args []string) error {
 		*parallelBuilds = 1
 	}
 	if *parallelBuilds > runtime.NumCPU()*2 {
-		log.Printf("Warning: --jobs %d exceeds 2x CPU count (%d), this may cause resource contention",
+		logging.Warn("--jobs %d exceeds 2x CPU count (%d), this may cause resource contention",
 			*parallelBuilds, runtime.NumCPU())
 	}
 
@@ -80,14 +84,14 @@ func (a *App) runEmerge(args []string) error {
 	}
 
 	// Resolve dependencies
-	log.Println("Calculating dependencies...")
+	logging.Action("Calculating dependencies...")
 	solution, err := a.resolvePackageDependencies(r, packages)
 	if err != nil {
 		return err
 	}
 
 	if len(solution) == 0 {
-		log.Println("Nothing to build")
+		logging.Info("Nothing to build")
 		return nil
 	}
 
@@ -163,7 +167,7 @@ type parallelBuildOptions struct {
 // Dependencies are respected: a package only starts building after all its
 // dependencies have completed successfully.
 func (a *App) buildPackagesParallel(solution map[string]*pkg.Package, parallelJobs int, keepGoing bool, opts *parallelBuildOptions) error {
-	log.Printf("\n>>> Starting parallel build with %d workers...", parallelJobs)
+	logging.Action("Starting parallel build with %d workers...", parallelJobs)
 
 	// Get package database
 	db, err := a.getOrCreatePackageDB()
@@ -186,7 +190,7 @@ func (a *App) buildPackagesParallel(solution map[string]*pkg.Package, parallelJo
 		FailureMode: failureMode,
 		Verbose:     a.verbose,
 		ProgressCallback: func(stats *daemon.SchedulerStats) {
-			log.Printf(">>> %s", daemon.FormatStats(stats))
+			logging.Info("%s", daemon.FormatStats(stats))
 		},
 	}
 
@@ -219,7 +223,7 @@ func (a *App) buildPackagesParallel(solution map[string]*pkg.Package, parallelJo
 				depTaskID := depPkg.Name + "-" + depPkg.Version
 				if err := scheduler.AddDependency(taskID, depTaskID); err != nil {
 					if a.verbose {
-						log.Printf("Warning: could not add dependency %s -> %s: %v", taskID, depTaskID, err)
+						logging.Warn("could not add dependency %s -> %s: %v", taskID, depTaskID, err)
 					}
 				}
 			}
@@ -231,7 +235,7 @@ func (a *App) buildPackagesParallel(solution map[string]*pkg.Package, parallelJo
 		buildOrder := scheduler.GetBuildOrder()
 		if len(buildOrder) == 0 {
 			// Trigger topological sort by starting (will compute order)
-			log.Println("Computing build order...")
+			logging.Debug("Computing build order...")
 		}
 	}
 
@@ -241,15 +245,16 @@ func (a *App) buildPackagesParallel(solution map[string]*pkg.Package, parallelJo
 
 	// Report final stats
 	stats := scheduler.GetStats()
-	log.Printf("\n>>> Build summary:")
-	log.Printf("    Completed: %d/%d packages", stats.CompletedTasks, stats.TotalTasks)
+	logging.Info("")
+	logging.Action("Build summary:")
+	logging.Info("    Completed: %d/%d packages", stats.CompletedTasks, stats.TotalTasks)
 	if stats.FailedTasks > 0 {
-		log.Printf("    Failed: %d packages", stats.FailedTasks)
+		logging.Warn("    Failed: %d packages", stats.FailedTasks)
 	}
 	if stats.CanceledTasks > 0 {
-		log.Printf("    Canceled: %d packages", stats.CanceledTasks)
+		logging.Warn("    Canceled: %d packages", stats.CanceledTasks)
 	}
-	log.Printf("    Total time: %s", stats.ElapsedTime.Round(1000000000))
+	logging.Info("    Total time: %s", stats.ElapsedTime.Round(1000000000))
 
 	if err != nil {
 		failedTask := scheduler.GetFailedTask()
@@ -259,7 +264,7 @@ func (a *App) buildPackagesParallel(solution map[string]*pkg.Package, parallelJo
 		return fmt.Errorf("emerge failed: %w", err)
 	}
 
-	log.Printf("\n>>> Emerge completed successfully: %d package(s) built and installed", stats.CompletedTasks)
+	logging.Action("Emerge completed successfully: %d package(s) built and installed", stats.CompletedTasks)
 	return nil
 }
 
@@ -273,7 +278,7 @@ func (a *App) buildAndInstallSinglePackage(ctx context.Context, p *pkg.Package, 
 	default:
 	}
 
-	log.Printf(">>> Building %s-%s", p.Name, p.Version)
+	logging.Action("Building %s-%s", p.Name, p.Version)
 
 	// Build from source
 	imageDir, err := a.buildPackageFromSource(p, opts.repoPath, opts.distDir, opts.tmpDir, opts.makeJobs, opts.keepWork, opts.enableTests, opts.fetcher)
@@ -304,7 +309,7 @@ func (a *App) loadPortageConfig() *config.Config {
 	cfg, err := config.LoadConfig("/etc/portage")
 	if err != nil {
 		if a.verbose {
-			log.Printf("Warning: failed to load Portage config: %v", err)
+			logging.Warn("failed to load Portage config: %v", err)
 		}
 		// Return config with defaults
 		return &config.Config{
@@ -358,10 +363,10 @@ func (a *App) createFetcherWithConfig(distDir string, cfg *config.Config) fetch.
 	if len(mirrors) == 0 {
 		mirrors = fetch.DefaultMirrors
 		if a.verbose {
-			log.Printf("Using default Gentoo mirrors (GENTOO_MIRRORS not configured)")
+			logging.Debug("Using default Gentoo mirrors (GENTOO_MIRRORS not configured)")
 		}
 	} else if a.verbose {
-		log.Printf("Using %d configured Gentoo mirror(s) from make.conf", len(mirrors))
+		logging.Debug("Using %d configured Gentoo mirror(s) from make.conf", len(mirrors))
 	}
 
 	fetchConfig := fetch.DefaultConfig().
@@ -375,9 +380,9 @@ func (a *App) createFetcherWithConfig(distDir string, cfg *config.Config) fetch.
 		downloader.SetProgressCallback(func(filename string, downloaded, total int64) {
 			if total > 0 {
 				percent := float64(downloaded) / float64(total) * 100
-				log.Printf("  %s: %.1f%% (%d/%d bytes)", filename, percent, downloaded, total)
+				logging.Verbose("  %s: %.1f%% (%d/%d bytes)", filename, percent, downloaded, total)
 			} else {
-				log.Printf("  %s: %d bytes", filename, downloaded)
+				logging.Verbose("  %s: %d bytes", filename, downloaded)
 			}
 		})
 	}
@@ -396,7 +401,7 @@ func (a *App) createFetcher(distDir string) fetch.Fetcher {
 
 // buildAndInstallPackages builds packages from source and installs them.
 func (a *App) buildAndInstallPackages(solution map[string]*pkg.Package, repoPath, distDir, tmpDir string, jobs int, keepWork, enableTests bool, fetcher fetch.Fetcher) error {
-	log.Println("\n>>> Starting source build...")
+	logging.Action("Starting source build...")
 
 	builtCount := 0
 	totalPackages := len(solution)
@@ -412,7 +417,7 @@ func (a *App) buildAndInstallPackages(solution map[string]*pkg.Package, repoPath
 	installer.Verbose = a.verbose
 
 	for name, p := range solution {
-		log.Printf("\n>>> (%d/%d) Emerging %s-%s", builtCount+1, totalPackages, name, p.Version)
+		logging.Action("(%d/%d) Emerging %s-%s", builtCount+1, totalPackages, name, p.Version)
 
 		// Build from source (fetcher will download sources automatically)
 		imageDir, err := a.buildPackageFromSource(p, repoPath, distDir, tmpDir, jobs, keepWork, enableTests, fetcher)
@@ -426,10 +431,10 @@ func (a *App) buildAndInstallPackages(solution map[string]*pkg.Package, repoPath
 		}
 
 		builtCount++
-		log.Printf(">>> %s-%s merged successfully (%d/%d)", name, p.Version, builtCount, totalPackages)
+		logging.Action("%s-%s merged successfully (%d/%d)", name, p.Version, builtCount, totalPackages)
 	}
 
-	log.Printf("\n>>> Emerge completed successfully: %d package(s) built and installed", builtCount)
+	logging.Action("Emerge completed successfully: %d package(s) built and installed", builtCount)
 	return nil
 }
 
@@ -441,10 +446,12 @@ func (a *App) buildPackageFromSource(p *pkg.Package, repoPath, distDir, tmpDir s
 	// Find ebuild file
 	ebuildPath := a.findEbuildFile(p, repoPath)
 	if ebuildPath == "" && a.verbose {
-		log.Printf("Warning: No ebuild file found for %s-%s, using defaults", p.Name, p.Version)
+		logging.Warn("No ebuild file found for %s-%s, using defaults", p.Name, p.Version)
 	}
 
 	// Create executor options with fetcher for automatic distfile download
+	// NOTE: KeepWork is always true here because we need the image directory
+	// for installation. Cleanup happens after install in installFromImageDir.
 	opts := ebuild.ExecutorOptions{
 		TmpDir:        tmpDir,
 		PortDir:       repoPath,
@@ -452,7 +459,7 @@ func (a *App) buildPackageFromSource(p *pkg.Package, repoPath, distDir, tmpDir s
 		EbuildPath:    ebuildPath,
 		EnableSandbox: true,
 		EnableTests:   enableTests,
-		KeepWork:      keepWork,
+		KeepWork:      true, // Must be true - cleanup after install
 		Fetcher:       fetcher,
 	}
 
@@ -462,10 +469,18 @@ func (a *App) buildPackageFromSource(p *pkg.Package, repoPath, distDir, tmpDir s
 		return "", fmt.Errorf("failed to create executor: %w", err)
 	}
 
+	// Parse ebuild to detect custom phase functions
+	if err := executor.ParseEbuild(); err != nil {
+		if a.verbose {
+			logging.Warn("failed to parse ebuild: %v", err)
+		}
+		// Continue anyway - will use default phases
+	}
+
 	// Set progress callback
 	executor.OnProgress = func(phase ebuild.Phase, status string) {
 		if a.verbose {
-			log.Printf("  [%s] %s", phase, status)
+			logging.Verbose("  [%s] %s", phase, status)
 		}
 	}
 
@@ -473,22 +488,22 @@ func (a *App) buildPackageFromSource(p *pkg.Package, repoPath, distDir, tmpDir s
 	executor.Env.MAKEOPTS = fmt.Sprintf("-j%d", jobs)
 
 	// Execute build phases (fetch happens automatically before unpack)
-	log.Printf(">>> Fetching sources...")
-	log.Printf(">>> Unpacking sources...")
-	log.Printf(">>> Configuring...")
-	log.Printf(">>> Compiling...")
-	log.Printf(">>> Installing to temporary directory...")
+	logging.Action("Fetching sources...")
+	logging.Action("Unpacking sources...")
+	logging.Action("Configuring...")
+	logging.Action("Compiling...")
+	logging.Action("Installing to temporary directory...")
 
 	phases := ebuild.StandardPhases()
 	results, err := executor.ExecutePhases(phases)
 	if err != nil {
 		// Print build log on failure
-		log.Printf("Build failed! Phase results:")
+		logging.Error("Build failed! Phase results:")
 		for _, result := range results {
 			if !result.Success {
-				log.Printf("  Phase %s failed: %v", result.Phase, result.Error)
+				logging.Error("  Phase %s failed: %v", result.Phase, result.Error)
 				if result.Output != "" {
-					log.Printf("  Output: %s", result.Output)
+					logging.Error("  Output: %s", result.Output)
 				}
 			}
 		}
@@ -496,9 +511,9 @@ func (a *App) buildPackageFromSource(p *pkg.Package, repoPath, distDir, tmpDir s
 	}
 
 	if a.verbose {
-		log.Printf("Build successful! Results:")
+		logging.Debug("Build successful! Results:")
 		for _, result := range results {
-			log.Printf("  Phase %s: %dms", result.Phase, result.Duration)
+			logging.Debug("  Phase %s: %dms", result.Phase, result.Duration)
 		}
 	}
 
@@ -521,6 +536,14 @@ func (a *App) installFromImageDir(installer *install.Installer, p *pkg.Package, 
 
 	if err := installer.Install(p, opts); err != nil {
 		return fmt.Errorf("installation failed: %w", err)
+	}
+
+	// Cleanup work directory after successful install (unless keepWork is set)
+	if !keepWork {
+		if err := os.RemoveAll(workDir); err != nil {
+			// Non-fatal - log warning but don't fail
+			logging.Warn("failed to cleanup work directory %s: %v", workDir, err)
+		}
 	}
 
 	return nil
@@ -551,7 +574,7 @@ func (a *App) findEbuildFile(p *pkg.Package, repoPath string) string {
 //
 // Returns an error if required tools are missing, with suggestions for installation.
 func (a *App) checkBuildTools(solution map[string]*pkg.Package, repoPath string) error {
-	log.Println("Checking external tool availability...")
+	logging.Debug("Checking external tool availability...")
 
 	checker := tools.NewChecker()
 
@@ -567,7 +590,7 @@ func (a *App) checkBuildTools(solution map[string]*pkg.Package, repoPath string)
 		content, err := os.ReadFile(ebuildPath)
 		if err != nil {
 			if a.verbose {
-				log.Printf("Warning: could not read ebuild %s: %v", ebuildPath, err)
+				logging.Warn("could not read ebuild %s: %v", ebuildPath, err)
 			}
 			continue
 		}
@@ -580,7 +603,7 @@ func (a *App) checkBuildTools(solution map[string]*pkg.Package, repoPath string)
 
 	if len(allEclasses) == 0 {
 		if a.verbose {
-			log.Println("No eclasses detected, skipping tool check")
+			logging.Debug("No eclasses detected, skipping tool check")
 		}
 		return nil
 	}
@@ -595,8 +618,8 @@ func (a *App) checkBuildTools(solution map[string]*pkg.Package, repoPath string)
 	result := checker.CheckForEclasses(eclassList)
 
 	if a.verbose {
-		log.Printf("Detected eclasses: %v", eclassList)
-		log.Printf("Required tools: %d, available: %d, missing: %d",
+		logging.Debug("Detected eclasses: %v", eclassList)
+		logging.Debug("Required tools: %d, available: %d, missing: %d",
 			len(result.Required), len(result.Available), len(result.Missing))
 	}
 
@@ -611,7 +634,7 @@ func (a *App) checkBuildTools(solution map[string]*pkg.Package, repoPath string)
 	}
 
 	if a.verbose && len(result.Required) > 0 {
-		log.Printf("All %d required tools are available", len(result.Required))
+		logging.Debug("All %d required tools are available", len(result.Required))
 	}
 
 	return nil

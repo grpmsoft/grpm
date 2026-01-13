@@ -1,10 +1,11 @@
 # GRPM Roadmap
 
-> **Critical Hotfix (v0.7.4)**
+> **Build Quality Release (v0.7.5)**
 >
 > Rapid development complete (v0.1.0 → v0.5.0).
 > Infrastructure release complete (v0.6.0).
 > Portage-style logging (v0.7.0) + compatibility fixes (v0.7.2 → v0.7.4).
+> Build reliability and output quality improvements (v0.7.5).
 > **98.2% tree coverage verified on real Gentoo!**
 
 ---
@@ -65,7 +66,16 @@ Key insight: **Eclasses don't need Go implementations.** They are loaded dynamic
 
 ## Release History
 
-### v0.7.4 — Critical Hotfix (Current)
+### v0.7.5 — Build Quality Release (Current)
+
+**Professional output and reliable builds:**
+
+- **Unified logging infrastructure** — All output uses `internal/logging/` package
+- **Debug output suppressed** — Clean output by default, verbose with `-v`
+- **Source build fixes** — S variable parsing, timestamp preservation, replace mode
+- **CLI improvements** — --help exit code fix, mirror:// expansion in emerge
+
+### v0.7.4 — Critical Hotfix
 
 **Fixes for real-world Gentoo usage:**
 
@@ -144,17 +154,16 @@ Key insight: **Eclasses don't need Go implementations.** They are loaded dynamic
 ## Roadmap to v1.0.0
 
 ```
-v0.7.4 ← CURRENT (Critical Hotfix)
+v0.7.5 ← CURRENT (Build Quality Release)
     │   ✅ v0.6.0: Distfile fetching, debug helpers, coverage analyzer
     │   ✅ v0.7.0: Portage-style logging
-    │   ✅ v0.7.2: package.mask directories, SRC_URI parsing
-    │   ✅ v0.7.3: Documentation fixes
-    │   ✅ v0.7.4: mirror:// URLs, rsync hang fix
+    │   ✅ v0.7.2-v0.7.4: Portage compatibility fixes
+    │   ✅ v0.7.5: Unified logging, source build reliability
     │   ✅ 98.2% tree coverage on real Gentoo!
     ↓
 v0.8.0 — Production Hardening (2 tasks)
     │   • Performance optimization
-    │   • Structured logging
+    │   • Error handling improvements
     ↓
 v0.9.0 — Pre-Release (2 tasks)
     │   • Community testing program
@@ -211,11 +220,11 @@ Key deliverables:
 | Task | Priority |
 |------|----------|
 | Performance Optimization | P1 |
-| Structured Logging | P2 |
+| Error Handling Improvements | P2 |
 
 Key deliverables:
 - 2x faster dependency resolution
-- Structured logging with levels (-v, -vv, -vvv)
+- Better error messages and recovery
 - Per-package build logs
 
 ---
@@ -280,4 +289,4 @@ Key deliverables:
 ---
 
 *This roadmap evolves based on community feedback and project needs.*
-*Last updated: 2026-01-12 (v0.6.0 release)*
+*Last updated: 2026-01-13 (v0.7.5 release)*

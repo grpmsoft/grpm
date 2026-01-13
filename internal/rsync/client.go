@@ -1,6 +1,7 @@
 package rsync
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -26,6 +27,7 @@ type Client struct {
 	conn          net.Conn
 	wire          *Conn
 	mplex         *MultiplexReader
+	// NOTE: No mplexW - client writes are always RAW (not multiplexed)
 }
 
 // Logger interface for rsync client logging.
@@ -94,13 +96,9 @@ func (c *Client) Sync(ctx context.Context, rsyncURL, destDir string) error {
 	c.conn = conn
 	c.wire = NewConn(conn, conn)
 
-	// Set read/write deadline based on context
-	// This ensures operations don't hang indefinitely
-	if deadline, ok := ctx.Deadline(); ok {
-		if err := conn.SetDeadline(deadline); err != nil {
-			c.Logger.Printf("warning: failed to set connection deadline: %v", err)
-		}
-	}
+	// NOTE: We do NOT set connection deadline from context.
+	// For large repository syncs (150k+ files), the operation takes minutes.
+	// Context cancellation is handled by closing the connection in the select below.
 
 	// Run protocol with context cancellation
 	done := make(chan error, 1)
@@ -136,49 +134,94 @@ func (c *Client) runProtocol(ctx context.Context, module, remotePath, destDir st
 		return fmt.Errorf("send args: %w", err)
 	}
 
-	// 4. Send exclusion list (empty - no filters)
-	// Server calls recv_filter_list() and waits for 0 to indicate no filters
-	c.Logger.Printf("sending empty filter list")
-	if err := c.wire.WriteInt32(0); err != nil {
-		return fmt.Errorf("write filter terminator: %w", err)
-	}
-
-	// 5. Read checksum seed (raw int32, not multiplexed for protocol < 30)
-	// See rsync's setup_protocol() - seed is sent before multiplex is enabled
+	// 4. Read checksum seed (raw int32, not multiplexed)
+	// See rsync's setup_protocol() - seed is sent BEFORE multiplex is enabled
 	seed, err := c.wire.ReadInt32()
 	if err != nil {
 		return fmt.Errorf("read checksum seed: %w", err)
 	}
 	c.Logger.Printf("checksum seed: 0x%08x", uint32(seed))
 
-	// 6. Enable multiplexing
-	c.Logger.Printf("enabling multiplexing, protocol version: %d", c.remoteVersion)
-	c.mplex = NewMultiplexReader(c.wire)
+	// 5. Enable multiplexing for protocol >= 23 (daemon mode)
+	// After setup_protocol(), server calls io_start_multiplex_in/out for proto >= 23
+	// This means:
+	// - Server reads from us via demultiplexer (we must send multiplexed data)
+	// - Server writes to us via multiplexer (we already have MultiplexReader)
+	negotiatedVersion := c.remoteVersion
+	if negotiatedVersion > ProtocolVersion {
+		negotiatedVersion = ProtocolVersion
+	}
+	c.Logger.Printf("enabling multiplexing: server=%d, client=%d, negotiated=%d",
+		c.remoteVersion, ProtocolVersion, negotiatedVersion)
+
+	// Wrap reader in 256KB bufio for better TCP flow control (critical for large syncs)
+	// This matches gokrazy/rsync implementation which uses bufio.NewReaderSize(mrd, 256*1024)
+	bufferedReader := bufio.NewReaderSize(c.wire.Reader, 256*1024)
+	bufferedConn := NewConn(bufferedReader, c.wire.Writer)
+	c.mplex = NewMultiplexReader(bufferedConn)
 	c.mplex.SetDebug(c.Logger)
 
-	// 6. Receive file list
+	// 6. Send exclusion list (empty - no filters)
+	// Filter list is sent RAW (before server enables multiplex input)
+	c.Logger.Printf("sending empty filter list (raw)")
+	if err := c.wire.WriteInt32(0); err != nil {
+		return fmt.Errorf("write filter terminator: %w", err)
+	}
+
+	// NOTE: Client writes remain RAW throughout the protocol!
+	// Only server writes are multiplexed (we read via MultiplexReader).
+	// This is the key insight from gokrazy/rsync implementation.
+
+	// 7. Receive file list
 	files, err := c.receiveFileList()
 	if err != nil {
 		return fmt.Errorf("receive file list: %w", err)
 	}
 	c.Logger.Printf("received %d files", len(files))
 
-	// 6.5. Read I/O error count (sent after file list)
-	// For protocol < 30: 1 byte, for >= 30: int32
-	// HOWEVER: Some fields might be sent even for proto 27 if server is >= 30
-	// Let's read as int32 to be safe since we saw 4 extra bytes
-	ioErrCount, err := c.readMultiplexedInt32()
+	// Read io_error after file list
+	// This is sent by server after file list is complete
+	ioerr, err := c.readMultiplexedInt32()
 	if err != nil {
-		return fmt.Errorf("read io error count: %w", err)
+		c.Logger.Printf("warning: read ioerr: %v (continuing anyway)", err)
+	} else {
+		c.Logger.Printf("server io_error: %d", ioerr)
 	}
-	c.Logger.Printf("I/O error count: %d", ioErrCount)
+	c.Logger.Printf("file list complete, starting file transfer")
 
-	// 7. Request and receive files
+	// 8. Request and receive files
 	if err := c.receiveFiles(ctx, files, destDir); err != nil {
 		return fmt.Errorf("receive files: %w", err)
 	}
 
-	// 8. Handle deletion if enabled
+	// 9. Read statistics from server (3 x int64)
+	// See gokrazy/rsync report() function
+	readBytes, err := c.readMultiplexedInt64()
+	if err != nil {
+		c.Logger.Printf("warning: read stats (read): %v", err)
+	} else {
+		c.Logger.Printf("server stats: read=%d", readBytes)
+	}
+	writtenBytes, err := c.readMultiplexedInt64()
+	if err != nil {
+		c.Logger.Printf("warning: read stats (written): %v", err)
+	} else {
+		c.Logger.Printf("server stats: written=%d", writtenBytes)
+	}
+	totalSize, err := c.readMultiplexedInt64()
+	if err != nil {
+		c.Logger.Printf("warning: read stats (size): %v", err)
+	} else {
+		c.Logger.Printf("server stats: size=%d", totalSize)
+	}
+
+	// 10. Send final goodbye message (raw -1)
+	c.Logger.Printf("sending final goodbye")
+	if err := c.wire.WriteInt32(-1); err != nil {
+		c.Logger.Printf("warning: write goodbye: %v", err)
+	}
+
+	// 11. Handle deletion if enabled
 	if c.Delete {
 		if err := c.deleteExtraneous(destDir, files); err != nil {
 			return fmt.Errorf("delete extraneous: %w", err)
@@ -403,12 +446,23 @@ func (c *Client) readFileEntry(flags byte, lastEntry FileEntry) (FileEntry, erro
 		entry.Mode = lastEntry.Mode
 	}
 
-	// Set IsDir based on mode - check for directory bit in Unix mode
-	// rsync uses Unix permission bits where 0040000 (S_IFDIR) indicates directory
-	entry.IsDir = entry.Mode&os.ModeDir != 0 || (uint32(entry.Mode)&0o40000) != 0
+	// Set IsDir based on:
+	// 1. XmitTopDir flag (0x01) - rsync sets this for directories
+	// 2. Unix mode S_IFDIR (0040000)
+	// 3. os.ModeDir bit
+	entry.IsDir = (flags&XmitTopDir != 0) ||
+		(entry.Mode&os.ModeDir != 0) ||
+		((uint32(entry.Mode) & 0o170000) == 0o040000) // S_IFMT mask & S_IFDIR
+
+	// Special case: "." and ".." are always directories regardless of mode
+	if name == "." || name == ".." {
+		entry.IsDir = true
+	}
 
 	// Handle symlinks - check for symlink bit (0120000 in Unix)
-	isSymlink := entry.Mode&os.ModeSymlink != 0 || (uint32(entry.Mode)&0o120000) == 0o120000
+	// Use S_IFMT mask (0170000) to extract file type
+	isSymlink := entry.Mode&os.ModeSymlink != 0 ||
+		((uint32(entry.Mode) & 0o170000) == 0o120000)
 	if isSymlink {
 		entry.Mode |= os.ModeSymlink
 		linkLen, err := c.readMultiplexedInt32()
@@ -473,10 +527,11 @@ func (c *Client) readFileName(flags byte, lastName string) (string, error) {
 	return name, nil
 }
 
-// receiveFiles requests and receives file data from the server.
-// rsync protocol: client (generator) sends file indices + empty checksum header,
-// then server (sender) sends file data for each requested file.
-// See sender.c:send_files() - sender WAITS for read_ndx() from client.
+// receiveFiles implements rsync generator/receiver protocol.
+// Based on gokrazy/rsync and C rsync reference implementation:
+// - Generator: sends file indices + sum_head for files needing update
+// - Receiver: reads file indices + data from sender
+// Both run CONCURRENTLY to prevent buffer overflow (broken pipe).
 //
 //nolint:gocyclo // Complex by nature - handles rsync wire protocol state machine
 func (c *Client) receiveFiles(ctx context.Context, files []FileEntry, destDir string) error {
@@ -485,7 +540,7 @@ func (c *Client) receiveFiles(ctx context.Context, files []FileEntry, destDir st
 		return fmt.Errorf("create dest dir: %w", err)
 	}
 
-	// Create all directories first
+	// Create all directories first (generator handles this locally)
 	for _, entry := range files {
 		if entry.IsDir {
 			destPath := filepath.Join(destDir, entry.Path)
@@ -495,7 +550,7 @@ func (c *Client) receiveFiles(ctx context.Context, files []FileEntry, destDir st
 		}
 	}
 
-	// Create symlinks
+	// Create symlinks (generator handles this locally)
 	for _, entry := range files {
 		if entry.Mode&os.ModeSymlink != 0 {
 			destPath := filepath.Join(destDir, entry.Path)
@@ -506,86 +561,133 @@ func (c *Client) receiveFiles(ctx context.Context, files []FileEntry, destDir st
 		}
 	}
 
-	// rsync generator/sender protocol:
-	// Generator sends file index + sum_head for files needing update
-	// Sender receives request, sends file data, then echoes file index
-	// Flow is pipelined - we send requests and receive responses concurrently
-	//
-	// For simplicity, we'll batch requests in smaller groups to avoid
-	// overwhelming the server's request queue
-
 	// Collect indices of regular files to request
 	var regularFiles []int
 	for i, entry := range files {
-		if !entry.IsDir && entry.Mode&os.ModeSymlink == 0 {
-			regularFiles = append(regularFiles, i)
+		if entry.IsDir || entry.Mode&os.ModeSymlink != 0 {
+			continue
+		}
+		if entry.Path == "." || entry.Path == ".." {
+			continue
+		}
+		if len(entry.Path) > 0 && entry.Path[len(entry.Path)-1] == '/' {
+			continue
+		}
+		regularFiles = append(regularFiles, i)
+	}
+	c.Logger.Printf("need to request %d regular files", len(regularFiles))
+
+	// Run generator and receiver CONCURRENTLY with flow control
+	// Use a buffered channel as semaphore to limit outstanding requests.
+	// This prevents server buffer overflow that causes connection reset.
+	const maxOutstanding = 100 // Max requests in flight
+	flowControl := make(chan struct{}, maxOutstanding)
+	errChan := make(chan error, 2)
+
+	// Generator goroutine: sends file requests
+	go func() {
+		errChan <- c.runGenerator(ctx, regularFiles, flowControl)
+	}()
+
+	// Receiver goroutine: reads file data
+	go func() {
+		errChan <- c.runReceiver(ctx, files, destDir, flowControl)
+	}()
+
+	// Wait for both to complete
+	var firstErr error
+	for i := 0; i < 2; i++ {
+		if err := <-errChan; err != nil && firstErr == nil {
+			firstErr = err
 		}
 	}
-	c.Logger.Printf("need to request %d regular files (dirs/symlinks: %d)", len(regularFiles), len(files)-len(regularFiles))
 
-	// Debug: print first 5 regular files and first 5 non-regular files
-	for i := 0; i < 5 && i < len(regularFiles); i++ {
-		f := files[regularFiles[i]]
-		c.Logger.Printf("regular[%d] idx=%d: %s (mode=0x%x, isDir=%v)", i, regularFiles[i], f.Path, uint32(f.Mode), f.IsDir)
-	}
-	for i, f := range files[:min(10, len(files))] {
-		c.Logger.Printf("file[%d]: %s (mode=0x%x, isDir=%v, isSymlink=%v)", i, f.Path, uint32(f.Mode), f.IsDir, f.Mode&os.ModeSymlink != 0)
+	return firstErr
+}
+
+// runGenerator sends file requests to the server with flow control.
+// Uses flowControl channel as semaphore to limit outstanding requests.
+// This prevents server buffer overflow that causes connection reset.
+func (c *Client) runGenerator(ctx context.Context, regularFiles []int, flowControl chan struct{}) error {
+	c.Logger.Printf("=== GENERATOR: sending %d file requests (raw) ===", len(regularFiles))
+
+	// Buffer for request: file_index (4 bytes) + sum_head (16 bytes) = 20 bytes
+	// sum_head: count=0, blength=0, s2length=0, remainder=0 (all zeros for full file)
+	requestBuf := make([]byte, 20)
+
+	for i, idx := range regularFiles {
+		// Flow control: block if too many outstanding requests
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case flowControl <- struct{}{}: // Acquire slot
+		}
+
+		// Encode file index as little-endian int32
+		requestBuf[0] = byte(idx)
+		requestBuf[1] = byte(idx >> 8)
+		requestBuf[2] = byte(idx >> 16)
+		requestBuf[3] = byte(idx >> 24)
+		// Bytes 4-19 stay zero (sum_head)
+
+		// Write request as single atomic write
+		if _, err := c.wire.Writer.Write(requestBuf); err != nil {
+			return fmt.Errorf("write request for %d: %w", idx, err)
+		}
+
+		// Log progress
+		if (i+1)%10000 == 0 {
+			c.Logger.Printf("generator: sent %d/%d requests", i+1, len(regularFiles))
+		}
 	}
 
-	// Request and receive files one at a time
-	// rsync protocol uses pipelining, but for simplicity we'll do sequential
+	// Send phase 1 done (-1)
+	c.Logger.Printf("generator: sending NDX_DONE (phase 1)")
+	if err := c.wire.WriteInt32(-1); err != nil {
+		return fmt.Errorf("write NDX_DONE phase 1: %w", err)
+	}
+
+	// Send phase 2 done (-1) - for redo phase
+	c.Logger.Printf("generator: sending NDX_DONE (phase 2)")
+	if err := c.wire.WriteInt32(-1); err != nil {
+		return fmt.Errorf("write NDX_DONE phase 2: %w", err)
+	}
+
+	c.Logger.Printf("generator: complete")
+	return nil
+}
+
+// runReceiver reads file data from the server with flow control.
+// Releases slots in flowControl channel to allow generator to send more requests.
+func (c *Client) runReceiver(ctx context.Context, files []FileEntry, destDir string, flowControl chan struct{}) error {
+	c.Logger.Printf("=== RECEIVER: waiting for files ===")
 	filesReceived := 0
+	phase := 0
 
-	for _, idx := range regularFiles {
+	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
 		}
 
-		// Send file request - write 20 bytes total:
-		// 4 bytes: file index
-		// 16 bytes: sum_head (count=0, blength=0, s2length=0, remainder=0)
-		c.Logger.Printf("requesting file %d: %s", idx, files[idx].Path)
-
-		// Build the request bytes to log them
-		var reqBuf [20]byte
-		reqBuf[0] = byte(idx)
-		reqBuf[1] = byte(idx >> 8)
-		reqBuf[2] = byte(idx >> 16)
-		reqBuf[3] = byte(idx >> 24)
-		// Bytes 4-19 are zeros (sum_head with all zeros)
-		c.Logger.Printf("sending request bytes: %x", reqBuf)
-
-		// Write file index
-		if err := c.wire.WriteInt32(int32(idx)); err != nil {
-			return fmt.Errorf("write file index %d: %w", idx, err)
-		}
-
-		// Send empty sum header for fresh sync
-		for i := 0; i < 4; i++ {
-			if err := c.wire.WriteInt32(0); err != nil {
-				return fmt.Errorf("write sum header[%d]: %w", i, err)
-			}
-		}
-		c.Logger.Printf("request sent, waiting for response...")
-
-		// Read file index through multiplexer (it handles the message framing)
+		// Read file index from sender (through multiplexer)
 		recvIdx, err := c.readMultiplexedInt32()
 		if err != nil {
 			return fmt.Errorf("read file index: %w", err)
 		}
-		c.Logger.Printf("received file index: %d", recvIdx)
 
-		if recvIdx != int32(idx) {
-			c.Logger.Printf("warning: requested idx=%d but received idx=%d", idx, recvIdx)
+		if recvIdx == -1 {
+			// NDX_DONE - end of phase
+			phase++
+			c.Logger.Printf("receiver: got NDX_DONE, phase=%d", phase)
+			if phase >= 2 {
+				break
+			}
+			continue
 		}
 
 		if recvIdx < 0 || int(recvIdx) >= len(files) {
-			if recvIdx == -1 {
-				c.Logger.Printf("received NDX_DONE, stopping")
-				break
-			}
 			return fmt.Errorf("invalid file index: %d (max %d)", recvIdx, len(files))
 		}
 
@@ -597,10 +699,11 @@ func (c *Client) receiveFiles(ctx context.Context, files []FileEntry, destDir st
 			return fmt.Errorf("receive file %s: %w", entry.Path, err)
 		}
 
-		// Send acknowledgment - receiver sends file index back after successful receipt
-		// See receiver.c:recv_files() - write_ndx(f_out, ndx)
-		if err := c.wire.WriteInt32(recvIdx); err != nil {
-			return fmt.Errorf("write ack for file %d: %w", recvIdx, err)
+		// Release flow control slot to allow generator to send more
+		select {
+		case <-flowControl: // Release slot
+		default:
+			// Channel empty - shouldn't happen but don't block
 		}
 
 		filesReceived++
@@ -609,23 +712,7 @@ func (c *Client) receiveFiles(ctx context.Context, files []FileEntry, destDir st
 		}
 	}
 
-	// Send NDX_DONE (-1) to indicate end of file requests
-	c.Logger.Printf("sent all file requests (%d files), sending NDX_DONE", filesReceived)
-	if err := c.wire.WriteInt32(-1); err != nil {
-		return fmt.Errorf("write NDX_DONE: %w", err)
-	}
-
-	// Wait for final NDX_DONE from sender
-	finalIdx, err := c.readMultiplexedInt32()
-	if err != nil {
-		return fmt.Errorf("read final NDX_DONE: %w", err)
-	}
-	if finalIdx != -1 {
-		c.Logger.Printf("warning: expected final NDX_DONE, got %d", finalIdx)
-	}
-
-	c.Logger.Printf("sync complete: received %d files", filesReceived)
-
+	c.Logger.Printf("receiver: complete, received %d files", filesReceived)
 	return nil
 }
 

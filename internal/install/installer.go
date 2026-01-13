@@ -129,14 +129,33 @@ func (i *Installer) Install(p *pkg.Package, opts InstallOptions) error {
 
 	// Check if already installed
 	atom := fmt.Sprintf("%s-%s", p.Name, p.Version)
-	if i.DB.Has(atom) && !opts.Replace {
-		return fmt.Errorf("package already installed: %s (use Replace option)", atom)
+	existingAtom := i.findInstalledVersion(p.Name)
+
+	if existingAtom != "" && !opts.Replace {
+		return fmt.Errorf("package already installed: %s (use --replace or -R)", existingAtom)
 	}
 
 	// Pretend mode - just validate and return
 	if opts.Pretend || i.DryRun {
-		i.progress("[pretend] Would install %s", atom)
+		if existingAtom != "" {
+			i.progress("[pretend] Would replace %s with %s", existingAtom, atom)
+		} else {
+			i.progress("[pretend] Would install %s", atom)
+		}
 		return nil
+	}
+
+	// If replacing, unmerge old version first
+	// This ensures clean replacement without file collisions from old package
+	if existingAtom != "" && opts.Replace {
+		i.progress("Replacing %s with %s", existingAtom, atom)
+
+		// Unmerge old package (keep config files via CONFIG_PROTECT)
+		if err := i.Uninstall(existingAtom, UninstallOptions{
+			SkipHooks: opts.SkipHooks,
+		}); err != nil {
+			return fmt.Errorf("failed to remove old package %s: %w", existingAtom, err)
+		}
 	}
 
 	// Create merger for this package
@@ -311,4 +330,63 @@ func (i *Installer) progress(format string, args ...interface{}) {
 	if i.Verbose {
 		fmt.Printf(format+"\n", args...)
 	}
+}
+
+// findInstalledVersion finds any installed version of a package by name.
+//
+// Returns the full atom (category/name-version) if found, empty string otherwise.
+// This is used to detect if a package needs replacement during installation.
+//
+// Example:
+//
+//	atom := installer.findInstalledVersion("app-misc/hello")
+//	// Returns "app-misc/hello-2.12" if that version is installed
+func (i *Installer) findInstalledVersion(packageName string) string {
+	if i.DB == nil {
+		return ""
+	}
+
+	// List all installed packages and find one with matching name
+	packages := i.DB.List()
+	for _, pkg := range packages {
+		// Extract package name from atom and compare
+		// Use same logic as collision.go extractPackageName
+		atom := fmt.Sprintf("%s-%s", pkg.Package.Name, pkg.Package.Version)
+		if extractPackageNameFromAtom(atom) == packageName {
+			return atom
+		}
+	}
+
+	return ""
+}
+
+// extractPackageNameFromAtom extracts package name (category/name) from atom.
+//
+// This is a copy of the logic in collision.go for use in installer.go.
+// We duplicate rather than export to keep collision.go's internal API clean.
+func extractPackageNameFromAtom(atom string) string {
+	// Find category separator
+	slashIdx := -1
+	for idx, c := range atom {
+		if c == '/' {
+			slashIdx = idx
+			break
+		}
+	}
+	if slashIdx == -1 {
+		return atom
+	}
+
+	category := atom[:slashIdx]
+	rest := atom[slashIdx+1:]
+
+	// Find version separator (first dash followed by digit)
+	for i := 0; i < len(rest)-1; i++ {
+		if rest[i] == '-' && i+1 < len(rest) && rest[i+1] >= '0' && rest[i+1] <= '9' {
+			return category + "/" + rest[:i]
+		}
+	}
+
+	// No version found, return as-is
+	return atom
 }

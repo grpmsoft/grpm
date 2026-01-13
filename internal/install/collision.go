@@ -3,6 +3,7 @@ package install
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/grpmsoft/grpm/internal/state"
 )
@@ -112,8 +113,8 @@ func (cd *CollisionDetector) Detect(filesToInstall []string, packageName string)
 					NewOwner: packageName,
 					Type:     CollisionFileExists,
 				})
-			} else if owner != packageName {
-				// File is owned by another package
+			} else if !isSamePackage(owner, packageName) {
+				// File is owned by another package (different category/name)
 				collisions = append(collisions, Collision{
 					Path:          path,
 					ExistingOwner: owner,
@@ -122,6 +123,7 @@ func (cd *CollisionDetector) Detect(filesToInstall []string, packageName string)
 				})
 			}
 			// else: owned by same package (upgrade/replace) - no collision
+			// This handles the "protect-owned" behavior from Portage
 		}
 	}
 
@@ -141,6 +143,42 @@ func (cd *CollisionDetector) isProtected(path string) bool {
 	}
 
 	return false
+}
+
+// extractPackageName extracts package name (category/name) from atom.
+//
+// Examples:
+//
+//	"app-misc/hello-2.12" -> "app-misc/hello"
+//	"sys-libs/zlib-1.2.13-r1" -> "sys-libs/zlib"
+//	"app-misc/hello" -> "app-misc/hello"
+func extractPackageName(atom string) string {
+	// Find category separator
+	slashIdx := strings.Index(atom, "/")
+	if slashIdx == -1 {
+		return atom
+	}
+
+	category := atom[:slashIdx]
+	rest := atom[slashIdx+1:]
+
+	// Find version separator (first dash followed by digit)
+	for i := 0; i < len(rest)-1; i++ {
+		if rest[i] == '-' && i+1 < len(rest) && rest[i+1] >= '0' && rest[i+1] <= '9' {
+			return category + "/" + rest[:i]
+		}
+	}
+
+	// No version found, return as-is
+	return atom
+}
+
+// isSamePackage checks if two atoms refer to the same package (ignoring version).
+//
+// This is used for collision detection - files owned by the same package
+// (different versions in same slot) are not considered collisions.
+func isSamePackage(atom1, atom2 string) bool {
+	return extractPackageName(atom1) == extractPackageName(atom2)
 }
 
 // AddProtectedPath adds a path to the protected list.

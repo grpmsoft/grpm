@@ -368,6 +368,11 @@ func Debug(format string, args ...interface{}) {
 	Default.Debug(format, args...)
 }
 
+// Verbose logs a verbose message.
+func Verbose(format string, args ...interface{}) {
+	Default.Verbose(format, args...)
+}
+
 // SetLevel sets the default logger's level.
 func SetLevel(level Level) {
 	Default.SetLevel(level)

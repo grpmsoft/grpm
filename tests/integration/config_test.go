@@ -145,12 +145,12 @@ func TestConfig_PackageMaskDirectory(t *testing.T) {
 				t.Fatalf("setup failed: %v", err)
 			}
 
-			cfg, err := config.LoadFromPath(confDir)
+			cfg, err := config.LoadConfig(confDir)
 			if err != nil {
-				t.Fatalf("LoadFromPath failed: %v", err)
+				t.Fatalf("LoadConfig failed: %v", err)
 			}
 
-			maskedPkgs := cfg.GetPackageMask()
+			maskedPkgs := cfg.PackageMask
 
 			// Verify all expected masks are present
 			for _, expected := range tc.expectedMask {
@@ -229,9 +229,9 @@ func TestConfig_PackageUseDirectory(t *testing.T) {
 				t.Fatalf("setup failed: %v", err)
 			}
 
-			cfg, err := config.LoadFromPath(confDir)
+			cfg, err := config.LoadConfig(confDir)
 			if err != nil {
-				t.Fatalf("LoadFromPath failed: %v", err)
+				t.Fatalf("LoadConfig failed: %v", err)
 			}
 
 			useFlags := cfg.GetPackageUSE(tc.checkAtom)
@@ -326,9 +326,8 @@ func TestProfile_DirectoryHandling(t *testing.T) {
 			}
 
 			if tc.expectForce {
-				forced := prof.GetForcedUSE()
 				found := false
-				for _, flag := range forced {
+				for _, flag := range prof.USEForce {
 					if flag == tc.checkUseFlag {
 						found = true
 						break
@@ -336,14 +335,13 @@ func TestProfile_DirectoryHandling(t *testing.T) {
 				}
 				if !found {
 					t.Errorf("expected %q in forced USE flags, got %v",
-						tc.checkUseFlag, forced)
+						tc.checkUseFlag, prof.USEForce)
 				}
 			}
 
 			if tc.expectMask {
-				masked := prof.GetMaskedUSE()
 				found := false
-				for _, flag := range masked {
+				for _, flag := range prof.USEMask {
 					if flag == tc.checkUseFlag {
 						found = true
 						break
@@ -351,7 +349,7 @@ func TestProfile_DirectoryHandling(t *testing.T) {
 				}
 				if !found {
 					t.Errorf("expected %q in masked USE flags, got %v",
-						tc.checkUseFlag, masked)
+						tc.checkUseFlag, prof.USEMask)
 				}
 			}
 		})
@@ -401,20 +399,18 @@ func TestProfile_FileSortOrder(t *testing.T) {
 		t.Fatalf("LoadProfile failed: %v", err)
 	}
 
-	forced := prof.GetForcedUSE()
-
 	// All flags should be present
 	expectedFlags := []string{"flag_01", "flag_10", "flag_2", "flag_aa", "flag_z"}
 	for _, expected := range expectedFlags {
 		found := false
-		for _, flag := range forced {
+		for _, flag := range prof.USEForce {
 			if flag == expected {
 				found = true
 				break
 			}
 		}
 		if !found {
-			t.Errorf("expected flag %q not found in %v", expected, forced)
+			t.Errorf("expected flag %q not found in %v", expected, prof.USEForce)
 		}
 	}
 }
@@ -426,28 +422,29 @@ func TestConfig_RealPortageConfig(t *testing.T) {
 		t.Skip("Real /etc/portage not found")
 	}
 
-	cfg, err := config.LoadFromPath(confPath)
+	cfg, err := config.LoadConfig(confPath)
 	if err != nil {
-		t.Fatalf("LoadFromPath failed: %v", err)
+		t.Fatalf("LoadConfig failed: %v", err)
 	}
 
 	// Basic sanity checks
-	t.Logf("CFLAGS: %s", cfg.Get("CFLAGS"))
-	t.Logf("USE: %s", cfg.Get("USE"))
-	t.Logf("MAKEOPTS: %s", cfg.Get("MAKEOPTS"))
+	if cfg.MakeConf != nil {
+		t.Logf("CFLAGS: %s", cfg.MakeConf.CFLAGS)
+		t.Logf("USE: %v", cfg.MakeConf.USE)
+		t.Logf("MAKEOPTS: %s", cfg.MakeConf.MAKEOPTS)
+	}
 
 	// Check package.mask
-	masked := cfg.GetPackageMask()
-	t.Logf("Package masks: %d entries", len(masked))
-	for i, m := range masked {
+	t.Logf("Package masks: %d entries", len(cfg.PackageMask))
+	for i, m := range cfg.PackageMask {
 		if i >= 5 {
-			t.Logf("  ... and %d more", len(masked)-5)
+			t.Logf("  ... and %d more", len(cfg.PackageMask)-5)
 			break
 		}
 		t.Logf("  - %s", m)
 	}
 
-	// Verify PORTDIR or PORTAGE_CONFIGROOT is set or has defaults
+	// Verify PORTDIR is set or has defaults
 	portDir := cfg.GetPortDir()
 	if portDir == "" {
 		portDir = "/var/db/repos/gentoo"

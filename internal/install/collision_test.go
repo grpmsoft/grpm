@@ -358,3 +358,176 @@ func BenchmarkIsProtected(b *testing.B) {
 		_ = detector.isProtected("/usr/bin/test")
 	}
 }
+
+// TestExtractPackageName tests extracting package name from atom.
+func TestExtractPackageName(t *testing.T) {
+	testCases := []struct {
+		atom     string
+		expected string
+	}{
+		{"app-misc/hello-2.12", "app-misc/hello"},
+		{"sys-libs/zlib-1.2.13", "sys-libs/zlib"},
+		{"sys-libs/zlib-1.2.13-r1", "sys-libs/zlib"},
+		{"dev-lang/python-3.11.5", "dev-lang/python"},
+		{"app-misc/hello", "app-misc/hello"}, // no version
+		{"x11-libs/gtk+-3.24.38", "x11-libs/gtk+"},
+		{"www-client/firefox-115.0.3", "www-client/firefox"},
+		{"media-libs/libpng-1.6.40", "media-libs/libpng"},
+		{"dev-util/cmake-3.27.4", "dev-util/cmake"},
+		{"sys-apps/portage-2.3.99", "sys-apps/portage"},
+		// Edge cases
+		{"zlib-1.2.13", "zlib-1.2.13"}, // no category - returns as-is
+		{"app-misc/hello-world-1.0", "app-misc/hello-world"},
+		{"dev-libs/openssl-3.0.10_beta1", "dev-libs/openssl"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.atom, func(t *testing.T) {
+			result := extractPackageName(tc.atom)
+			if result != tc.expected {
+				t.Errorf("extractPackageName(%q) = %q, want %q", tc.atom, result, tc.expected)
+			}
+		})
+	}
+}
+
+// TestIsSamePackage tests same package comparison.
+func TestIsSamePackage(t *testing.T) {
+	testCases := []struct {
+		atom1    string
+		atom2    string
+		expected bool
+	}{
+		// Same package, different versions
+		{"app-misc/hello-2.12", "app-misc/hello-2.10", true},
+		{"sys-libs/zlib-1.2.13", "sys-libs/zlib-1.2.11-r1", true},
+		{"dev-lang/python-3.11.5", "dev-lang/python-3.10.12", true},
+
+		// Same package, one without version
+		{"app-misc/hello-2.12", "app-misc/hello", true},
+		{"sys-libs/zlib", "sys-libs/zlib-1.2.13", true},
+
+		// Different packages
+		{"app-misc/hello-2.12", "app-misc/world-1.0", false},
+		{"sys-libs/zlib-1.2.13", "sys-libs/glibc-2.38", false},
+		{"dev-lang/python-3.11.5", "dev-lang/ruby-3.2.2", false},
+
+		// Different categories
+		{"app-misc/hello-2.12", "sys-apps/hello-1.0", false},
+
+		// Edge cases
+		{"app-misc/hello", "app-misc/hello", true},
+		// Note: packages without category are not valid in real scenarios,
+		// but extractPackageName handles them by returning as-is
+	}
+
+	for _, tc := range testCases {
+		name := tc.atom1 + "_vs_" + tc.atom2
+		t.Run(name, func(t *testing.T) {
+			result := isSamePackage(tc.atom1, tc.atom2)
+			if result != tc.expected {
+				t.Errorf("isSamePackage(%q, %q) = %v, want %v",
+					tc.atom1, tc.atom2, result, tc.expected)
+			}
+		})
+	}
+}
+
+// TestDetectSamePackageDifferentVersions tests that files owned by same
+// package but different version don't cause collisions (protect-owned behavior).
+func TestDetectSamePackageDifferentVersions(t *testing.T) {
+	tmpDir := t.TempDir()
+	root := tmpDir
+
+	db := state.NewPackageDatabase(root)
+
+	// Install "hello-2.10" - use absolute path for consistency
+	testFile := filepath.Join(root, "usr/bin/hello")
+	if err := os.MkdirAll(filepath.Dir(testFile), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(testFile, []byte("hello 2.10"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Store file with same absolute path as will be used in detection
+	oldPkg := &state.InstalledPackage{
+		Package: &pkg.Package{
+			Name:    "app-misc/hello",
+			Version: "2.10",
+		},
+		Files: []state.InstalledFile{
+			{Path: testFile, Type: state.FileTypeRegular}, // Use same path!
+		},
+	}
+	if err := db.Add(oldPkg); err != nil {
+		t.Fatal(err)
+	}
+
+	// Now try to install "hello-2.12" - should NOT have collision
+	detector := NewCollisionDetector(db)
+	filesToInstall := []string{testFile}
+
+	// Use different version of same package
+	collisions, err := detector.Detect(filesToInstall, "app-misc/hello-2.12")
+	if err != nil {
+		t.Fatalf("Detect failed: %v", err)
+	}
+
+	// Should have NO collisions (protect-owned behavior)
+	if len(collisions) > 0 {
+		t.Errorf("Expected 0 collisions for same package upgrade, got %d: %v",
+			len(collisions), collisions)
+	}
+}
+
+// TestDetectDifferentPackageCollision tests that files owned by different
+// package DO cause collisions.
+func TestDetectDifferentPackageCollision(t *testing.T) {
+	tmpDir := t.TempDir()
+	root := tmpDir
+
+	db := state.NewPackageDatabase(root)
+
+	// Install "hello-2.10" - use absolute path for consistency
+	testFile := filepath.Join(root, "usr/bin/hello")
+	if err := os.MkdirAll(filepath.Dir(testFile), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(testFile, []byte("hello 2.10"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Store file with same absolute path as will be used in detection
+	oldPkg := &state.InstalledPackage{
+		Package: &pkg.Package{
+			Name:    "app-misc/hello",
+			Version: "2.10",
+		},
+		Files: []state.InstalledFile{
+			{Path: testFile, Type: state.FileTypeRegular}, // Use same path!
+		},
+	}
+	if err := db.Add(oldPkg); err != nil {
+		t.Fatal(err)
+	}
+
+	// Now try to install different package that wants same file
+	detector := NewCollisionDetector(db)
+	filesToInstall := []string{testFile}
+
+	// Use completely different package
+	collisions, err := detector.Detect(filesToInstall, "app-misc/world-1.0")
+	if err != nil {
+		t.Fatalf("Detect failed: %v", err)
+	}
+
+	// Should have collision
+	if len(collisions) != 1 {
+		t.Errorf("Expected 1 collision for different package, got %d", len(collisions))
+	}
+
+	if len(collisions) > 0 && collisions[0].Type != CollisionOwnedByOther {
+		t.Errorf("Expected CollisionOwnedByOther, got %v", collisions[0].Type)
+	}
+}
