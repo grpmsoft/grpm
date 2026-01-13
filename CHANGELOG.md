@@ -77,6 +77,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - `internal/solver/resolver.go` — Uses `logging.Info()` for resolution output
+- `internal/cli/app.go` — Global logging level from `-v`/`-vv`/`-vvv` flags
 - `internal/cli/emerge.go` — Full migration to unified logging
 - `internal/cli/install_real.go` — Full migration to unified logging
 - `internal/cli/analyze.go` — Full migration to unified logging
@@ -84,10 +85,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `internal/cli/commands.go` — Full migration to unified logging
 - `internal/ebuild/executor.go` — Debug output via `logging.Debug()`
 - `internal/ebuild/phases_impl.go` — Debug output via `logging.Debug()`
+- `internal/repo/portage.go` — Debug output via `logging.Debug()`
 
 ### Technical Details
+- Tested on real Gentoo WSL2: resolve, update, emerge, fetch, analyze, tools
 - Zero issues from `golangci-lint` after refactoring
-- All tests pass with race detector enabled
+- All tests pass
 - Output matches Portage's emerge format for familiarity
 
 ---
