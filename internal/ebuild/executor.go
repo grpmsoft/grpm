@@ -14,13 +14,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 
 	"github.com/grpmsoft/grpm/internal/eclass"
 	"github.com/grpmsoft/grpm/internal/fetch"
+	"github.com/grpmsoft/grpm/internal/logging"
 	"github.com/grpmsoft/grpm/internal/pkg"
 	"github.com/grpmsoft/grpm/internal/sandbox"
 )
@@ -216,7 +216,7 @@ func NewExecutor(pkg *pkg.Package, opts ExecutorOptions) (*Executor, error) {
 		cache, err := eclass.NewCacheWithLocations(locations)
 		if err != nil {
 			// Non-fatal: fall back to Go implementations
-			log.Printf("[ebuild] warning: failed to create eclass cache: %v (using Go fallbacks)", err)
+			logging.Debug("[ebuild] warning: failed to create eclass cache: %v (using Go fallbacks)", err)
 		} else {
 			executor.eclassCache = cache
 		}
@@ -251,14 +251,14 @@ func (e *Executor) ExecutePhases(phases []Phase) ([]PhaseResult, error) {
 	if e.Sandbox != nil {
 		defer func() {
 			if err := e.Sandbox.Close(); err != nil {
-				log.Printf("[sandbox] cleanup error: %v", err)
+				logging.Debug("[sandbox] cleanup error: %v", err)
 			}
 			// Report any violations
 			violations := e.Sandbox.Violations()
 			if len(violations) > 0 {
-				log.Printf("[sandbox] %d violation(s) detected:", len(violations))
+				logging.Debug("[sandbox] %d violation(s) detected:", len(violations))
 				for _, v := range violations {
-					log.Printf("[sandbox]   %s", v.String())
+					logging.Debug("[sandbox]   %s", v.String())
 				}
 			}
 		}()
@@ -346,7 +346,7 @@ func (e *Executor) fetchDistfiles(ctx context.Context) error {
 	distfiles, err := e.getDistfilesWithURIs(manifest)
 	if err != nil {
 		// Fallback to manifest-only distfiles if SRC_URI parsing fails
-		log.Printf("[ebuild] Warning: SRC_URI parsing failed: %v, using manifest-only", err)
+		logging.Debug("[ebuild] Warning: SRC_URI parsing failed: %v, using manifest-only", err)
 		distfiles = manifest.GetDistfiles()
 	}
 
@@ -499,7 +499,8 @@ func extractEbuildVariable(content, varName string) string {
 	}
 
 	for _, pattern := range patterns {
-		idx := findString(content, pattern)
+		// Search for pattern at word boundary (start of line or after whitespace)
+		idx := findVariableAssignment(content, pattern)
 		if idx == -1 {
 			continue
 		}
@@ -627,11 +628,22 @@ func extractFilename(url string) string {
 	return url
 }
 
-// findString finds substring in string, returns -1 if not found.
-func findString(s, substr string) int {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return i
+// findVariableAssignment finds a variable assignment pattern at word boundary.
+// Returns -1 if not found.
+// A valid word boundary is: start of string, newline, or tab/space.
+// This prevents matching "S=" inside "KEYWORDS=" for example.
+func findVariableAssignment(s, pattern string) int {
+	for i := 0; i <= len(s)-len(pattern); i++ {
+		if s[i:i+len(pattern)] == pattern {
+			// Check if at word boundary
+			if i == 0 {
+				return i // Start of string
+			}
+			prevChar := s[i-1]
+			if prevChar == '\n' || prevChar == '\t' || prevChar == ' ' {
+				return i // After whitespace/newline
+			}
+			// Not at word boundary, continue searching
 		}
 	}
 	return -1
@@ -757,7 +769,7 @@ func (e *Executor) ParseEbuild() error {
 	if _, err := os.Stat(e.EbuildPath); err != nil {
 		if os.IsNotExist(err) {
 			// No ebuild file - this is OK, use defaults
-			log.Printf("[ebuild] no ebuild file found at %s, using defaults", e.EbuildPath)
+			logging.Debug("[ebuild] no ebuild file found at %s, using defaults", e.EbuildPath)
 			return nil
 		}
 		return fmt.Errorf("checking ebuild file: %w", err)
@@ -792,26 +804,26 @@ func (e *Executor) ParseEbuild() error {
 	}
 	e.EAPIFeatures = eapiFeatures
 
-	log.Printf("[ebuild] EAPI %s: bash %s, features: BDEPEND=%v, IDEPEND=%v, SlotOperators=%v",
+	logging.Debug("[ebuild] EAPI %s: bash %s, features: BDEPEND=%v, IDEPEND=%v, SlotOperators=%v",
 		eapiFeatures.Version, eapiFeatures.BashVersion,
 		eapiFeatures.BDEPEND, eapiFeatures.IDEPEND, eapiFeatures.SlotOperators)
 
 	// Log discovered phase functions
 	if len(parsed.DefinedFunctions) > 0 {
-		log.Printf("[ebuild] discovered %d functions in %s", len(parsed.DefinedFunctions), filepath.Base(e.EbuildPath))
+		logging.Debug("[ebuild] discovered %d functions in %s", len(parsed.DefinedFunctions), filepath.Base(e.EbuildPath))
 		for name := range parsed.DefinedFunctions {
-			log.Printf("[ebuild]   - %s", name)
+			logging.Debug("[ebuild]   - %s", name)
 		}
 	}
 
 	// Log inherited eclasses
 	if len(parsed.InheritedEclasses) > 0 {
-		log.Printf("[ebuild] inherits: %v", parsed.InheritedEclasses)
+		logging.Debug("[ebuild] inherits: %v", parsed.InheritedEclasses)
 	}
 
 	// Parse and evaluate S variable if defined in ebuild
 	if err := e.parseSVariable(); err != nil {
-		log.Printf("[ebuild] warning: failed to parse S variable: %v", err)
+		logging.Debug("[ebuild] warning: failed to parse S variable: %v", err)
 	}
 
 	return nil
@@ -848,7 +860,7 @@ func (e *Executor) parseSVariable() error {
 
 	// Update S if different from default
 	if sValue != e.Env.S {
-		log.Printf("[ebuild] custom S detected: %s (default was: %s)", sValue, e.Env.S)
+		logging.Debug("[ebuild] custom S detected: %s (default was: %s)", sValue, e.Env.S)
 		e.Env.S = sValue
 	}
 
@@ -991,7 +1003,7 @@ func (e *Executor) RunPhaseFunction(phase Phase) (string, error) {
 
 	// Set EBUILD_PHASE environment variable for subprocesses
 	if err := os.Setenv("EBUILD_PHASE", string(phase)); err != nil {
-		log.Printf("[ebuild] warning: failed to set EBUILD_PHASE: %v", err)
+		logging.Debug("[ebuild] warning: failed to set EBUILD_PHASE: %v", err)
 	}
 	defer func() { _ = os.Unsetenv("EBUILD_PHASE") }()
 
@@ -1044,9 +1056,9 @@ func (e *Executor) RunPhaseFunction(phase Phase) (string, error) {
 		// Eclass exported this phase, call eclass's prefixed version
 		// e.g., cmake_src_configure instead of src_configure
 		targetFunc = fmt.Sprintf("%s_%s", eclassName, funcName)
-		log.Printf("[ebuild] calling eclass function: %s (from %s.eclass)", targetFunc, eclassName)
+		logging.Debug("[ebuild] calling eclass function: %s (from %s.eclass)", targetFunc, eclassName)
 	} else {
-		log.Printf("[ebuild] calling ebuild function: %s", funcName)
+		logging.Debug("[ebuild] calling ebuild function: %s", funcName)
 	}
 
 	// Call the phase function
@@ -1076,10 +1088,10 @@ func (e *Executor) initInterpreter() error {
 		loader, err := SetupDynamicEclassLoading(e.interpreter, e.eclassCache)
 		if err != nil {
 			// Non-fatal: fall back to Go implementations
-			log.Printf("[ebuild] warning: failed to setup dynamic eclass loading: %v", err)
+			logging.Debug("[ebuild] warning: failed to setup dynamic eclass loading: %v", err)
 		} else {
 			e.dynamicLoader = loader
-			log.Printf("[ebuild] dynamic eclass loading enabled (%d locations)",
+			logging.Debug("[ebuild] dynamic eclass loading enabled (%d locations)",
 				len(e.eclassCache.Locations()))
 		}
 	}
@@ -1103,7 +1115,7 @@ func (e *Executor) SetCurrentPhase(phase Phase) {
 
 	// Also set in OS environment for subprocesses
 	if err := os.Setenv("EBUILD_PHASE", string(phase)); err != nil {
-		log.Printf("[ebuild] warning: failed to set EBUILD_PHASE: %v", err)
+		logging.Debug("[ebuild] warning: failed to set EBUILD_PHASE: %v", err)
 	}
 }
 

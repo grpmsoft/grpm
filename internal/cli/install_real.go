@@ -2,13 +2,13 @@ package cli
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/grpmsoft/grpm/internal/binpkg"
 	"github.com/grpmsoft/grpm/internal/install"
+	"github.com/grpmsoft/grpm/internal/logging"
 	"github.com/grpmsoft/grpm/internal/pkg"
 	"github.com/grpmsoft/grpm/internal/state"
 )
@@ -23,7 +23,7 @@ import (
 //  5. Update database
 func (a *App) installPackageReal(p *pkg.Package, binpkgPath string) error {
 	if a.verbose {
-		log.Printf("Installing package: %s-%s", p.Name, p.Version)
+		logging.Action("Installing package: %s-%s", p.Name, p.Version)
 	}
 
 	// Create package database
@@ -40,7 +40,7 @@ func (a *App) installPackageReal(p *pkg.Package, binpkgPath string) error {
 	defer func() {
 		// Cleanup workdir after installation
 		if err := os.RemoveAll(workDir); err != nil {
-			log.Printf("Warning: failed to clean up work directory: %v", err)
+			logging.Warn("failed to clean up work directory: %v", err)
 		}
 	}()
 
@@ -49,7 +49,7 @@ func (a *App) installPackageReal(p *pkg.Package, binpkgPath string) error {
 	installer.Verbose = a.verbose
 	installer.OnProgress = func(status string) {
 		if a.verbose {
-			log.Printf("[installer] %s", status)
+			logging.Verbose("[installer] %s", status)
 		}
 	}
 
@@ -75,12 +75,12 @@ func (a *App) installPackageReal(p *pkg.Package, binpkgPath string) error {
 
 	vardbWriter := state.NewVarDBWriter("/var/db/pkg")
 	if err := vardbWriter.Write(installedPkg); err != nil {
-		log.Printf("Warning: failed to write VarDB entry: %v", err)
+		logging.Warn("failed to write VarDB entry: %v", err)
 		// Don't fail installation if VarDB write fails
 	}
 
 	if a.verbose {
-		log.Printf("Successfully installed %s-%s", p.Name, p.Version)
+		logging.Action("Successfully installed %s-%s", p.Name, p.Version)
 	}
 
 	return nil
@@ -89,7 +89,7 @@ func (a *App) installPackageReal(p *pkg.Package, binpkgPath string) error {
 // uninstallPackageReal performs actual package removal using Uninstaller.
 func (a *App) uninstallPackageReal(atom string, force bool) error {
 	if a.verbose {
-		log.Printf("Uninstalling package: %s", atom)
+		logging.Action("Uninstalling package: %s", atom)
 	}
 
 	// Get package database
@@ -108,7 +108,7 @@ func (a *App) uninstallPackageReal(atom string, force bool) error {
 	installer.Verbose = a.verbose
 	installer.OnProgress = func(status string) {
 		if a.verbose {
-			log.Printf("[uninstaller] %s", status)
+			logging.Verbose("[uninstaller] %s", status)
 		}
 	}
 
@@ -130,13 +130,13 @@ func (a *App) uninstallPackageReal(atom string, force bool) error {
 		pkgVerName := parts[1] // e.g., "hello-2.10"
 		vardbPath := filepath.Join("/var/db/pkg", category, pkgVerName)
 		if err := os.RemoveAll(vardbPath); err != nil {
-			log.Printf("Warning: failed to remove VarDB entry: %v", err)
+			logging.Warn("failed to remove VarDB entry: %v", err)
 			// Don't fail uninstallation if VarDB removal fails
 		}
 	}
 
 	if a.verbose {
-		log.Printf("Successfully uninstalled %s", atom)
+		logging.Action("Successfully uninstalled %s", atom)
 	}
 
 	return nil
@@ -165,7 +165,7 @@ func (a *App) prepareWorkDir(p *pkg.Package, binpkgPath string) (string, error) 
 	if binpkgPath != "" {
 		// Extract binary package
 		if a.verbose {
-			log.Printf("Extracting binary package: %s", binpkgPath)
+			logging.Debug("Extracting binary package: %s", binpkgPath)
 		}
 
 		if err := binpkg.ExtractGPKG(binpkgPath, imageDir); err != nil {
@@ -175,7 +175,7 @@ func (a *App) prepareWorkDir(p *pkg.Package, binpkgPath string) (string, error) 
 	} else {
 		// Create mock files for testing
 		if a.verbose {
-			log.Printf("Creating mock installation files")
+			logging.Debug("Creating mock installation files")
 		}
 
 		if err := a.createMockFiles(imageDir, p); err != nil {
@@ -224,7 +224,7 @@ func (a *App) createMockFiles(imageDir string, p *pkg.Package) error {
 	}
 
 	if a.verbose {
-		log.Printf("Created mock files: %s, %s", readmePath, binPath)
+		logging.Debug("Created mock files: %s, %s", readmePath, binPath)
 	}
 
 	return nil
@@ -247,12 +247,12 @@ func (a *App) getOrCreatePackageDB() (*state.PackageDatabase, error) {
 	// Load existing packages from VarDB
 	loader := state.NewVarDBLoader(vardbPath)
 	if err := loader.LoadInto(db); err != nil && !os.IsNotExist(err) {
-		log.Printf("Warning: failed to load existing packages: %v", err)
+		logging.Warn("failed to load existing packages: %v", err)
 		// Continue with empty database
 	}
 
 	if a.verbose {
-		log.Printf("Package database initialized with %d packages", db.Count())
+		logging.Debug("Package database initialized with %d packages", db.Count())
 	}
 
 	return db, nil
@@ -271,7 +271,7 @@ func (a *App) buildBinaryPackage(installedPkg *state.InstalledPackage, outputDir
 	defer func() {
 		// Cleanup work directory after building
 		if err := os.RemoveAll(workDir); err != nil && a.verbose {
-			log.Printf("Warning: failed to clean up work directory: %v", err)
+			logging.Warn("failed to clean up work directory: %v", err)
 		}
 	}()
 

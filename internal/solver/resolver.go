@@ -2,8 +2,8 @@ package solver
 
 import (
 	"fmt"
-	"log"
 
+	"github.com/grpmsoft/grpm/internal/logging"
 	"github.com/grpmsoft/grpm/internal/pkg"
 	"github.com/grpmsoft/grpm/internal/repo"
 )
@@ -46,24 +46,24 @@ func (r *PortageResolver) collectDependencies(p *pkg.Package, allPackages map[st
 	for _, dep := range requiredDeps {
 		depPkg, err := r.repo.LoadPackage(dep.Name)
 		if err != nil {
-			log.Printf("Warning: dependency %s for %s not found: %v", dep.Name, p.Name, err)
+			logging.Debug("Warning: dependency %s for %s not found: %v", dep.Name, p.Name, err)
 			continue
 		}
 
 		// Recursively collect dependencies
 		if err := r.collectDependencies(depPkg, allPackages); err != nil {
-			log.Printf("Warning: %v", err)
+			logging.Debug("Warning: %v", err)
 		}
 	}
 
 	// For OR-groups: Register all alternatives but DON'T collect their dependencies yet
 	// The SAT solver will choose ONE alternative from each group
 	for groupID, alternatives := range orGroups {
-		log.Printf("OR-group %d for %s: %d alternatives", groupID, p.Name, len(alternatives))
+		logging.Debug("OR-group %d for %s: %d alternatives", groupID, p.Name, len(alternatives))
 		for _, alt := range alternatives {
 			// Just ensure the alternative package exists in the repository
 			if _, err := r.repo.LoadPackage(alt.Name); err != nil {
-				log.Printf("Warning: OR-alternative %s not found: %v", alt.Name, err)
+				logging.Debug("Warning: OR-alternative %s not found: %v", alt.Name, err)
 			}
 		}
 	}
@@ -79,14 +79,14 @@ func (r *PortageResolver) addPackageConstraints(adapter *GophersatAdapter, p *pk
 		if p.Version != "" {
 			versionStr = p.Version
 		}
-		log.Printf("Adding constraint for required package: %s = %s", p.Name, versionStr)
+		logging.Debug("Adding constraint for required package: %s = %s", p.Name, versionStr)
 
 		if err := adapter.AddConstraint(pkg.Constraint{
 			Type:    pkg.ConstraintTypeVersion,
 			Name:    p.Name,
 			Version: pkg.NewVersionConstraint(pkg.OpEqual, p.Version),
 		}); err != nil {
-			log.Printf("Warning: failed to add package constraint: %v", err)
+			logging.Debug("Warning: failed to add package constraint: %v", err)
 		}
 	}
 
@@ -99,18 +99,18 @@ func (r *PortageResolver) addPackageConstraints(adapter *GophersatAdapter, p *pk
 		if dep.Version != nil {
 			versionStr = dep.Version.String()
 		}
-		log.Printf("Adding required dependency: %s %s", dep.Name, versionStr)
+		logging.Debug("Adding required dependency: %s %s", dep.Name, versionStr)
 
 		if err := adapter.AddConstraint(dep); err != nil {
-			log.Printf("Warning: failed to add constraint: %v", err)
+			logging.Debug("Warning: failed to add constraint: %v", err)
 		}
 	}
 
 	// Add OR-group constraints (OR logic)
 	for groupID, alternatives := range orGroups {
-		log.Printf("Adding OR-group %d with %d alternatives", groupID, len(alternatives))
+		logging.Debug("Adding OR-group %d with %d alternatives", groupID, len(alternatives))
 		if err := adapter.AddOrGroupConstraint(alternatives); err != nil {
-			log.Printf("Warning: failed to add OR-group constraint: %v", err)
+			logging.Debug("Warning: failed to add OR-group constraint: %v", err)
 		}
 	}
 }
@@ -121,7 +121,7 @@ func (r *PortageResolver) buildResultFromSolution(solution map[string]string) (m
 	for name := range solution {
 		p, err := r.repo.LoadPackage(name)
 		if err != nil {
-			log.Printf("Warning: package %s not found: %v", name, err)
+			logging.Debug("Warning: package %s not found: %v", name, err)
 			continue
 		}
 		result[name] = p
@@ -140,15 +140,15 @@ func (r *PortageResolver) Resolve(packages []string) (map[string]*pkg.Package, e
 			return nil, fmt.Errorf("failed to load package %s: %w", pkgName, err)
 		}
 
-		log.Printf("Resolving package: %s-%s with %d dependencies",
+		logging.Debug("Resolving package: %s-%s with %d dependencies",
 			p.Name, p.Version, len(p.Deps))
 
 		if err := r.collectDependencies(p, allPackages); err != nil {
-			log.Printf("Warning: %v", err)
+			logging.Debug("Warning: %v", err)
 		}
 	}
 
-	log.Printf("Total packages in dependency graph: %d", len(allPackages))
+	logging.Debug("Total packages in dependency graph: %d", len(allPackages))
 
 	// First, add ALL packages to the solver
 	for _, p := range allPackages {
@@ -160,7 +160,7 @@ func (r *PortageResolver) Resolve(packages []string) (map[string]*pkg.Package, e
 		r.addPackageConstraints(adapter, p, packages)
 	}
 
-	log.Printf("Total clauses in SAT problem: %d", len(adapter.clauses))
+	logging.Debug("Total clauses in SAT problem: %d", len(adapter.clauses))
 
 	// Solve
 	status, solution, err := adapter.Solve()
@@ -169,9 +169,9 @@ func (r *PortageResolver) Resolve(packages []string) (map[string]*pkg.Package, e
 	}
 
 	if status != pkg.StatusSat {
-		log.Printf("UNSAT core analysis:")
+		logging.Debug("UNSAT core analysis:")
 		for i, clause := range adapter.clauses {
-			log.Printf("Clause %d: %v", i, clause)
+			logging.Debug("Clause %d: %v", i, clause)
 		}
 		return nil, fmt.Errorf("no solution found")
 	}
@@ -183,9 +183,9 @@ func (r *PortageResolver) Resolve(packages []string) (map[string]*pkg.Package, e
 	}
 
 	// Output formatted package list
-	log.Println("\nResolved packages:")
+	logging.Info("Resolved packages:")
 	for name, p := range result {
-		log.Printf("- %s-%s [slot:%s]", name, p.Version, p.Slot.Name)
+		logging.Debug("- %s-%s [slot:%s]", name, p.Version, p.Slot.Name)
 	}
 
 	return result, nil

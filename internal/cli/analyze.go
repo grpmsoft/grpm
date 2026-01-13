@@ -5,12 +5,12 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/grpmsoft/grpm/internal/analyze"
+	"github.com/grpmsoft/grpm/internal/logging"
 )
 
 // runAnalyze handles the 'analyze' command - coverage analysis of Portage repository.
@@ -77,9 +77,9 @@ func (a *App) runAnalyze(args []string) error {
 	}
 
 	// Run analysis
-	log.Printf("Analyzing repository: %s", *repoPath)
+	logging.Info("Analyzing repository: %s", *repoPath)
 	if *category != "" {
-		log.Printf("Filtering to category: %s", *category)
+		logging.Info("Filtering to category: %s", *category)
 	}
 
 	result, err := analyzer.Analyze(ctx)
@@ -94,7 +94,7 @@ func (a *App) runAnalyze(args []string) error {
 	}
 
 	// Log summary
-	log.Printf("Analysis complete: %s", analyze.FormatSummary(result))
+	logging.Info("Analysis complete: %s", analyze.FormatSummary(result))
 
 	return nil
 }

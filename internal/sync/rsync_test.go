@@ -168,8 +168,8 @@ func TestDefaultStrategy(t *testing.T) {
 	if s.MaxMirrors != 5 {
 		t.Errorf("expected MaxMirrors=5, got %d", s.MaxMirrors)
 	}
-	if s.ConnectionTimeout != 30*time.Second {
-		t.Errorf("expected ConnectionTimeout=30s, got %v", s.ConnectionTimeout)
+	if s.ConnectionTimeout != 10*time.Minute {
+		t.Errorf("expected ConnectionTimeout=10m, got %v", s.ConnectionTimeout)
 	}
 }
 

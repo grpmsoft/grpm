@@ -7,7 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Planned
+- Performance optimization for large dependency graphs
+- Web UI for daemon management
+- Native GUI application ([gogpu/ui](https://github.com/gogpu/ui))
+
+---
+
+## [0.7.5] - 2026-01-13
+
+### Build Process & Output Quality Release
+
+> **Professional Output and Reliable Builds**
+>
+> This release focuses on two critical areas: fixing source build reliability
+> and improving output quality to match Portage's professional appearance.
+
+### Added
+
+#### Unified Logging Infrastructure
+- **Complete codebase logging refactor** — All output now uses `internal/logging/` package
+  - Solver, CLI, and ebuild modules migrated from `log.Printf` to unified logging
+  - Debug output suppressed by default (only shown with `-v` or `--verbose`)
+  - Consistent Portage-style formatting across all commands
+- **New package-level convenience functions**:
+  - `logging.Verbose()` — Verbose-level messages
+  - `logging.Debug()` — Debug-level messages (hidden by default)
+  - `logging.Action()`, `logging.Info()`, `logging.Warn()`, `logging.Error()`
+
 ### Fixed
+
+#### Source Build Reliability
 - **Ebuild S variable parsing** — Custom source directories are now properly handled
   - Added `ParseSVariable()` with bash parameter expansion support
   - Supports `${var/pattern/replacement}`, `${var^}`, `${var%pattern}`, etc.
@@ -25,6 +55,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added `findInstalledVersion()` to detect existing installations
   - When `--replace`/`-R` used: old package is unmerged before new merge
   - Implements Portage's "protect-owned" behavior
+- **Work directory cleanup timing** — Fixed premature cleanup of build directory
+  - Build directory now preserved until after installation completes
+  - Cleanup happens in `installFromImageDir` after successful merge
+  - Previously cleanup occurred immediately after `ExecutePhases`, before install
+
+#### CLI Improvements
 - **CLI --help exit code** — All CLI commands now return exit code 0 when using `--help`
   - Previously returned exit code 1 with "Error: flag: help requested"
   - Fixed in 13 places across 6 files (emerge, tools, fetch, analyze, commands, app)
@@ -38,15 +74,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added `ParseEbuild()` call in emerge command to populate `ParsedEbuild`
   - Enables proper dispatch to custom `src_configure`, `src_install`, etc. functions
   - Previously always used default phase implementations
-- **Work directory cleanup timing** — Fixed premature cleanup of build directory
-  - Build directory now preserved until after installation completes
-  - Cleanup happens in `installFromImageDir` after successful merge
-  - Previously cleanup occurred immediately after `ExecutePhases`, before install
 
-### Planned
-- Performance optimization for large dependency graphs
-- Web UI for daemon management
-- Native GUI application ([gogpu/ui](https://github.com/gogpu/ui))
+### Changed
+- `internal/solver/resolver.go` — Uses `logging.Info()` for resolution output
+- `internal/cli/emerge.go` — Full migration to unified logging
+- `internal/cli/install_real.go` — Full migration to unified logging
+- `internal/cli/analyze.go` — Full migration to unified logging
+- `internal/cli/fetch.go` — Full migration to unified logging
+- `internal/cli/commands.go` — Full migration to unified logging
+- `internal/ebuild/executor.go` — Debug output via `logging.Debug()`
+- `internal/ebuild/phases_impl.go` — Debug output via `logging.Debug()`
+
+### Technical Details
+- Zero issues from `golangci-lint` after refactoring
+- All tests pass with race detector enabled
+- Output matches Portage's emerge format for familiarity
 
 ---
 
@@ -815,7 +857,9 @@ GRPM (Go Resource Package Manager) is a modern reimplementation of Gentoo's Port
 - **Issues**: https://github.com/grpmsoft/grpm/issues
 - **License**: [Apache-2.0](LICENSE)
 
-[Unreleased]: https://github.com/grpmsoft/grpm/compare/v0.7.3...HEAD
+[Unreleased]: https://github.com/grpmsoft/grpm/compare/v0.7.5...HEAD
+[0.7.5]: https://github.com/grpmsoft/grpm/compare/v0.7.4...v0.7.5
+[0.7.4]: https://github.com/grpmsoft/grpm/compare/v0.7.3...v0.7.4
 [0.7.3]: https://github.com/grpmsoft/grpm/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/grpmsoft/grpm/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/grpmsoft/grpm/compare/v0.7.0...v0.7.1

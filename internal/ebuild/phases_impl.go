@@ -6,13 +6,13 @@ import (
 	"compress/gzip"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/grpmsoft/grpm/internal/logging"
 	"github.com/ulikunitz/xz"
 )
 
@@ -103,16 +103,16 @@ func (e *Executor) ExecutePhaseReal(phase Phase) PhaseResult {
 //   - Otherwise -> call the default implementation
 func (e *Executor) dispatchPhase(phase Phase, defaultImpl func() (string, error)) (string, error) {
 	funcName := phaseFunctionName(phase)
-	log.Printf("[ebuild] dispatching phase %s (function: %s)", phase, funcName)
+	logging.Debug("[ebuild] dispatching phase %s (function: %s)", phase, funcName)
 
 	// Check if custom phase function exists
 	if e.HasPhaseFunction(phase) {
-		log.Printf("[ebuild] found custom %s, executing ebuild function", funcName)
+		logging.Debug("[ebuild] found custom %s, executing ebuild function", funcName)
 		return e.RunPhaseFunction(phase)
 	}
 
 	// No custom function, use default implementation
-	log.Printf("[ebuild] no custom %s found, using default", funcName)
+	logging.Debug("[ebuild] no custom %s found, using default", funcName)
 	return defaultImpl()
 }
 
@@ -145,12 +145,12 @@ func (e *Executor) phaseUnpack() (string, error) {
 
 	if len(matches) == 0 {
 		// No tarball found - this might be a binary package or ebuild-only
-		log.Printf("[ebuild] No source tarball found for %s, skipping unpack", tarballPattern)
+		logging.Debug("[ebuild] No source tarball found for %s, skipping unpack", tarballPattern)
 		return "No source tarball found (ebuild-only package or binary)", nil
 	}
 
 	tarball := matches[0]
-	log.Printf("[ebuild] Extracting %s to %s", filepath.Base(tarball), e.Env.WORKDIR)
+	logging.Debug("[ebuild] Extracting %s to %s", filepath.Base(tarball), e.Env.WORKDIR)
 
 	if err := extractTarball(tarball, e.Env.WORKDIR); err != nil {
 		return "", fmt.Errorf("failed to extract tarball: %w", err)
@@ -166,7 +166,7 @@ func (e *Executor) phasePrepare() (string, error) {
 
 	// For now, just check if source directory exists
 	if _, err := os.Stat(e.Env.S); os.IsNotExist(err) {
-		log.Printf("[ebuild] Source directory %s does not exist, skipping prepare", e.Env.S)
+		logging.Debug("[ebuild] Source directory %s does not exist, skipping prepare", e.Env.S)
 		return "Source directory not found (skipping)", nil
 	}
 
@@ -179,7 +179,7 @@ func (e *Executor) phaseConfigure() (string, error) {
 
 	// Check if configure script exists
 	if _, err := os.Stat(configurePath); os.IsNotExist(err) {
-		log.Printf("[ebuild] No configure script found, skipping configure phase")
+		logging.Debug("[ebuild] No configure script found, skipping configure phase")
 		return "No configure script (skipping)", nil
 	}
 
@@ -193,7 +193,7 @@ func (e *Executor) phaseConfigure() (string, error) {
 		"--infodir=/usr/share/info",
 	}
 
-	log.Printf("[ebuild] Running: ./configure %s", strings.Join(args, " "))
+	logging.Debug("[ebuild] Running: ./configure %s", strings.Join(args, " "))
 
 	cmd := exec.Command("./configure", args...)
 	cmd.Dir = e.Env.S
@@ -212,14 +212,14 @@ func (e *Executor) phaseCompile() (string, error) {
 	// Check if Makefile exists
 	makefilePath := filepath.Join(e.Env.S, "Makefile")
 	if _, err := os.Stat(makefilePath); os.IsNotExist(err) {
-		log.Printf("[ebuild] No Makefile found, skipping compile phase")
+		logging.Debug("[ebuild] No Makefile found, skipping compile phase")
 		return "No Makefile (skipping)", nil
 	}
 
 	// Parse MAKEOPTS (e.g., "-j4" -> []string{"-j4"})
 	makeArgs := strings.Fields(e.Env.MAKEOPTS)
 
-	log.Printf("[ebuild] Running: make %s", strings.Join(makeArgs, " "))
+	logging.Debug("[ebuild] Running: make %s", strings.Join(makeArgs, " "))
 
 	cmd := exec.Command("make", makeArgs...)
 	cmd.Dir = e.Env.S
@@ -249,7 +249,7 @@ func (e *Executor) phaseTest() (string, error) {
 		}
 
 		// Try next target
-		log.Printf("[ebuild] Test target '%s' not available, trying next", target)
+		logging.Debug("[ebuild] Test target '%s' not available, trying next", target)
 	}
 
 	return "No test target found (skipping)", nil
@@ -269,7 +269,7 @@ func (e *Executor) phaseInstall() (string, error) {
 		fmt.Sprintf("DESTDIR=%s", e.Env.D),
 	}
 
-	log.Printf("[ebuild] Running: make %s", strings.Join(args, " "))
+	logging.Debug("[ebuild] Running: make %s", strings.Join(args, " "))
 
 	cmd := exec.Command("make", args...)
 	cmd.Dir = e.Env.S
@@ -368,7 +368,7 @@ After downloading, re-run the installation.
 		e.Env.DISTDIR,
 		e.Env.A)
 
-	log.Printf("[ebuild] %s", msg)
+	logging.Debug("[ebuild] %s", msg)
 	return msg, nil
 }
 
@@ -451,7 +451,7 @@ func extractTarEntry(tarReader *tar.Reader, header *tar.Header, target string) e
 	case tar.TypeSymlink:
 		return extractSymlink(target, header.Linkname)
 	default:
-		log.Printf("[ebuild] Unsupported tar entry type %d for %s", header.Typeflag, header.Name)
+		logging.Debug("[ebuild] Unsupported tar entry type %d for %s", header.Typeflag, header.Name)
 		return nil
 	}
 }

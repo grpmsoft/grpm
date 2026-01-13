@@ -4,10 +4,10 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"log"
 	"path/filepath"
 	"strings"
 
+	"github.com/grpmsoft/grpm/internal/logging"
 	"github.com/grpmsoft/grpm/internal/solver"
 	"github.com/grpmsoft/grpm/internal/state"
 )
@@ -241,7 +241,7 @@ func (a *App) runUpdate(args []string) error {
 		return fmt.Errorf("unknown target: %s (use @world, @selected, or @system)", targetSet)
 	}
 
-	log.Printf("Calculating updates for %s...\n", setName)
+	logging.Action("Calculating updates for %s...", setName)
 
 	// Initialize repository
 	r, err := a.initRepository(*useMock, *repoPath)
@@ -269,7 +269,7 @@ func (a *App) runUpdate(args []string) error {
 		return nil
 	}
 
-	log.Printf("Found %d packages in %s\n", pkgSet.Len(), setName)
+	logging.Info("Found %d packages in %s", pkgSet.Len(), setName)
 
 	// Configure update options
 	opts := &state.UpdateOptions{
@@ -355,23 +355,23 @@ func (a *App) displayUpdatePlan(plan *state.UpdatePlan, setName state.SetName, d
 
 // executeUpdates executes the update plan.
 func (a *App) executeUpdates(plan *state.UpdatePlan, r interface{}) error {
-	log.Println("\nStarting update...")
+	logging.Action("Starting update...")
 
 	for i, update := range plan.Updates {
-		log.Printf(">>> Updating %s (%d/%d)", update.Atom, i+1, len(plan.Updates))
+		logging.Action("Updating %s (%d/%d)", update.Atom, i+1, len(plan.Updates))
 
 		// For now, just log the update
 		// Full implementation would call the emerge/install logic
 		if update.IsNew {
-			log.Printf("    Installing new package: %s-%s", update.Atom, update.AvailableVersion)
+			logging.Info("    Installing new package: %s-%s", update.Atom, update.AvailableVersion)
 		} else if update.IsUpgrade {
-			log.Printf("    Upgrading: %s -> %s", update.InstalledVersion, update.AvailableVersion)
+			logging.Info("    Upgrading: %s -> %s", update.InstalledVersion, update.AvailableVersion)
 		} else if update.UseChanged {
-			log.Printf("    Rebuilding with new USE flags")
+			logging.Info("    Rebuilding with new USE flags")
 		}
 	}
 
-	log.Printf("\n*** Update completed: %d package(s) processed", len(plan.Updates))
+	logging.Action("Update completed: %d package(s) processed", len(plan.Updates))
 	return nil
 }
 
@@ -420,11 +420,11 @@ func (a *App) runRemove(args []string) error {
 	}
 
 	// Real removal
-	log.Println("Removing packages:")
+	logging.Info("Removing packages:")
 	removedCount := 0
 
 	for _, atom := range packages {
-		log.Printf("<<< Uninstalling %s", atom)
+		logging.Action("Uninstalling %s", atom)
 
 		// Uninstall package using real uninstaller
 		if err := a.uninstallPackageReal(atom, *force); err != nil {
@@ -432,10 +432,10 @@ func (a *App) runRemove(args []string) error {
 		}
 
 		removedCount++
-		log.Printf("<<< %s uninstalled successfully (%d/%d)", atom, removedCount, len(packages))
+		logging.Action("%s uninstalled successfully (%d/%d)", atom, removedCount, len(packages))
 	}
 
-	log.Printf("\n✅ Removal completed successfully: %d package(s) removed", removedCount)
+	logging.Action("Removal completed successfully: %d package(s) removed", removedCount)
 	return nil
 }
 
@@ -475,7 +475,7 @@ func (a *App) runBuild(args []string) error {
 			continue
 		}
 
-		log.Printf(">>> Building binary package for %s", atom)
+		logging.Action("Building binary package for %s", atom)
 
 		// Get installed package from database
 		installedPkg, err := db.Get(atom)
@@ -490,13 +490,13 @@ func (a *App) runBuild(args []string) error {
 		}
 
 		builtCount++
-		log.Printf(">>> Binary package created: %s (%d/%d)", binpkgPath, builtCount, len(packages))
+		logging.Action("Binary package created: %s (%d/%d)", binpkgPath, builtCount, len(packages))
 	}
 
 	if *pretend {
 		fmt.Printf("\nTotal: %d package(s) would be built\n", len(packages))
 	} else {
-		log.Printf("\n✅ Build completed successfully: %d binary package(s) created", builtCount)
+		logging.Action("Build completed successfully: %d binary package(s) created", builtCount)
 	}
 
 	return nil
@@ -537,7 +537,7 @@ func (a *App) runDepclean(args []string) error {
 		return err
 	}
 
-	log.Println("Calculating dependencies...")
+	logging.Action("Calculating dependencies...")
 
 	// Get package database
 	db, err := a.getOrCreatePackageDB()
@@ -594,12 +594,12 @@ func (a *App) runDepclean(args []string) error {
 
 // executeDepclean removes the orphaned packages.
 func (a *App) executeDepclean(result *solver.DepcleanResult) error {
-	log.Println("\nRemoving orphaned packages...")
+	logging.Action("Removing orphaned packages...")
 
 	removedCount := 0
 	for _, orphan := range result.Orphans {
 		atom := fmt.Sprintf("%s-%s", orphan.Atom, orphan.Version)
-		log.Printf("<<< Uninstalling %s", atom)
+		logging.Action("Uninstalling %s", atom)
 
 		// Uninstall package using real uninstaller
 		if err := a.uninstallPackageReal(atom, false); err != nil {
@@ -607,11 +607,11 @@ func (a *App) executeDepclean(result *solver.DepcleanResult) error {
 		}
 
 		removedCount++
-		log.Printf("<<< %s uninstalled successfully (%d/%d)",
+		logging.Action("%s uninstalled successfully (%d/%d)",
 			atom, removedCount, len(result.Orphans))
 	}
 
-	log.Printf("\nDepclean completed: %d package(s) removed", removedCount)
+	logging.Action("Depclean completed: %d package(s) removed", removedCount)
 	return nil
 }
 

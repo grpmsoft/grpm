@@ -240,3 +240,72 @@ func (m *MultiplexReader) Read(p []byte) (n int, err error) {
 		return 0, fmt.Errorf("unexpected message tag: %d", tag)
 	}
 }
+
+// MultiplexWriter writes multiplexed rsync messages.
+// For daemon mode with protocol >= 23, server expects multiplexed input.
+type MultiplexWriter struct {
+	conn  *Conn
+	debug Logger
+}
+
+// NewMultiplexWriter creates a multiplexed writer.
+func NewMultiplexWriter(c *Conn) *MultiplexWriter {
+	return &MultiplexWriter{conn: c}
+}
+
+// SetDebug enables debug logging.
+func (m *MultiplexWriter) SetDebug(l Logger) {
+	m.debug = l
+}
+
+// WriteData writes data with MSG_DATA tag.
+// Format: [header: uint32] [data: N bytes]
+// Header = ((mplexBase + MsgData) << 24) | length
+func (m *MultiplexWriter) WriteData(data []byte) error {
+	if len(data) == 0 {
+		return nil
+	}
+
+	// Build header: (7 + 0) << 24 | length
+	header := uint32(mplexBase+MsgData)<<24 | uint32(len(data))
+
+	if m.debug != nil {
+		m.debug.Printf("mplex write: tag=%d, len=%d, header=0x%08x", MsgData, len(data), header)
+	}
+
+	// Write header (little-endian)
+	var hdr [4]byte
+	hdr[0] = byte(header)
+	hdr[1] = byte(header >> 8)
+	hdr[2] = byte(header >> 16)
+	hdr[3] = byte(header >> 24)
+
+	if _, err := m.conn.Writer.Write(hdr[:]); err != nil {
+		return fmt.Errorf("write mplex header: %w", err)
+	}
+
+	// Write data
+	if _, err := m.conn.Writer.Write(data); err != nil {
+		return fmt.Errorf("write mplex data: %w", err)
+	}
+
+	return nil
+}
+
+// WriteInt32 writes a 32-bit integer as multiplexed data.
+func (m *MultiplexWriter) WriteInt32(v int32) error {
+	var buf [4]byte
+	buf[0] = byte(v)
+	buf[1] = byte(v >> 8)
+	buf[2] = byte(v >> 16)
+	buf[3] = byte(v >> 24)
+	return m.WriteData(buf[:])
+}
+
+// Write implements io.Writer, wrapping data in multiplexed format.
+func (m *MultiplexWriter) Write(p []byte) (n int, err error) {
+	if err := m.WriteData(p); err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
