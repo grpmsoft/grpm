@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **mirror:// URL expansion** — Third-party mirror URLs are now properly expanded
+  - Added `ThirdPartyMirrors` parser for `profiles/thirdpartymirrors` file
+  - `mirror://gnu/`, `mirror://sourceforge/`, etc. now resolve to real HTTP URLs
+  - Previously `grpm fetch` failed with "unsupported protocol scheme mirror"
+  - Example: `mirror://gnu/hello/hello-2.12.tar.gz` now expands to
+    `https://ftp.gnu.org/gnu/hello/hello-2.12.tar.gz` and fallback mirrors
+
 ### Added
 - **Integration tests for fetch/SRC_URI parsing** — Validates v0.7.3 functionality
   - Tests for variable expansion (P, PN, PV, etc.)

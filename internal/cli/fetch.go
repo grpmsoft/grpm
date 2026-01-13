@@ -182,11 +182,17 @@ func (a *App) getDistfilesWithURIs(catPkg, repoPath string, manifest *fetch.Mani
 		return nil, fmt.Errorf("parsing SRC_URI: %w", err)
 	}
 
+	// Load third-party mirrors for mirror:// URL expansion
+	thirdPartyMirrors := fetch.ParseThirdPartyMirrors(repoPath)
+
 	// Build map of filename -> URIs from SRC_URI entries
+	// Expand mirror:// URLs to real URLs
 	uriMap := make(map[string][]string)
 	for _, entry := range entries {
 		if entry.URL != "" {
-			uriMap[entry.Filename] = append(uriMap[entry.Filename], entry.URL)
+			// Expand mirror:// URLs (e.g., mirror://gnu/... -> https://ftp.gnu.org/gnu/...)
+			expandedURIs := thirdPartyMirrors.ExpandMirrorURL(entry.URL)
+			uriMap[entry.Filename] = append(uriMap[entry.Filename], expandedURIs...)
 		}
 	}
 
