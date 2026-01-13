@@ -55,6 +55,10 @@ func (a *App) runEmerge(args []string) error {
 	keepWork := fs.Bool("keep-work", false, "Keep work directory after build")
 	enableTests := fs.Bool("test", false, "Run test phase")
 	skipToolCheck := fs.Bool("skip-tool-check", false, "Skip external tool availability check")
+	replace := fs.Bool("replace", false, "Replace existing package (ignore collisions with same package)")
+	fs.BoolVar(replace, "R", false, "Alias for --replace")
+	force := fs.Bool("force", false, "Force installation (skip collision checks for untracked files)")
+	fs.BoolVar(force, "f", false, "Alias for --force")
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -139,6 +143,8 @@ func (a *App) runEmerge(args []string) error {
 		makeJobs:    *makeJobs,
 		keepWork:    *keepWork,
 		enableTests: *enableTests,
+		replace:     *replace,
+		force:       *force,
 		fetcher:     fetcher,
 	}
 
@@ -148,7 +154,7 @@ func (a *App) runEmerge(args []string) error {
 	}
 
 	// Sequential build (original behavior)
-	return a.buildAndInstallPackages(solution, *repoPath, *distDir, *tmpDir, *makeJobs, *keepWork, *enableTests, fetcher)
+	return a.buildAndInstallPackages(solution, *repoPath, *distDir, *tmpDir, *makeJobs, *keepWork, *enableTests, *replace, *force, fetcher)
 }
 
 // parallelBuildOptions holds options for parallel build execution.
@@ -159,6 +165,8 @@ type parallelBuildOptions struct {
 	makeJobs    int
 	keepWork    bool
 	enableTests bool
+	replace     bool
+	force       bool
 	fetcher     fetch.Fetcher
 }
 
@@ -294,7 +302,7 @@ func (a *App) buildAndInstallSinglePackage(ctx context.Context, p *pkg.Package, 
 	}
 
 	// Install to system
-	if err := a.installFromImageDir(installer, p, imageDir, opts.keepWork); err != nil {
+	if err := a.installFromImageDir(installer, p, imageDir, opts.keepWork, opts.replace, opts.force); err != nil {
 		return fmt.Errorf("install failed: %w", err)
 	}
 
@@ -400,7 +408,7 @@ func (a *App) createFetcher(distDir string) fetch.Fetcher {
 }
 
 // buildAndInstallPackages builds packages from source and installs them.
-func (a *App) buildAndInstallPackages(solution map[string]*pkg.Package, repoPath, distDir, tmpDir string, jobs int, keepWork, enableTests bool, fetcher fetch.Fetcher) error {
+func (a *App) buildAndInstallPackages(solution map[string]*pkg.Package, repoPath, distDir, tmpDir string, jobs int, keepWork, enableTests, replace, force bool, fetcher fetch.Fetcher) error {
 	logging.Action("Starting source build...")
 
 	builtCount := 0
@@ -426,7 +434,7 @@ func (a *App) buildAndInstallPackages(solution map[string]*pkg.Package, repoPath
 		}
 
 		// Install to system
-		if err := a.installFromImageDir(installer, p, imageDir, keepWork); err != nil {
+		if err := a.installFromImageDir(installer, p, imageDir, keepWork, replace, force); err != nil {
 			return fmt.Errorf("failed to install %s: %w", name, err)
 		}
 
@@ -521,15 +529,15 @@ func (a *App) buildPackageFromSource(p *pkg.Package, repoPath, distDir, tmpDir s
 }
 
 // installFromImageDir installs package files from the image directory to the system.
-func (a *App) installFromImageDir(installer *install.Installer, p *pkg.Package, imageDir string, keepWork bool) error {
+func (a *App) installFromImageDir(installer *install.Installer, p *pkg.Package, imageDir string, keepWork, replace, force bool) error {
 	// Create work directory structure (installer expects workDir with /image subdirectory)
 	workDir := filepath.Dir(imageDir)
 
 	// Install using Installer
 	opts := install.InstallOptions{
 		WorkDir:  workDir,
-		Replace:  false,
-		Force:    false,
+		Replace:  replace,
+		Force:    force,
 		Pretend:  false,
 		KeepWork: keepWork,
 	}

@@ -35,6 +35,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Emerge CLI Flags
+- **`--replace` / `-R`** — Replace existing package (ignore collisions with same package)
+  - Unmerges old version before installing new one
+  - Implements Portage's "protect-owned" behavior
+- **`--force` / `-f`** — Force installation (skip collision checks)
+  - Useful for overwriting untracked files from previous failed installs
+  - Bypasses file existence checks during merge
+
 #### Comprehensive Version Selection Tests
 - **New test file**: `internal/repo/version_selection_test.go`
   - `TestLoadPackage_SelectsHighestVersion` — 8 test cases covering:
@@ -50,6 +58,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `BenchmarkLoadPackage_ManyVersions` — Performance benchmark
 
 ### Changed
+- `internal/cli/emerge.go` — Added `--replace`, `--force` flags with full pipeline support
 - `internal/repo/portage.go` — Version sorting before selection
 - `internal/repo/cached_portage.go` — Version sorting + logging migration
 - `internal/repo/cache/cached_repo.go` — Logging migration to `internal/logging`
