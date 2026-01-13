@@ -20,6 +20,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added `findInstalledVersion()` to detect existing installations
   - When `--replace`/`-R` used: old package is unmerged before new merge
   - Implements Portage's "protect-owned" behavior
+- **CLI --help exit code** — All CLI commands now return exit code 0 when using `--help`
+  - Previously returned exit code 1 with "Error: flag: help requested"
+  - Fixed in 13 places across 6 files (emerge, tools, fetch, analyze, commands, app)
+  - Uses `errors.Is(err, flag.ErrHelp)` for proper error comparison
+- **mirror:// URL expansion in emerge** — Emerge command now properly expands mirror:// URLs
+  - Added SRC_URI parsing in ebuild executor (`internal/ebuild/executor.go`)
+  - Uses `profiles/thirdpartymirrors` for URL expansion
+  - Example: `mirror://gnu/hello/hello-2.12.tar.gz` → `https://ftp.gnu.org/gnu/hello/hello-2.12.tar.gz`
+  - Previously only fetch command supported mirror expansion, now emerge does too
 
 ### Planned
 - Performance optimization for large dependency graphs

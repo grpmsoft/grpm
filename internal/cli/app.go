@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -216,6 +217,9 @@ func (a *App) runResolve(args []string) error {
 	autounmaskWrite := fs.Bool("autounmask-write", false, "Write autounmask changes to /etc/portage")
 
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 
@@ -349,6 +353,9 @@ func (a *App) runInstall(args []string) error {
 	autounmaskWrite := fs.Bool("autounmask-write", false, "Write autounmask changes to /etc/portage")
 
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 
@@ -606,6 +613,9 @@ func (a *App) runSync(args []string) error {
 	preferGit := fs.Bool("prefer-git", false, "Prefer Git over rsync when using auto method")
 
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 

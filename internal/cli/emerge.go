@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -56,6 +57,9 @@ func (a *App) runEmerge(args []string) error {
 	skipToolCheck := fs.Bool("skip-tool-check", false, "Skip external tool availability check")
 
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil // Help was requested, not an error
+		}
 		return err
 	}
 

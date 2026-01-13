@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -46,6 +47,9 @@ func (a *App) runAnalyze(args []string) error {
 	fs.BoolVar(verbose, "v", a.verbose, "Alias for --verbose")
 
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -50,6 +51,9 @@ func (a *App) runFetch(args []string) error {
 	verifyOnly := fs.Bool("verify", false, "Only verify existing files, don't download")
 
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -21,6 +22,9 @@ func (a *App) runSearch(args []string) error {
 	fs.BoolVar(description, "S", false, "Alias for --desc")
 
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 
@@ -113,6 +117,9 @@ func (a *App) runInfo(args []string) error {
 	useMock := fs.Bool("mock", false, "Use mock repository for testing")
 
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 
@@ -208,6 +215,9 @@ func (a *App) runUpdate(args []string) error {
 	profilePath := fs.String("profile", "/etc/portage/make.profile", "Path to active profile")
 
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 
@@ -376,6 +386,9 @@ func (a *App) runRemove(args []string) error {
 	force := fs.Bool("force", false, "Force removal even if dependencies exist")
 
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 
@@ -437,6 +450,9 @@ func (a *App) runBuild(args []string) error {
 	fs.BoolVar(pretend, "p", false, "Alias for --pretend")
 
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 
@@ -515,6 +531,9 @@ func (a *App) runDepclean(args []string) error {
 	fs.Var(&excludes, "exclude", "Exclude package from removal (can be specified multiple times)")
 
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 
