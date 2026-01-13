@@ -1,11 +1,12 @@
 # GRPM Roadmap
 
-> **Build Quality Release (v0.7.5)**
+> **Version Selection Fix (v0.7.6)**
 >
 > Rapid development complete (v0.1.0 → v0.5.0).
 > Infrastructure release complete (v0.6.0).
 > Portage-style logging (v0.7.0) + compatibility fixes (v0.7.2 → v0.7.4).
 > Build reliability and output quality improvements (v0.7.5).
+> Critical version selection bug fix + emerge flags (v0.7.6).
 > **98.2% tree coverage verified on real Gentoo!**
 
 ---
