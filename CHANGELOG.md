@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`--root` flag for emerge** — Install packages to alternative root directory
+  - Equivalent to `$ROOT` environment variable in Portage
+  - Useful for building stage tarballs, chroots, cross-compilation
+  - VarDB created at `{root}/var/db/pkg`
+  - Example: `grpm emerge --root /mnt/gentoo app-misc/hello`
+
 ### Planned
 - Performance optimization for large dependency graphs
 - Web UI for daemon management

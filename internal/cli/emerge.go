@@ -59,6 +59,7 @@ func (a *App) runEmerge(args []string) error {
 	fs.BoolVar(replace, "R", false, "Alias for --replace")
 	force := fs.Bool("force", false, "Force installation (skip collision checks for untracked files)")
 	fs.BoolVar(force, "f", false, "Alias for --force")
+	rootPath := fs.String("root", "/", "Installation root directory (like $ROOT in Portage)")
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -145,6 +146,7 @@ func (a *App) runEmerge(args []string) error {
 		enableTests: *enableTests,
 		replace:     *replace,
 		force:       *force,
+		root:        *rootPath,
 		fetcher:     fetcher,
 	}
 
@@ -154,7 +156,7 @@ func (a *App) runEmerge(args []string) error {
 	}
 
 	// Sequential build (original behavior)
-	return a.buildAndInstallPackages(solution, *repoPath, *distDir, *tmpDir, *makeJobs, *keepWork, *enableTests, *replace, *force, fetcher)
+	return a.buildAndInstallPackages(solution, *repoPath, *distDir, *tmpDir, *makeJobs, *keepWork, *enableTests, *replace, *force, *rootPath, fetcher)
 }
 
 // parallelBuildOptions holds options for parallel build execution.
@@ -167,6 +169,7 @@ type parallelBuildOptions struct {
 	enableTests bool
 	replace     bool
 	force       bool
+	root        string
 	fetcher     fetch.Fetcher
 }
 
@@ -177,14 +180,14 @@ type parallelBuildOptions struct {
 func (a *App) buildPackagesParallel(solution map[string]*pkg.Package, parallelJobs int, keepGoing bool, opts *parallelBuildOptions) error {
 	logging.Action("Starting parallel build with %d workers...", parallelJobs)
 
-	// Get package database
-	db, err := a.getOrCreatePackageDB()
+	// Get package database (with root prefix)
+	db, err := a.getOrCreatePackageDBWithRoot(opts.root)
 	if err != nil {
 		return fmt.Errorf("failed to initialize package database: %w", err)
 	}
 
-	// Create installer
-	installer := install.NewInstaller("/", db)
+	// Create installer with custom root
+	installer := install.NewInstaller(opts.root, db)
 	installer.Verbose = a.verbose
 
 	// Configure scheduler
@@ -408,20 +411,20 @@ func (a *App) createFetcher(distDir string) fetch.Fetcher {
 }
 
 // buildAndInstallPackages builds packages from source and installs them.
-func (a *App) buildAndInstallPackages(solution map[string]*pkg.Package, repoPath, distDir, tmpDir string, jobs int, keepWork, enableTests, replace, force bool, fetcher fetch.Fetcher) error {
+func (a *App) buildAndInstallPackages(solution map[string]*pkg.Package, repoPath, distDir, tmpDir string, jobs int, keepWork, enableTests, replace, force bool, root string, fetcher fetch.Fetcher) error {
 	logging.Action("Starting source build...")
 
 	builtCount := 0
 	totalPackages := len(solution)
 
-	// Get package database
-	db, err := a.getOrCreatePackageDB()
+	// Get package database (with root prefix)
+	db, err := a.getOrCreatePackageDBWithRoot(root)
 	if err != nil {
 		return fmt.Errorf("failed to initialize package database: %w", err)
 	}
 
-	// Create installer
-	installer := install.NewInstaller("/", db)
+	// Create installer with custom root
+	installer := install.NewInstaller(root, db)
 	installer.Verbose = a.verbose
 
 	for name, p := range solution {

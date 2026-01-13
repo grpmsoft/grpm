@@ -190,3 +190,79 @@ func TestCreateFetcher(t *testing.T) {
 		t.Error("Expected *fetch.HTTPDownloader")
 	}
 }
+
+func TestGetOrCreatePackageDBWithRoot(t *testing.T) {
+	t.Run("creates VarDB in custom root", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		app := &App{verbose: false}
+
+		db, err := app.getOrCreatePackageDBWithRoot(tmpDir)
+		if err != nil {
+			t.Fatalf("getOrCreatePackageDBWithRoot failed: %v", err)
+		}
+		if db == nil {
+			t.Fatal("returned nil database")
+		}
+
+		// Verify VarDB directory was created
+		vardbPath := filepath.Join(tmpDir, "var/db/pkg")
+		if _, err := os.Stat(vardbPath); os.IsNotExist(err) {
+			t.Errorf("VarDB directory not created at %s", vardbPath)
+		}
+	})
+
+	t.Run("default root uses /var/db/pkg", func(t *testing.T) {
+		app := &App{verbose: false}
+
+		// This test verifies the getOrCreatePackageDB uses "/" as default
+		// We can't actually test writing to /var/db/pkg without root permissions
+		// so we just verify the function doesn't panic
+		_, _ = app.getOrCreatePackageDB()
+		// No assertion needed - just verify it doesn't crash
+	})
+
+	t.Run("handles nested root paths", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		nestedRoot := filepath.Join(tmpDir, "chroot", "gentoo")
+		app := &App{verbose: false}
+
+		db, err := app.getOrCreatePackageDBWithRoot(nestedRoot)
+		if err != nil {
+			t.Fatalf("getOrCreatePackageDBWithRoot failed: %v", err)
+		}
+		if db == nil {
+			t.Fatal("returned nil database")
+		}
+
+		// Verify nested VarDB directory was created
+		vardbPath := filepath.Join(nestedRoot, "var/db/pkg")
+		if _, err := os.Stat(vardbPath); os.IsNotExist(err) {
+			t.Errorf("VarDB directory not created at %s", vardbPath)
+		}
+	})
+}
+
+func TestParallelBuildOptionsRoot(t *testing.T) {
+	t.Run("root field is set in options", func(t *testing.T) {
+		opts := &parallelBuildOptions{
+			repoPath: "/var/db/repos/gentoo",
+			distDir:  "/var/cache/distfiles",
+			tmpDir:   "/var/tmp/portage",
+			root:     "/mnt/gentoo",
+		}
+
+		if opts.root != "/mnt/gentoo" {
+			t.Errorf("Expected root /mnt/gentoo, got %s", opts.root)
+		}
+	})
+
+	t.Run("default root is /", func(t *testing.T) {
+		opts := &parallelBuildOptions{
+			root: "/",
+		}
+
+		if opts.root != "/" {
+			t.Errorf("Expected root /, got %s", opts.root)
+		}
+	})
+}

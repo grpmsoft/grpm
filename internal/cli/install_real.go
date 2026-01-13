@@ -231,9 +231,18 @@ func (a *App) createMockFiles(imageDir string, p *pkg.Package) error {
 }
 
 // getOrCreatePackageDB returns the package database, creating it if needed.
+// Uses the default root "/".
 func (a *App) getOrCreatePackageDB() (*state.PackageDatabase, error) {
+	return a.getOrCreatePackageDBWithRoot("/")
+}
+
+// getOrCreatePackageDBWithRoot returns the package database with a custom root.
+// The VarDB path will be {root}/var/db/pkg.
+func (a *App) getOrCreatePackageDBWithRoot(root string) (*state.PackageDatabase, error) {
+	// Build VarDB path with root prefix
+	vardbPath := filepath.Join(root, "var/db/pkg")
+
 	// Check if VarDB exists
-	vardbPath := "/var/db/pkg"
 	if _, err := os.Stat(vardbPath); os.IsNotExist(err) {
 		// Create VarDB directory structure
 		if err := os.MkdirAll(vardbPath, 0755); err != nil {
@@ -252,7 +261,7 @@ func (a *App) getOrCreatePackageDB() (*state.PackageDatabase, error) {
 	}
 
 	if a.verbose {
-		logging.Debug("Package database initialized with %d packages", db.Count())
+		logging.Debug("Package database initialized with %d packages (root: %s)", db.Count(), root)
 	}
 
 	return db, nil
