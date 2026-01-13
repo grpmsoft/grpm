@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Previously `grpm fetch` failed with "unsupported protocol scheme mirror"
   - Example: `mirror://gnu/hello/hello-2.12.tar.gz` now expands to
     `https://ftp.gnu.org/gnu/hello/hello-2.12.tar.gz` and fallback mirrors
+- **rsync sync hanging** — Native Go rsync no longer hangs on real Gentoo mirrors
+  - Removed debug code that limited sync to 10 files
+  - Added timeout handling with connection deadline
+  - Added fallback to system rsync binary if native implementation times out
+  - Context cancellation now properly closes connection to unblock operations
 
 ### Added
 - **Integration tests for fetch/SRC_URI parsing** — Validates v0.7.3 functionality

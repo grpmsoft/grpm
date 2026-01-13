@@ -94,8 +94,29 @@ func (c *Client) Sync(ctx context.Context, rsyncURL, destDir string) error {
 	c.conn = conn
 	c.wire = NewConn(conn, conn)
 
-	// Run protocol
-	return c.runProtocol(ctx, module, remotePath, destDir)
+	// Set read/write deadline based on context
+	// This ensures operations don't hang indefinitely
+	if deadline, ok := ctx.Deadline(); ok {
+		if err := conn.SetDeadline(deadline); err != nil {
+			c.Logger.Printf("warning: failed to set connection deadline: %v", err)
+		}
+	}
+
+	// Run protocol with context cancellation
+	done := make(chan error, 1)
+	go func() {
+		done <- c.runProtocol(ctx, module, remotePath, destDir)
+	}()
+
+	select {
+	case <-ctx.Done():
+		// Context canceled/timeout - close connection to unblock goroutine
+		_ = conn.Close()
+		<-done // Wait for goroutine to finish
+		return ctx.Err()
+	case err := <-done:
+		return err
+	}
 }
 
 // runProtocol executes the rsync protocol exchange.
@@ -585,12 +606,6 @@ func (c *Client) receiveFiles(ctx context.Context, files []FileEntry, destDir st
 		filesReceived++
 		if filesReceived%1000 == 0 {
 			c.Logger.Printf("received %d files...", filesReceived)
-		}
-
-		// For testing, stop after first 10 files
-		if filesReceived >= 10 {
-			c.Logger.Printf("DEBUG: stopping after %d files for testing", filesReceived)
-			break
 		}
 	}
 
