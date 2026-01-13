@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -384,17 +385,70 @@ func findRepoRoot(profilePath string) string {
 	}
 }
 
-// parseListFile parses a simple list file (one item per line).
+// parseListFile parses a simple list file or directory (one item per line).
+// In EAPI 7+, these config paths can be directories containing multiple files.
 //
 // Used for: use.mask, use.force, package.mask, package.unmask
 func parseListFile(path string) ([]string, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil // Optional file
+		}
+		return nil, err
+	}
+
+	if info.IsDir() {
+		return parseListDir(path)
+	}
+	return parseListFileOnly(path)
+}
+
+// parseListDir reads all files in a directory and concatenates their contents.
+// Files are sorted by name (POSIX locale order). Dotfiles and backup files are skipped.
+func parseListDir(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+
+	// Collect valid file names
+	var fileNames []string
+	for _, entry := range entries {
+		name := entry.Name()
+		// Skip dotfiles, backup files (~), and subdirectories
+		if strings.HasPrefix(name, ".") || strings.HasSuffix(name, "~") || entry.IsDir() {
+			continue
+		}
+		fileNames = append(fileNames, name)
+	}
+
+	// Sort by filename (POSIX locale = lexicographic)
+	sort.Strings(fileNames)
+
+	// Read all files in sorted order
+	var allItems []string
+	for _, name := range fileNames {
+		filePath := filepath.Join(dir, name)
+		items, err := parseListFileOnly(filePath)
+		if err != nil {
+			return nil, fmt.Errorf("reading %s: %w", filePath, err)
+		}
+		allItems = append(allItems, items...)
+	}
+
+	return allItems, nil
+}
+
+// parseListFileOnly parses a single list file (not a directory).
+func parseListFileOnly(path string) ([]string, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = file.Close() }()
 
-	items := make([]string, 0)
+	var items []string
 	scanner := bufio.NewScanner(file)
 
 	for scanner.Scan() {

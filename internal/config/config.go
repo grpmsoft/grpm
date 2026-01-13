@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -301,19 +302,88 @@ func (c *Config) parsePackageFile(path string, target map[string][]string) error
 	return scanner.Err()
 }
 
-// loadPackageMask loads package.mask file.
+// loadPackageMask loads package.mask file or directory.
+// In EAPI 7+, package.mask can be a directory containing multiple files.
 func (c *Config) loadPackageMask() error {
 	path := filepath.Join(c.Root, "package.mask")
 
-	file, err := os.Open(path)
+	lines, err := readPortageConfigPath(path)
+	if err != nil {
+		return err
+	}
+
+	if lines == nil {
+		lines = []string{} // Ensure non-nil slice
+	}
+	c.PackageMask = lines
+	return nil
+}
+
+// readPortageConfigPath reads lines from a Portage config path.
+// The path can be either a regular file or a directory (EAPI 7+).
+// For directories, all files are read recursively (excluding dotfiles and backups).
+// Files are sorted by name in POSIX locale order before concatenation.
+func readPortageConfigPath(path string) ([]string, error) {
+	info, err := os.Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil // Not an error - file is optional
+			return nil, nil // Not an error - path is optional
 		}
-		return err
+		return nil, err
+	}
+
+	if info.IsDir() {
+		return readPortageConfigDir(path)
+	}
+	return readPortageConfigFile(path)
+}
+
+// readPortageConfigDir reads all files in a Portage config directory.
+// Files starting with "." or ending with "~" are skipped.
+// Subdirectories are ignored (not recursed into).
+func readPortageConfigDir(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+
+	// Collect and sort file names
+	var fileNames []string
+	for _, entry := range entries {
+		name := entry.Name()
+		// Skip dotfiles, backup files, and directories
+		if strings.HasPrefix(name, ".") || strings.HasSuffix(name, "~") || entry.IsDir() {
+			continue
+		}
+		fileNames = append(fileNames, name)
+	}
+
+	// Sort by filename (POSIX locale = lexicographic)
+	sort.Strings(fileNames)
+
+	// Read all files in order
+	var allLines []string
+	for _, name := range fileNames {
+		filePath := filepath.Join(dir, name)
+		lines, err := readPortageConfigFile(filePath)
+		if err != nil {
+			return nil, fmt.Errorf("reading %s: %w", filePath, err)
+		}
+		allLines = append(allLines, lines...)
+	}
+
+	return allLines, nil
+}
+
+// readPortageConfigFile reads lines from a single Portage config file.
+func readPortageConfigFile(path string) ([]string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
 	}
 	defer func() { _ = file.Close() }()
 
+	var lines []string
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -323,10 +393,10 @@ func (c *Config) loadPackageMask() error {
 			continue
 		}
 
-		c.PackageMask = append(c.PackageMask, line)
+		lines = append(lines, line)
 	}
 
-	return scanner.Err()
+	return lines, scanner.Err()
 }
 
 // GetPackageUSE returns USE flags for a specific package.
