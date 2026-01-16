@@ -2,6 +2,7 @@ package solver
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/grpmsoft/grpm/internal/logging"
 	"github.com/grpmsoft/grpm/internal/pkg"
@@ -129,16 +130,63 @@ func (r *PortageResolver) buildResultFromSolution(solution map[string]string) (m
 	return result, nil
 }
 
+// loadPackageFromAtom parses a package atom string and loads the matching package.
+// Supports PMS-compliant atoms like "=sys-devel/gcc-13.4.1_p20250807" or ">=dev-libs/openssl-3.0".
+// If no version operator is specified, loads the highest available version.
+func (r *PortageResolver) loadPackageFromAtom(atomStr string) (*pkg.Package, error) {
+	// Try to parse as a full atom first
+	atom, err := pkg.ParseAtom(atomStr)
+	if err != nil {
+		// If parsing fails, it might be a simple "category/package" string
+		// Try loading directly
+		return r.repo.LoadPackage(atomStr)
+	}
+
+	// If atom has a version constraint, use FindByAtom to get matching packages
+	if atom.HasVersion() {
+		matches, err := r.repo.FindByAtom(atom)
+		if err != nil {
+			return nil, fmt.Errorf("failed to find packages matching %s: %w", atomStr, err)
+		}
+
+		if len(matches) == 0 {
+			return nil, fmt.Errorf("no packages match atom %s", atomStr)
+		}
+
+		// Sort matches by version (highest first) and return the best match
+		sort.Slice(matches, func(i, j int) bool {
+			return pkg.CompareVersions(matches[i].Version, matches[j].Version) > 0
+		})
+
+		// For exact match (=), return the only match
+		// For range operators (>=, >, <=, <), return the highest matching version
+		// For ~ (revision match), return the highest matching revision
+		logging.Debug("Atom %s matched %d packages, selected %s-%s",
+			atomStr, len(matches), matches[0].Name, matches[0].Version)
+
+		return matches[0], nil
+	}
+
+	// No version constraint - load package by category/package name
+	return r.repo.LoadPackage(atom.CP())
+}
+
 func (r *PortageResolver) Resolve(packages []string) (map[string]*pkg.Package, error) {
 	adapter := NewGophersatAdapter()
 	allPackages := make(map[string]*pkg.Package)
 
+	// Track root package names (not atom strings) for constraint generation
+	rootPackageNames := make([]string, 0, len(packages))
+
 	// Load and collect all dependencies
 	for _, pkgName := range packages {
-		p, err := r.repo.LoadPackage(pkgName)
+		p, err := r.loadPackageFromAtom(pkgName)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load package %s: %w", pkgName, err)
 		}
+
+		// Store the actual package name (category/package) for constraints
+		rootPackageNames = append(rootPackageNames, p.Name)
 
 		logging.Debug("Resolving package: %s-%s with %d dependencies",
 			p.Name, p.Version, len(p.Deps))
@@ -155,9 +203,9 @@ func (r *PortageResolver) Resolve(packages []string) (map[string]*pkg.Package, e
 		adapter.AddPackage(p)
 	}
 
-	// Then add constraints for each package
+	// Then add constraints for each package using actual package names
 	for _, p := range allPackages {
-		r.addPackageConstraints(adapter, p, packages)
+		r.addPackageConstraints(adapter, p, rootPackageNames)
 	}
 
 	logging.Debug("Total clauses in SAT problem: %d", len(adapter.clauses))

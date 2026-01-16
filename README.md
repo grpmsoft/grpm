@@ -90,6 +90,10 @@ grpm fetch app-misc/hello
 # Build from source (auto-fetches sources)
 sudo grpm emerge app-misc/hello
 
+# Build specific version (PMS-compliant atoms)
+sudo grpm emerge "=sys-devel/gcc-13.4.1_p20250807"
+sudo grpm emerge ">=dev-libs/openssl-3.0"
+
 # Build to alternative root (chroot, stage tarball)
 sudo grpm emerge --root /mnt/gentoo app-misc/hello
 

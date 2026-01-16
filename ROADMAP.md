@@ -1,6 +1,6 @@
 # GRPM Roadmap
 
-> **Alternative Root Installation (v0.7.8)**
+> **Versioned Atom Support (v0.7.9)**
 >
 > Rapid development complete (v0.1.0 → v0.5.0).
 > Infrastructure release complete (v0.6.0).
@@ -9,6 +9,7 @@
 > Critical version selection bug fix + emerge flags (v0.7.6).
 > Professional E2E test suite with CI integration (v0.7.7).
 > `--root` flag for chroot/stage tarball builds (v0.7.8).
+> Versioned atom support: `=pkg-1.0`, `>=pkg-2.0` (v0.7.9).
 > **98.2% tree coverage verified on real Gentoo!**
 
 ---
@@ -69,7 +70,15 @@ Key insight: **Eclasses don't need Go implementations.** They are loaded dynamic
 
 ## Release History
 
-### v0.7.8 — Alternative Root Installation (Current)
+### v0.7.9 — Versioned Atom Support (Current)
+
+**Fix for Issue #30: emerge now correctly handles versioned atoms:**
+
+- **Atom parsing** — `=sys-devel/gcc-13.4.1_p20250807`, `>=dev-libs/openssl-3.0` now work correctly
+- **PMS compliance** — Full support for version operators (`=`, `>=`, `>`, `<=`, `<`, `~`, `=*`)
+- **Regression tests** — Comprehensive test coverage for atom parsing edge cases
+
+### v0.7.8 — Alternative Root Installation
 
 **Install packages to chroot, stage tarballs, or cross-compilation targets:**
 
