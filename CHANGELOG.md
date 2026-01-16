@@ -14,6 +14,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.7.9] - 2026-01-16
+
+### Versioned Atom Support
+
+> **Fix for Issue #30: emerge now correctly handles versioned atoms**
+>
+> Commands like `grpm emerge "=sys-devel/gcc-13.4.1_p20250807"` now work as expected.
+
+### Fixed
+- **Versioned atom parsing in resolver** — Atoms with version operators (`=`, `>=`, `<`, etc.) are now properly parsed before package lookup ([#30](https://github.com/grpmsoft/grpm/issues/30))
+  - Previously: `=sys-devel/gcc-13.4.1_p20250807` was passed directly to filesystem, causing "no such file or directory"
+  - Now: Atom is parsed, `category/package` extracted, version constraint applied via `FindByAtom()`
+
+### Added
+- `loadPackageFromAtom()` helper in resolver for PMS-compliant atom parsing
+- Regression tests for versioned atom handling (`resolver_test.go`)
+
+### Technical Details
+- `internal/solver/resolver.go` — New `loadPackageFromAtom()` function, modified `Resolve()` to track root package names
+- `internal/solver/resolver_test.go` — 3 new test functions covering Issue #30 scenarios
+
+---
+
 ## [0.7.8] - 2026-01-14
 
 ### Alternative Root Installation
