@@ -7,9 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.8.1] - 2026-01-17
 
-### Package Mask & Keywords Filtering
+### Package Mask, Keywords Filtering & Atom Parsing Fix
 
-Solver now respects `package.mask` and `KEYWORDS` — masked and unkeyworded packages are excluded from dependency resolution ([#46](https://github.com/grpmsoft/grpm/issues/46), [#48](https://github.com/grpmsoft/grpm/issues/48)).
+Solver now respects `package.mask` and `KEYWORDS`, plus critical atom parsing fix ([#45](https://github.com/grpmsoft/grpm/issues/45), [#46](https://github.com/grpmsoft/grpm/issues/46), [#48](https://github.com/grpmsoft/grpm/issues/48)).
 
 ### Added
 - **MaskManager** (`internal/mask/`) — Manages masks from multiple sources with proper priority
@@ -20,10 +20,15 @@ Solver now respects `package.mask` and `KEYWORDS` — masked and unkeyworded pac
 - **Keywords field in Package** — `pkg.Package` now includes `Keywords` field
 - **Solver integration** — `NewResolverWithFilters()` constructor for combined mask + keyword filtering
 - **CLI integration** — Resolve and emerge commands now use full Portage-compatible filtering
+- **`loadPackageFromAtom()`** — New helper for PMS-compliant atom loading with version support
+- **Comprehensive atom parsing tests** — 18 test cases covering version operators, complex versions, edge cases
 
 ### Fixed
 - **gcc-16.0.9999 selection bug** — Unkeyworded and masked packages are now properly filtered
 - Solver now selects `gcc-15.2.1` (same as Portage) instead of unkeyworded `gcc-16.0.9999`
+- **Manifest path bug ([#45](https://github.com/grpmsoft/grpm/issues/45))** — Versioned atoms like `=sys-devel/gcc-13.4.1_p20250807` now correctly parse to `sys-devel/gcc` for path construction
+- **info command** — Now properly handles versioned atoms (`grpm info =sys-devel/gcc-13.4.1`)
+- **fetch command** — Fixed atom parsing in `parsePackageAtom()` to use `pkg.ParseAtom().CP()`
 
 ---
 

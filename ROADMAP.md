@@ -1,13 +1,12 @@
 # GRPM Roadmap
 
-> **Package Mask & Keywords Filtering Release (v0.8.1)**
+> **Package Mask, Keywords & Atom Parsing Release (v0.8.1)**
 >
 > Rapid development complete (v0.1.0 → v0.5.0).
 > Infrastructure release complete (v0.6.0).
 > Build quality and security fixes (v0.7.x).
 > Configuration management (v0.8.0).
-> **Solver now respects package.mask AND KEYWORDS — full Portage filtering (v0.8.1).**
-> **GRPM now selects same versions as Portage (gcc-15.x, not gcc-16.0.9999)!**
+> **Solver filtering + atom parsing fix (v0.8.1, #45, #46, #48).**
 > **98.2% tree coverage verified on real Gentoo!**
 
 ---
@@ -69,15 +68,16 @@ Key insight: **Eclasses don't need Go implementations.** They are loaded dynamic
 
 ## Release History
 
-### v0.8.1 — Package Mask & Keywords Filtering (Current)
+### v0.8.1 — Package Mask, Keywords & Atom Parsing (Current)
 
-**Solver respects package.mask AND KEYWORDS** ([#46](https://github.com/grpmsoft/grpm/issues/46), [#48](https://github.com/grpmsoft/grpm/issues/48)):
+**Solver respects package.mask AND KEYWORDS, plus atom parsing fix** ([#45](https://github.com/grpmsoft/grpm/issues/45), [#46](https://github.com/grpmsoft/grpm/issues/46), [#48](https://github.com/grpmsoft/grpm/issues/48)):
 
 - **MaskManager** — Loads masks from repo, profile cascade, and user config
 - **KEYWORDS filtering** — Filters packages by `KEYWORDS` vs `ACCEPT_KEYWORDS`
 - **Architecture detection** — Auto-detects system arch for default `ACCEPT_KEYWORDS`
 - **Solver integration** — Masked and unkeyworded packages excluded from candidates
 - **User unmask** — `/etc/portage/package.unmask` overrides all masks
+- **Atom parsing fix (#45)** — Versioned atoms correctly parse to `category/package` for paths
 - **Verified** — GRPM now selects same versions as Portage (gcc-15.x)
 
 ### v0.8.0 — Configuration Management
@@ -215,22 +215,12 @@ Key insight: **Eclasses don't need Go implementations.** They are loaded dynamic
 ## Roadmap to v1.0.0
 
 ```
-v0.7.11 ← CURRENT (Security Release)
+v0.8.1 ← CURRENT (Mask, Keywords & Atom Parsing)
     │   ✅ v0.6.0: Distfile fetching, debug helpers, coverage analyzer
-    │   ✅ v0.7.0: Portage-style logging
-    │   ✅ v0.7.2-v0.7.4: Portage compatibility fixes
-    │   ✅ v0.7.5: Unified logging, source build reliability
-    │   ✅ v0.7.6: Version selection fix, emerge flags
-    │   ✅ v0.7.7: E2E tests + CI integration
-    │   ✅ v0.7.8: --root flag for chroot/stage builds
-    │   ✅ v0.7.9: Versioned atom support
-    │   ✅ v0.7.10: --onlydeps flag for Docker caching
-    │   ✅ v0.7.11: Path traversal security fix (#36)
+    │   ✅ v0.7.x: Portage compatibility, security fixes
+    │   ✅ v0.8.0: Configuration management (make.conf, repos.conf, package.use)
+    │   ✅ v0.8.1: Package mask, KEYWORDS filtering, atom parsing (#45, #46, #48)
     │   ✅ 98.2% tree coverage on real Gentoo!
-    ↓
-v0.8.0 — Production Hardening (2 tasks)
-    │   • Performance optimization
-    │   • Error handling improvements
     ↓
 v0.9.0 — Pre-Release (2 tasks)
     │   • Community testing program
@@ -356,4 +346,4 @@ Key deliverables:
 ---
 
 *This roadmap evolves based on community feedback and project needs.*
-*Last updated: 2026-01-17 (v0.7.11 security release)*
+*Last updated: 2026-01-17 (v0.8.1 mask, keywords & atom parsing)*
