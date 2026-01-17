@@ -5,6 +5,27 @@ All notable changes to GRPM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] - v0.8.3
+
+### SRC_URI Evaluation Hotfix
+
+Critical fix for packages with dynamic SRC_URI generation ([#50](https://github.com/grpmsoft/grpm/issues/50)).
+
+### Added
+- **`MetadataEvaluator`** (`internal/ebuild/metadata.go`) — Evaluates ebuild metadata by sourcing with eclass support via mvdan.cc/sh interpreter
+- **`EvaluateSrcURI()`** — Extracts evaluated SRC_URI after full eclass execution (e.g., `toolchain.eclass` for gcc)
+- **`ExtractEbuildMetadata()`** — Generic metadata extraction for multiple variables
+
+### Fixed
+- **gcc distfile selection ([#50](https://github.com/grpmsoft/grpm/issues/50))** — `grpm fetch` now downloads only version-specific files (3 files) instead of ALL distfiles from Manifest (70+ files)
+- **Dynamic SRC_URI evaluation** — Packages using eclasses to generate SRC_URI (gcc, chromium, etc.) now work correctly
+- **Manifest filtering** — Only distfiles present in evaluated SRC_URI are included
+
+### Changed
+- `getDistfilesWithURIs()` now uses two-tier evaluation: interpreter first, regex fallback
+
+---
+
 ## [0.8.2] - 2026-01-17
 
 ### UX Improvements Release
