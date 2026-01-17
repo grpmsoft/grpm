@@ -45,6 +45,7 @@ GRPM (Go Resource Package Manager) is a modern source-based package manager writ
 | **Repository Sync** | Native rsync and Git sync with GPG verification |
 | **Virtual Packages** | Provider selection with configuration support |
 | **Metadata Caching** | SQLite-backed cache for fast package lookups |
+| **Configuration Management** | Dynamic make.conf, repos.conf, package.use with full Portage compatibility |
 
 ---
 
@@ -190,10 +191,10 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidelines and [AGENTS.md
 
 ## Roadmap
 
-> **Build Quality Release (v0.7.5)**
+> **Active Development**
 >
-> Rapid development complete (v0.1.0 → v0.5.0). Infrastructure release complete (v0.6.0).
-> Now focusing on build reliability and output quality. **98.2% tree coverage on real Gentoo!**
+> Rapid development complete. Infrastructure, build quality, and security hardening done.
+> Now focusing on full Portage configuration compatibility. **98.2% tree coverage on real Gentoo!**
 
 **Completed Features:**
 - ✅ SAT-based dependency resolution
@@ -204,6 +205,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidelines and [AGENTS.md
 - ✅ Repository sync (rsync, git) with GPG verification
 - ✅ Portage-style logging with colored output
 - ✅ Verbose modes (`-v`, `-vv`, `-vvv`) for debugging
+- ✅ Dynamic make.conf parsing with variable expansion
+- ✅ repos.conf support with Portage fallback chain
+- ✅ package.use pattern matching with atom specificity
 
 **v1.0.0** — Production ready after community validation (no fixed date).
 

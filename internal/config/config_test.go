@@ -1,8 +1,10 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -955,5 +957,1051 @@ func TestReadPortageConfigPath_NonExistent(t *testing.T) {
 	}
 	if lines != nil {
 		t.Errorf("Expected nil lines for non-existent path, got: %v", lines)
+	}
+}
+
+// TestVarexpand tests ${VAR} and $VAR expansion in make.conf values.
+func TestVarexpand(t *testing.T) {
+	cfg := &Config{
+		MakeConf: DefaultMakeConf(),
+	}
+
+	// Set up some variables
+	cfg.MakeConf.Variables["CFLAGS"] = "-O2 -pipe"
+	cfg.MakeConf.Variables["CUSTOM_VAR"] = "custom_value"
+	cfg.MakeConf.Variables["BASE_DIR"] = "/var/db"
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"no expansion", "-O3 -march=native", "-O3 -march=native"},
+		{"${VAR} expansion", "${CFLAGS} -march=native", "-O2 -pipe -march=native"},
+		{"$VAR expansion", "$CFLAGS -march=native", "-O2 -pipe -march=native"},
+		{"multiple ${VAR}", "${BASE_DIR}/repos/${CUSTOM_VAR}", "/var/db/repos/custom_value"},
+		{"mixed ${} and $", "${BASE_DIR}/$CUSTOM_VAR", "/var/db/custom_value"},
+		{"undefined var", "${UNDEFINED_VAR}/path", "/path"},
+		{"partial match $", "test$", "test$"},
+		{"partial match ${", "test${", "test${"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := cfg.varexpand(tt.input)
+			if result != tt.expected {
+				t.Errorf("varexpand(%q) = %q, want %q", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+
+// TestVarexpand_NilConfig tests varexpand with nil config.
+func TestVarexpand_NilConfig(t *testing.T) {
+	cfg := &Config{
+		MakeConf: nil,
+	}
+
+	result := cfg.varexpand("${TEST}")
+	if result != "${TEST}" {
+		t.Errorf("varexpand with nil MakeConf should return input unchanged, got %q", result)
+	}
+}
+
+// TestSourceDirective tests the source directive in make.conf.
+func TestSourceDirective(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create sourced file
+	sourcedPath := filepath.Join(tmpDir, "make.conf.local")
+	sourcedContent := `CFLAGS="-O3 -march=native"
+CUSTOM_VAR="from_sourced_file"
+`
+	if err := os.WriteFile(sourcedPath, []byte(sourcedContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create main make.conf with source directive
+	makeConfPath := filepath.Join(tmpDir, "make.conf")
+	mainContent := `# Main make.conf
+MAKEOPTS="-j8"
+source ` + sourcedPath + `
+USE="ssl -debug"
+`
+	if err := os.WriteFile(makeConfPath, []byte(mainContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+
+	// Check that MAKEOPTS is from main file
+	if cfg.MakeConf.MAKEOPTS != "-j8" {
+		t.Errorf("MAKEOPTS = %q, want %q", cfg.MakeConf.MAKEOPTS, "-j8")
+	}
+
+	// Check that CFLAGS is from sourced file
+	if cfg.MakeConf.CFLAGS != "-O3 -march=native" {
+		t.Errorf("CFLAGS = %q, want %q", cfg.MakeConf.CFLAGS, "-O3 -march=native")
+	}
+
+	// Check that custom variable is accessible
+	if cfg.GetVariable("CUSTOM_VAR") != "from_sourced_file" {
+		t.Errorf("CUSTOM_VAR = %q, want %q", cfg.GetVariable("CUSTOM_VAR"), "from_sourced_file")
+	}
+
+	// Check that USE from main file is applied after source
+	if len(cfg.MakeConf.USE) != 2 || cfg.MakeConf.USE[0] != "ssl" {
+		t.Errorf("USE = %v, want [ssl -debug]", cfg.MakeConf.USE)
+	}
+}
+
+// TestSourceDirective_DotSyntax tests the ". /path" syntax for sourcing files.
+func TestSourceDirective_DotSyntax(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create sourced file
+	sourcedPath := filepath.Join(tmpDir, "custom.conf")
+	sourcedContent := `MY_VAR="dot_syntax_works"
+`
+	if err := os.WriteFile(sourcedPath, []byte(sourcedContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create main make.conf with dot syntax
+	makeConfPath := filepath.Join(tmpDir, "make.conf")
+	mainContent := `. ` + sourcedPath + `
+`
+	if err := os.WriteFile(makeConfPath, []byte(mainContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+
+	if cfg.GetVariable("MY_VAR") != "dot_syntax_works" {
+		t.Errorf("MY_VAR = %q, want %q", cfg.GetVariable("MY_VAR"), "dot_syntax_works")
+	}
+}
+
+// TestSourceDirective_CircularPrevention tests that circular source references are handled.
+func TestSourceDirective_CircularPrevention(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create file A that sources B
+	fileA := filepath.Join(tmpDir, "make.conf")
+	fileB := filepath.Join(tmpDir, "b.conf")
+
+	// A sources B, B sources A (circular)
+	contentA := `VAR_A="from_a"
+source ` + fileB + `
+`
+	contentB := `VAR_B="from_b"
+source ` + fileA + `
+`
+	if err := os.WriteFile(fileA, []byte(contentA), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fileB, []byte(contentB), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Should not hang or crash
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+
+	// Both variables should be set
+	if cfg.GetVariable("VAR_A") != "from_a" {
+		t.Errorf("VAR_A = %q, want %q", cfg.GetVariable("VAR_A"), "from_a")
+	}
+	if cfg.GetVariable("VAR_B") != "from_b" {
+		t.Errorf("VAR_B = %q, want %q", cfg.GetVariable("VAR_B"), "from_b")
+	}
+}
+
+// TestSourceDirective_NonExistent tests sourcing non-existent file (should not fail).
+func TestSourceDirective_NonExistent(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	makeConfPath := filepath.Join(tmpDir, "make.conf")
+	content := `CFLAGS="-O2"
+source /nonexistent/file.conf
+MAKEOPTS="-j4"
+`
+	if err := os.WriteFile(makeConfPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+
+	// Should continue processing after failed source
+	if cfg.MakeConf.CFLAGS != "-O2" {
+		t.Errorf("CFLAGS = %q, want %q", cfg.MakeConf.CFLAGS, "-O2")
+	}
+	if cfg.MakeConf.MAKEOPTS != "-j4" {
+		t.Errorf("MAKEOPTS = %q, want %q", cfg.MakeConf.MAKEOPTS, "-j4")
+	}
+}
+
+// TestSourceDirective_VarInPath tests variable expansion in source path.
+func TestSourceDirective_VarInPath(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create config directory
+	configDir := filepath.Join(tmpDir, "config")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create sourced file
+	sourcedPath := filepath.Join(configDir, "extra.conf")
+	sourcedContent := `EXTRA_VAR="sourced_via_variable"
+`
+	if err := os.WriteFile(sourcedPath, []byte(sourcedContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create main make.conf that defines CONFIG_DIR and sources using it
+	makeConfPath := filepath.Join(tmpDir, "make.conf")
+	mainContent := `CONFIG_DIR="` + configDir + `"
+source ${CONFIG_DIR}/extra.conf
+`
+	if err := os.WriteFile(makeConfPath, []byte(mainContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+
+	if cfg.GetVariable("EXTRA_VAR") != "sourced_via_variable" {
+		t.Errorf("EXTRA_VAR = %q, want %q", cfg.GetVariable("EXTRA_VAR"), "sourced_via_variable")
+	}
+}
+
+// TestGetVariable tests the GetVariable method.
+func TestGetVariable(t *testing.T) {
+	tests := []struct {
+		name     string
+		cfg      *Config
+		varName  string
+		expected string
+	}{
+		{
+			name:     "nil MakeConf",
+			cfg:      &Config{MakeConf: nil},
+			varName:  "CFLAGS",
+			expected: "",
+		},
+		{
+			name:     "nil Variables map",
+			cfg:      &Config{MakeConf: &MakeConf{Variables: nil}},
+			varName:  "CFLAGS",
+			expected: "",
+		},
+		{
+			name: "existing variable",
+			cfg: &Config{
+				MakeConf: &MakeConf{
+					Variables: map[string]string{"CFLAGS": "-O2", "CUSTOM": "value"},
+				},
+			},
+			varName:  "CFLAGS",
+			expected: "-O2",
+		},
+		{
+			name: "custom variable",
+			cfg: &Config{
+				MakeConf: &MakeConf{
+					Variables: map[string]string{"MY_CUSTOM_VAR": "custom_value"},
+				},
+			},
+			varName:  "MY_CUSTOM_VAR",
+			expected: "custom_value",
+		},
+		{
+			name: "non-existent variable",
+			cfg: &Config{
+				MakeConf: &MakeConf{
+					Variables: map[string]string{"OTHER": "val"},
+				},
+			},
+			varName:  "DOES_NOT_EXIST",
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tt.cfg.GetVariable(tt.varName)
+			if result != tt.expected {
+				t.Errorf("GetVariable(%q) = %q, want %q", tt.varName, result, tt.expected)
+			}
+		})
+	}
+}
+
+// TestVariablesMap_Initialization tests that Variables map is initialized correctly.
+func TestVariablesMap_Initialization(t *testing.T) {
+	mc := DefaultMakeConf()
+
+	// Check that Variables map is initialized
+	if mc.Variables == nil {
+		t.Fatal("Variables map should be initialized")
+	}
+
+	// Check that default values are in Variables map
+	expectedVars := map[string]string{
+		"CFLAGS":         "-O2 -pipe",
+		"CXXFLAGS":       "${CFLAGS}",
+		"LDFLAGS":        "",
+		"MAKEOPTS":       "-j1",
+		"PORTDIR":        "/var/db/repos/gentoo",
+		"DISTDIR":        "/var/cache/distfiles",
+		"PKGDIR":         "/var/cache/binpkgs",
+		"PORT_LOGDIR":    "/var/log/portage",
+		"PORTAGE_TMPDIR": "/var/tmp/portage",
+	}
+
+	for varName, expected := range expectedVars {
+		if mc.Variables[varName] != expected {
+			t.Errorf("Variables[%q] = %q, want %q", varName, mc.Variables[varName], expected)
+		}
+	}
+}
+
+// TestCXXFLAGS_Expansion tests that CXXFLAGS="${CFLAGS}" is expanded correctly.
+func TestCXXFLAGS_Expansion(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	makeConfPath := filepath.Join(tmpDir, "make.conf")
+	content := `CFLAGS="-O3 -march=native"
+CXXFLAGS="${CFLAGS}"
+`
+	if err := os.WriteFile(makeConfPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+
+	// CXXFLAGS should be expanded to CFLAGS value
+	if cfg.MakeConf.CXXFLAGS != "-O3 -march=native" {
+		t.Errorf("CXXFLAGS = %q, want %q (expanded from ${CFLAGS})", cfg.MakeConf.CXXFLAGS, "-O3 -march=native")
+	}
+
+	// Also check Variables map
+	if cfg.GetVariable("CXXFLAGS") != "-O3 -march=native" {
+		t.Errorf("GetVariable(CXXFLAGS) = %q, want %q", cfg.GetVariable("CXXFLAGS"), "-O3 -march=native")
+	}
+}
+
+// TestIsAlphaNumeric tests the isAlphaNumeric helper function.
+func TestIsAlphaNumeric(t *testing.T) {
+	tests := []struct {
+		char     byte
+		expected bool
+	}{
+		{'a', true},
+		{'z', true},
+		{'A', true},
+		{'Z', true},
+		{'0', true},
+		{'9', true},
+		{'_', true},
+		{'-', false},
+		{' ', false},
+		{'$', false},
+		{'{', false},
+		{'}', false},
+	}
+
+	for _, tt := range tests {
+		result := isAlphaNumeric(tt.char)
+		if result != tt.expected {
+			t.Errorf("isAlphaNumeric(%q) = %v, want %v", string(tt.char), result, tt.expected)
+		}
+	}
+}
+
+// TestGetMainRepoLocation_ReposConfFile tests repos.conf as a single file.
+func TestGetMainRepoLocation_ReposConfFile(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create repos.conf as a single file
+	reposConfPath := filepath.Join(tmpDir, "repos.conf")
+	content := `[DEFAULT]
+main-repo = gentoo
+
+[gentoo]
+location = /custom/repos/gentoo
+`
+	if err := os.WriteFile(reposConfPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+
+	loc := cfg.GetMainRepoLocation()
+	if loc != "/custom/repos/gentoo" {
+		t.Errorf("GetMainRepoLocation() = %q, want %q", loc, "/custom/repos/gentoo")
+	}
+}
+
+// TestGetMainRepoLocation_ReposConfDirectory tests repos.conf as a directory.
+func TestGetMainRepoLocation_ReposConfDirectory(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create repos.conf as a directory
+	reposConfDir := filepath.Join(tmpDir, "repos.conf")
+	if err := os.MkdirAll(reposConfDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create gentoo.conf
+	gentooConf := filepath.Join(reposConfDir, "gentoo.conf")
+	gentooContent := `[DEFAULT]
+main-repo = myrepo
+
+[myrepo]
+location = /my/custom/repo
+`
+	if err := os.WriteFile(gentooConf, []byte(gentooContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+
+	loc := cfg.GetMainRepoLocation()
+	if loc != "/my/custom/repo" {
+		t.Errorf("GetMainRepoLocation() = %q, want %q", loc, "/my/custom/repo")
+	}
+}
+
+// TestGetMainRepoLocation_FallbackToPortdir tests fallback to PORTDIR from make.conf.
+func TestGetMainRepoLocation_FallbackToPortdir(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create make.conf with PORTDIR (no repos.conf)
+	makeConfPath := filepath.Join(tmpDir, "make.conf")
+	content := `PORTDIR="/usr/portage"
+`
+	if err := os.WriteFile(makeConfPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+
+	loc := cfg.GetMainRepoLocation()
+	if loc != "/usr/portage" {
+		t.Errorf("GetMainRepoLocation() = %q, want %q (PORTDIR fallback)", loc, "/usr/portage")
+	}
+}
+
+// TestGetMainRepoLocation_DefaultGentoo tests that main-repo defaults to "gentoo".
+func TestGetMainRepoLocation_DefaultGentoo(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create repos.conf without [DEFAULT] main-repo
+	reposConfPath := filepath.Join(tmpDir, "repos.conf")
+	content := `[gentoo]
+location = /default/gentoo/path
+`
+	if err := os.WriteFile(reposConfPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+
+	loc := cfg.GetMainRepoLocation()
+	if loc != "/default/gentoo/path" {
+		t.Errorf("GetMainRepoLocation() = %q, want %q", loc, "/default/gentoo/path")
+	}
+}
+
+// TestGetMainRepoLocation_MultipleFilesInDir tests reading multiple files in repos.conf dir.
+func TestGetMainRepoLocation_MultipleFilesInDir(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create repos.conf as a directory
+	reposConfDir := filepath.Join(tmpDir, "repos.conf")
+	if err := os.MkdirAll(reposConfDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create 00-default.conf with DEFAULT section
+	defaultConf := filepath.Join(reposConfDir, "00-default.conf")
+	defaultContent := `[DEFAULT]
+main-repo = gentoo
+`
+	if err := os.WriteFile(defaultConf, []byte(defaultContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create 10-gentoo.conf with repo location
+	gentooConf := filepath.Join(reposConfDir, "10-gentoo.conf")
+	gentooContent := `[gentoo]
+location = /split/gentoo/location
+`
+	if err := os.WriteFile(gentooConf, []byte(gentooContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+
+	loc := cfg.GetMainRepoLocation()
+	if loc != "/split/gentoo/location" {
+		t.Errorf("GetMainRepoLocation() = %q, want %q", loc, "/split/gentoo/location")
+	}
+}
+
+// TestGetMainRepoLocation_ReposConfOverridesPortdir tests repos.conf takes precedence over PORTDIR.
+func TestGetMainRepoLocation_ReposConfOverridesPortdir(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create make.conf with PORTDIR
+	makeConfPath := filepath.Join(tmpDir, "make.conf")
+	makeContent := `PORTDIR="/from/makeconf"
+`
+	if err := os.WriteFile(makeConfPath, []byte(makeContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create repos.conf with different location
+	reposConfPath := filepath.Join(tmpDir, "repos.conf")
+	reposContent := `[DEFAULT]
+main-repo = gentoo
+
+[gentoo]
+location = /from/reposconf
+`
+	if err := os.WriteFile(reposConfPath, []byte(reposContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+
+	loc := cfg.GetMainRepoLocation()
+	// repos.conf should take precedence
+	if loc != "/from/reposconf" {
+		t.Errorf("GetMainRepoLocation() = %q, want %q (repos.conf should override PORTDIR)", loc, "/from/reposconf")
+	}
+}
+
+// TestGetPackageUSEForPackage_BasicPatterns tests basic pattern matching for package.use.
+func TestGetPackageUSEForPackage_BasicPatterns(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create package.use with various patterns
+	packageUsePath := filepath.Join(tmpDir, "package.use")
+	content := `# Test patterns
+app-misc/hello unicode
+sys-libs/zlib ssl -debug
+`
+	if err := os.WriteFile(packageUsePath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+
+	// Test basic category/package match
+	flags := cfg.GetPackageUSEForPackage("app-misc", "hello", "2.10", "0")
+	if len(flags) != 1 || flags[0] != "unicode" {
+		t.Errorf("GetPackageUSEForPackage(app-misc/hello) = %v, want [unicode]", flags)
+	}
+
+	// Test package with negative flag
+	flags = cfg.GetPackageUSEForPackage("sys-libs", "zlib", "1.2.13", "0")
+	if len(flags) != 2 {
+		t.Errorf("GetPackageUSEForPackage(sys-libs/zlib) = %v, want 2 flags", flags)
+	}
+
+	// Test non-matching package
+	flags = cfg.GetPackageUSEForPackage("dev-libs", "openssl", "3.0.0", "0")
+	if flags != nil {
+		t.Errorf("GetPackageUSEForPackage(non-matching) = %v, want nil", flags)
+	}
+}
+
+// TestGetPackageUSEForPackage_WildcardPatterns tests wildcard pattern matching.
+func TestGetPackageUSEForPackage_WildcardPatterns(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	packageUsePath := filepath.Join(tmpDir, "package.use")
+	content := `# Wildcard patterns
+*/* -bluetooth
+app-misc/* unicode
+dev-*/* debug
+`
+	if err := os.WriteFile(packageUsePath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+
+	// Test */* matches all
+	flags := cfg.GetPackageUSEForPackage("sys-libs", "zlib", "1.2.13", "0")
+	if len(flags) != 1 || flags[0] != "-bluetooth" {
+		t.Errorf("*/* should match sys-libs/zlib: got %v", flags)
+	}
+
+	// Test app-misc/* matches app-misc/hello
+	flags = cfg.GetPackageUSEForPackage("app-misc", "hello", "2.10", "0")
+	// Should have unicode (more specific) and -bluetooth (from */*)
+	// unicode is more specific than -bluetooth
+	found := make(map[string]bool)
+	for _, f := range flags {
+		found[f] = true
+	}
+	if !found["unicode"] {
+		t.Errorf("app-misc/* should provide unicode: got %v", flags)
+	}
+	if !found["-bluetooth"] {
+		t.Errorf("*/* should provide -bluetooth: got %v", flags)
+	}
+
+	// Test dev-*/* matches dev-libs/openssl
+	flags = cfg.GetPackageUSEForPackage("dev-libs", "openssl", "3.0.0", "0")
+	found = make(map[string]bool)
+	for _, f := range flags {
+		found[f] = true
+	}
+	if !found["debug"] {
+		t.Errorf("dev-*/* should provide debug: got %v", flags)
+	}
+	if !found["-bluetooth"] {
+		t.Errorf("*/* should provide -bluetooth: got %v", flags)
+	}
+}
+
+// TestGetPackageUSEForPackage_VersionConstraints tests version-based pattern matching.
+func TestGetPackageUSEForPackage_VersionConstraints(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	packageUsePath := filepath.Join(tmpDir, "package.use")
+	content := `# Version constraints
+>=app-misc/hello-2.0 ssl
+<app-misc/hello-3.0 -debug
+=app-misc/hello-2.10 test
+`
+	if err := os.WriteFile(packageUsePath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+
+	// Version 2.10 should match all three patterns
+	flags := cfg.GetPackageUSEForPackage("app-misc", "hello", "2.10", "0")
+	found := make(map[string]bool)
+	for _, f := range flags {
+		found[f] = true
+	}
+
+	// =cpv is most specific, should have test
+	if !found["test"] {
+		t.Errorf("=app-misc/hello-2.10 should provide test: got %v", flags)
+	}
+	// >=cpv should provide ssl
+	if !found["ssl"] {
+		t.Errorf(">=app-misc/hello-2.0 should provide ssl: got %v", flags)
+	}
+	// <cpv should provide -debug
+	if !found["-debug"] {
+		t.Errorf("<app-misc/hello-3.0 should provide -debug: got %v", flags)
+	}
+
+	// Version 1.0 should NOT match >=2.0
+	flags = cfg.GetPackageUSEForPackage("app-misc", "hello", "1.0", "0")
+	found = make(map[string]bool)
+	for _, f := range flags {
+		found[f] = true
+	}
+	if found["ssl"] {
+		t.Errorf(">=app-misc/hello-2.0 should NOT match v1.0: got %v", flags)
+	}
+	// But should match <3.0
+	if !found["-debug"] {
+		t.Errorf("<app-misc/hello-3.0 should match v1.0: got %v", flags)
+	}
+
+	// Version 4.0 should NOT match <3.0
+	flags = cfg.GetPackageUSEForPackage("app-misc", "hello", "4.0", "0")
+	found = make(map[string]bool)
+	for _, f := range flags {
+		found[f] = true
+	}
+	if found["-debug"] {
+		t.Errorf("<app-misc/hello-3.0 should NOT match v4.0: got %v", flags)
+	}
+}
+
+// TestGetPackageUSEForPackage_PriorityOverride tests that specific patterns override general ones.
+func TestGetPackageUSEForPackage_PriorityOverride(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	packageUsePath := filepath.Join(tmpDir, "package.use")
+	content := `# Priority: specific overrides general
+*/* -ssl
+app-misc/hello ssl
+`
+	if err := os.WriteFile(packageUsePath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+
+	// app-misc/hello should have ssl (cp is more specific than wildcard)
+	flags := cfg.GetPackageUSEForPackage("app-misc", "hello", "2.10", "0")
+
+	// Check that ssl is enabled (not -ssl)
+	for _, f := range flags {
+		if f == "-ssl" {
+			t.Errorf("More specific app-misc/hello ssl should override */* -ssl: got %v", flags)
+		}
+	}
+
+	found := false
+	for _, f := range flags {
+		if f == "ssl" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("Expected ssl from app-misc/hello: got %v", flags)
+	}
+
+	// sys-libs/zlib should have -ssl from wildcard
+	flags = cfg.GetPackageUSEForPackage("sys-libs", "zlib", "1.2.13", "0")
+	found = false
+	for _, f := range flags {
+		if f == "-ssl" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("Expected -ssl from */* for sys-libs/zlib: got %v", flags)
+	}
+}
+
+// TestGetPackageUSEForPackage_SlotConstraints tests slot-based matching.
+func TestGetPackageUSEForPackage_SlotConstraints(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	packageUsePath := filepath.Join(tmpDir, "package.use")
+	content := `# Slot constraints
+dev-lang/python:3.11 tk
+dev-lang/python:3.12 -tk ssl
+dev-lang/python gdbm
+`
+	if err := os.WriteFile(packageUsePath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+
+	// Python 3.11 slot should have tk (slot-specific) and gdbm (cp)
+	flags := cfg.GetPackageUSEForPackage("dev-lang", "python", "3.11.0", "3.11")
+	found := make(map[string]bool)
+	for _, f := range flags {
+		found[f] = true
+	}
+	if !found["tk"] {
+		t.Errorf("python:3.11 should have tk: got %v", flags)
+	}
+	if !found["gdbm"] {
+		t.Errorf("python should have gdbm: got %v", flags)
+	}
+
+	// Python 3.12 slot should have -tk, ssl, and gdbm
+	flags = cfg.GetPackageUSEForPackage("dev-lang", "python", "3.12.0", "3.12")
+	found = make(map[string]bool)
+	for _, f := range flags {
+		found[f] = true
+	}
+	if !found["-tk"] {
+		t.Errorf("python:3.12 should have -tk: got %v", flags)
+	}
+	if !found["ssl"] {
+		t.Errorf("python:3.12 should have ssl: got %v", flags)
+	}
+	if !found["gdbm"] {
+		t.Errorf("python should have gdbm: got %v", flags)
+	}
+}
+
+// TestGetPackageUSEForPackage_USEExpand tests USE_EXPAND syntax.
+func TestGetPackageUSEForPackage_USEExpand(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	packageUsePath := filepath.Join(tmpDir, "package.use")
+	content := `# USE_EXPAND syntax
+*/* CPU_FLAGS_X86: avx2 sse4_2
+dev-lang/python PYTHON_TARGETS: python3_11 python3_12
+`
+	if err := os.WriteFile(packageUsePath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+
+	// Any package should have CPU_FLAGS_X86 expanded
+	flags := cfg.GetPackageUSEForPackage("app-misc", "hello", "2.10", "0")
+	found := make(map[string]bool)
+	for _, f := range flags {
+		found[f] = true
+	}
+	if !found["cpu_flags_x86_avx2"] {
+		t.Errorf("Expected cpu_flags_x86_avx2 from USE_EXPAND: got %v", flags)
+	}
+	if !found["cpu_flags_x86_sse4_2"] {
+		t.Errorf("Expected cpu_flags_x86_sse4_2 from USE_EXPAND: got %v", flags)
+	}
+
+	// Python should have both CPU_FLAGS and PYTHON_TARGETS expanded
+	flags = cfg.GetPackageUSEForPackage("dev-lang", "python", "3.11.0", "3.11")
+	found = make(map[string]bool)
+	for _, f := range flags {
+		found[f] = true
+	}
+	if !found["python_targets_python3_11"] {
+		t.Errorf("Expected python_targets_python3_11 from USE_EXPAND: got %v", flags)
+	}
+	if !found["python_targets_python3_12"] {
+		t.Errorf("Expected python_targets_python3_12 from USE_EXPAND: got %v", flags)
+	}
+	if !found["cpu_flags_x86_avx2"] {
+		t.Errorf("Expected cpu_flags_x86_avx2 from */* USE_EXPAND: got %v", flags)
+	}
+}
+
+// TestGetPackageUSEForPackage_RevisionOperator tests the ~ (any revision) operator.
+func TestGetPackageUSEForPackage_RevisionOperator(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	packageUsePath := filepath.Join(tmpDir, "package.use")
+	content := `# Revision operator
+~app-misc/hello-2.10 test
+`
+	if err := os.WriteFile(packageUsePath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+
+	// Base version should match
+	flags := cfg.GetPackageUSEForPackage("app-misc", "hello", "2.10", "0")
+	if len(flags) != 1 || flags[0] != "test" {
+		t.Errorf("~app-misc/hello-2.10 should match v2.10: got %v", flags)
+	}
+
+	// Version with revision should match
+	flags = cfg.GetPackageUSEForPackage("app-misc", "hello", "2.10-r1", "0")
+	if len(flags) != 1 || flags[0] != "test" {
+		t.Errorf("~app-misc/hello-2.10 should match v2.10-r1: got %v", flags)
+	}
+
+	// Different base version should NOT match
+	flags = cfg.GetPackageUSEForPackage("app-misc", "hello", "2.11", "0")
+	if len(flags) != 0 {
+		t.Errorf("~app-misc/hello-2.10 should NOT match v2.11: got %v", flags)
+	}
+}
+
+// TestGetPackageUSEForPackage_VersionPrefixOperator tests the =* (version prefix) operator.
+func TestGetPackageUSEForPackage_VersionPrefixOperator(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	packageUsePath := filepath.Join(tmpDir, "package.use")
+	content := `# Version prefix operator
+=app-misc/hello-2* ssl
+=app-misc/hello-2.10* debug
+`
+	if err := os.WriteFile(packageUsePath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+
+	// 2.10 matches both =2* and =2.10*
+	flags := cfg.GetPackageUSEForPackage("app-misc", "hello", "2.10", "0")
+	found := make(map[string]bool)
+	for _, f := range flags {
+		found[f] = true
+	}
+	if !found["ssl"] {
+		t.Errorf("=app-misc/hello-2* should match v2.10: got %v", flags)
+	}
+	if !found["debug"] {
+		t.Errorf("=app-misc/hello-2.10* should match v2.10: got %v", flags)
+	}
+
+	// 2.10.1 matches both
+	flags = cfg.GetPackageUSEForPackage("app-misc", "hello", "2.10.1", "0")
+	found = make(map[string]bool)
+	for _, f := range flags {
+		found[f] = true
+	}
+	if !found["ssl"] {
+		t.Errorf("=app-misc/hello-2* should match v2.10.1: got %v", flags)
+	}
+	if !found["debug"] {
+		t.Errorf("=app-misc/hello-2.10* should match v2.10.1: got %v", flags)
+	}
+
+	// 3.0 should NOT match =2*
+	flags = cfg.GetPackageUSEForPackage("app-misc", "hello", "3.0", "0")
+	if len(flags) != 0 {
+		t.Errorf("=app-misc/hello-2* should NOT match v3.0: got %v", flags)
+	}
+}
+
+// TestGetPackageUSEForPackage_EmptyConfig tests with no package.use file.
+func TestGetPackageUSEForPackage_EmptyConfig(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+
+	flags := cfg.GetPackageUSEForPackage("app-misc", "hello", "2.10", "0")
+	if flags != nil {
+		t.Errorf("Empty config should return nil: got %v", flags)
+	}
+}
+
+// TestGetPackageUSEForPackage_Directory tests loading from package.use directory.
+func TestGetPackageUSEForPackage_Directory(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create package.use as a directory
+	packageUseDir := filepath.Join(tmpDir, "package.use")
+	if err := os.MkdirAll(packageUseDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create multiple files
+	file1 := filepath.Join(packageUseDir, "10-global")
+	file1Content := `*/* -bluetooth
+`
+	if err := os.WriteFile(file1, []byte(file1Content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	file2 := filepath.Join(packageUseDir, "20-specific")
+	file2Content := `app-misc/hello ssl unicode
+`
+	if err := os.WriteFile(file2, []byte(file2Content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+
+	// hello should have ssl, unicode (from 20-specific) and -bluetooth (from 10-global)
+	flags := cfg.GetPackageUSEForPackage("app-misc", "hello", "2.10", "0")
+	found := make(map[string]bool)
+	for _, f := range flags {
+		found[f] = true
+	}
+	if !found["ssl"] {
+		t.Errorf("Expected ssl from 20-specific: got %v", flags)
+	}
+	if !found["unicode"] {
+		t.Errorf("Expected unicode from 20-specific: got %v", flags)
+	}
+	if !found["-bluetooth"] {
+		t.Errorf("Expected -bluetooth from 10-global: got %v", flags)
+	}
+}
+
+// BenchmarkGetPackageUSEForPackage benchmarks pattern matching performance.
+func BenchmarkGetPackageUSEForPackage(b *testing.B) {
+	tmpDir := b.TempDir()
+
+	// Create package.use with many patterns
+	var content strings.Builder
+	content.WriteString("*/* -bluetooth\n")
+	content.WriteString("app-*/* unicode\n")
+	content.WriteString("dev-*/* debug\n")
+	content.WriteString("sys-libs/* hardened\n")
+	for i := 0; i < 100; i++ {
+		content.WriteString(fmt.Sprintf("app-misc/pkg%d ssl\n", i))
+	}
+	content.WriteString("app-misc/hello test\n")
+	content.WriteString(">=app-misc/hello-2.0 ssl\n")
+	content.WriteString("=app-misc/hello-2.10 specific\n")
+
+	packageUsePath := filepath.Join(tmpDir, "package.use")
+	if err := os.WriteFile(packageUsePath, []byte(content.String()), 0644); err != nil {
+		b.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		b.Fatalf("LoadConfig() failed: %v", err)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = cfg.GetPackageUSEForPackage("app-misc", "hello", "2.10", "0")
 	}
 }
