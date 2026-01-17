@@ -16,7 +16,6 @@ Repository: https://github.com/gentoo/portage
 Branch:     master
 Commit:     [`f41f766f3e`](https://github.com/gentoo/portage/commit/f41f766f3e1d0c60c34e4cb6a9e6b06c67d18fe1)
 Date:       2026-01-14
-Local Copy: D:\projects\grpmsoft\reference\portage
 
 ### Gentoo Repository (Ebuilds)
 Repository: https://github.com/gentoo/gentoo
