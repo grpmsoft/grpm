@@ -208,6 +208,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidelines and [AGENTS.md
 - ✅ Dynamic make.conf parsing with variable expansion
 - ✅ repos.conf support with Portage fallback chain
 - ✅ package.use pattern matching with atom specificity
+- ✅ package.mask filtering in solver (masked packages excluded)
 
 **v1.0.0** — Production ready after community validation (no fixed date).
 

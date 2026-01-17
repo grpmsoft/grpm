@@ -1,18 +1,12 @@
 # GRPM Roadmap
 
-> **Configuration Management Release (v0.8.0)**
+> **Package Mask Filtering Release (v0.8.1)**
 >
 > Rapid development complete (v0.1.0 → v0.5.0).
 > Infrastructure release complete (v0.6.0).
-> Portage-style logging (v0.7.0) + compatibility fixes (v0.7.2 → v0.7.4).
-> Build reliability and output quality improvements (v0.7.5).
-> Critical version selection bug fix + emerge flags (v0.7.6).
-> Professional E2E test suite with CI integration (v0.7.7).
-> `--root` flag for chroot/stage tarball builds (v0.7.8).
-> Versioned atom support: `=pkg-1.0`, `>=pkg-2.0` (v0.7.9).
-> `--onlydeps` flag for Docker layer caching (v0.7.10).
-> Security fix: Path traversal prevention (v0.7.11).
-> **Dynamic make.conf, repos.conf, and package.use pattern matching (v0.8.0).**
+> Build quality and security fixes (v0.7.x).
+> Configuration management (v0.8.0).
+> **Solver now respects package.mask — masked packages excluded from resolution (v0.8.1).**
 > **98.2% tree coverage verified on real Gentoo!**
 
 ---
@@ -74,7 +68,15 @@ Key insight: **Eclasses don't need Go implementations.** They are loaded dynamic
 
 ## Release History
 
-### v0.8.0 — Configuration Management (Current)
+### v0.8.1 — Package Mask Filtering (Current)
+
+**Solver respects package.mask** ([#46](https://github.com/grpmsoft/grpm/issues/46)):
+
+- **MaskManager** — Loads masks from repo, profile cascade, and user config
+- **Solver integration** — Masked packages automatically excluded from candidates
+- **User unmask** — `/etc/portage/package.unmask` overrides all masks
+
+### v0.8.0 — Configuration Management
 
 **Full Portage configuration compatibility** ([#40](https://github.com/grpmsoft/grpm/issues/40), [#41](https://github.com/grpmsoft/grpm/issues/41), [#42](https://github.com/grpmsoft/grpm/issues/42)):
 

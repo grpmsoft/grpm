@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -17,6 +18,19 @@ import (
 	"github.com/grpmsoft/grpm/internal/repo"
 	"google.golang.org/grpc"
 )
+
+// isClosedConnError returns true if the error is a benign "use of closed network connection"
+// error that occurs during normal shutdown. These errors are expected and should be ignored.
+func isClosedConnError(err error) bool {
+	if err == nil {
+		return false
+	}
+	// Check for common closed connection error messages
+	errStr := err.Error()
+	return strings.Contains(errStr, "use of closed network connection") ||
+		strings.Contains(errStr, "server closed") ||
+		errors.Is(err, net.ErrClosed)
+}
 
 // Daemon represents the GRPM daemon service
 type Daemon struct {
@@ -274,6 +288,10 @@ func (d *Daemon) Stop(ctx context.Context) error {
 	d.setState(StateStopped)
 	log.Printf("GRPM daemon stopped")
 
+	// Ignore benign "closed connection" errors that occur during normal shutdown
+	if isClosedConnError(restErr) {
+		return nil
+	}
 	return restErr
 }
 

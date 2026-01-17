@@ -5,6 +5,23 @@ All notable changes to GRPM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1] - 2026-01-17
+
+### Package Mask Filtering
+
+Solver now respects `package.mask` — masked packages are excluded from dependency resolution ([#46](https://github.com/grpmsoft/grpm/issues/46)).
+
+### Added
+- **MaskManager** (`internal/mask/`) — Manages masks from multiple sources with proper priority
+- **Multi-source mask loading** — Repository `profiles/package.mask`, profile cascade, user `/etc/portage/package.mask`
+- **User unmask support** — `/etc/portage/package.unmask` overrides all masks
+- **Solver integration** — Masked packages automatically filtered during dependency resolution
+
+### Fixed
+- **gcc-16 selection bug** — Solver no longer selects masked packages like `gcc-16.0.9999` when requesting `gcc-13.x`
+
+---
+
 ## [0.8.0] - 2026-01-17
 
 ### Configuration Management Release

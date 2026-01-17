@@ -40,6 +40,9 @@ type Config struct {
 	// PackageMask contains masked packages
 	PackageMask []string
 
+	// PackageUnmask contains unmasked packages (overrides masks)
+	PackageUnmask []string
+
 	// PackageAcceptKeywords contains keyword overrides
 	PackageAcceptKeywords map[string][]string
 
@@ -145,6 +148,7 @@ func LoadConfig(root string) (*Config, error) {
 		PackageUSE:            make(map[string][]string),
 		packageUSEEntries:     make([]packageUSEEntry, 0),
 		PackageMask:           make([]string, 0),
+		PackageUnmask:         make([]string, 0),
 		PackageAcceptKeywords: make(map[string][]string),
 		PackageLicense:        make(map[string][]string),
 	}
@@ -164,6 +168,11 @@ func LoadConfig(root string) (*Config, error) {
 	// Load package.mask
 	if err := cfg.loadPackageMask(); err != nil && !os.IsNotExist(err) {
 		fmt.Printf("Warning: failed to load package.mask: %v\n", err)
+	}
+
+	// Load package.unmask
+	if err := cfg.loadPackageUnmask(); err != nil && !os.IsNotExist(err) {
+		fmt.Printf("Warning: failed to load package.unmask: %v\n", err)
 	}
 
 	// Load package.accept_keywords
@@ -476,6 +485,24 @@ func (c *Config) loadPackageMask() error {
 		lines = []string{} // Ensure non-nil slice
 	}
 	c.PackageMask = lines
+	return nil
+}
+
+// loadPackageUnmask loads package.unmask file or directory.
+// In EAPI 7+, package.unmask can be a directory containing multiple files.
+// Unmasks override masks - if a package is unmasked, it will not be filtered.
+func (c *Config) loadPackageUnmask() error {
+	path := filepath.Join(c.Root, "package.unmask")
+
+	lines, err := readPortageConfigPath(path)
+	if err != nil {
+		return err
+	}
+
+	if lines == nil {
+		lines = []string{} // Ensure non-nil slice
+	}
+	c.PackageUnmask = lines
 	return nil
 }
 
