@@ -7,6 +7,7 @@ import (
 
 	"github.com/grpmsoft/grpm/internal/config"
 	"github.com/grpmsoft/grpm/internal/fetch"
+	"github.com/grpmsoft/grpm/internal/pkg"
 )
 
 func TestParseJobsFromMakeOpts(t *testing.T) {
@@ -265,4 +266,110 @@ func TestParallelBuildOptionsRoot(t *testing.T) {
 			t.Errorf("Expected root /, got %s", opts.root)
 		}
 	})
+}
+
+func TestFilterTargetPackages(t *testing.T) {
+	app := &App{verbose: false}
+
+	// Create test packages
+	hello := pkg.NewPackage("app-misc/hello", "2.10", "0")
+	zlib := pkg.NewPackage("sys-libs/zlib", "1.3", "0")
+	gcc := pkg.NewPackage("sys-devel/gcc", "13.4.1_p20250807", "13")
+
+	tests := []struct {
+		name             string
+		solution         map[string]*pkg.Package
+		packages         []string
+		wantLen          int
+		shouldBeFiltered []string
+		shouldRemain     []string
+	}{
+		{
+			name: "filter simple package name",
+			solution: map[string]*pkg.Package{
+				"app-misc/hello": hello,
+				"sys-libs/zlib":  zlib,
+			},
+			packages:         []string{"app-misc/hello"},
+			wantLen:          1,
+			shouldBeFiltered: []string{"app-misc/hello"},
+			shouldRemain:     []string{"sys-libs/zlib"},
+		},
+		{
+			name: "filter versioned atom",
+			solution: map[string]*pkg.Package{
+				"sys-devel/gcc": gcc,
+				"sys-libs/zlib": zlib,
+			},
+			packages:         []string{"=sys-devel/gcc-13.4.1_p20250807"},
+			wantLen:          1,
+			shouldBeFiltered: []string{"sys-devel/gcc"},
+			shouldRemain:     []string{"sys-libs/zlib"},
+		},
+		{
+			name: "filter multiple packages",
+			solution: map[string]*pkg.Package{
+				"app-misc/hello": hello,
+				"sys-libs/zlib":  zlib,
+				"sys-devel/gcc":  gcc,
+			},
+			packages:         []string{"app-misc/hello", "sys-devel/gcc"},
+			wantLen:          1,
+			shouldBeFiltered: []string{"app-misc/hello", "sys-devel/gcc"},
+			shouldRemain:     []string{"sys-libs/zlib"},
+		},
+		{
+			name: "filter with >= operator",
+			solution: map[string]*pkg.Package{
+				"sys-devel/gcc": gcc,
+				"sys-libs/zlib": zlib,
+			},
+			packages:         []string{">=sys-devel/gcc-13.0.0"},
+			wantLen:          1,
+			shouldBeFiltered: []string{"sys-devel/gcc"},
+			shouldRemain:     []string{"sys-libs/zlib"},
+		},
+		{
+			name: "all packages filtered",
+			solution: map[string]*pkg.Package{
+				"app-misc/hello": hello,
+			},
+			packages:         []string{"app-misc/hello"},
+			wantLen:          0,
+			shouldBeFiltered: []string{"app-misc/hello"},
+			shouldRemain:     []string{},
+		},
+		{
+			name: "no packages filtered (target not in solution)",
+			solution: map[string]*pkg.Package{
+				"sys-libs/zlib": zlib,
+			},
+			packages:         []string{"app-misc/hello"},
+			wantLen:          1,
+			shouldBeFiltered: []string{},
+			shouldRemain:     []string{"sys-libs/zlib"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := app.filterTargetPackages(tt.solution, tt.packages)
+
+			if len(result) != tt.wantLen {
+				t.Errorf("filterTargetPackages() returned %d packages, want %d", len(result), tt.wantLen)
+			}
+
+			for _, name := range tt.shouldBeFiltered {
+				if _, exists := result[name]; exists {
+					t.Errorf("filterTargetPackages() should have filtered %s, but it remains", name)
+				}
+			}
+
+			for _, name := range tt.shouldRemain {
+				if _, exists := result[name]; !exists {
+					t.Errorf("filterTargetPackages() should have kept %s, but it was filtered", name)
+				}
+			}
+		})
+	}
 }
