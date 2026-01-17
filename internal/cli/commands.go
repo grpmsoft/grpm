@@ -14,9 +14,12 @@ import (
 
 // runSearch handles the 'search' command
 func (a *App) runSearch(args []string) error {
+	// Load Portage configuration for default paths
+	cfg := a.loadPortageConfig()
+
 	// Parse flags
 	fs := flag.NewFlagSet("search", flag.ContinueOnError)
-	repoPath := fs.String("repo", "/var/db/repos/gentoo", "Path to Portage repository")
+	repoPath := fs.String("repo", cfg.GetPortDir(), "Path to Portage repository")
 	useMock := fs.Bool("mock", false, "Use mock repository for testing")
 	description := fs.Bool("desc", false, "Search in descriptions too")
 	fs.BoolVar(description, "S", false, "Alias for --desc")
@@ -111,9 +114,12 @@ func (a *App) runSearch(args []string) error {
 
 // runInfo handles the 'info' command
 func (a *App) runInfo(args []string) error {
+	// Load Portage configuration for default paths
+	cfg := a.loadPortageConfig()
+
 	// Parse flags
 	fs := flag.NewFlagSet("info", flag.ContinueOnError)
-	repoPath := fs.String("repo", "/var/db/repos/gentoo", "Path to Portage repository")
+	repoPath := fs.String("repo", cfg.GetPortDir(), "Path to Portage repository")
 	useMock := fs.Bool("mock", false, "Use mock repository for testing")
 
 	if err := fs.Parse(args); err != nil {
@@ -197,9 +203,12 @@ func (a *App) runInfo(args []string) error {
 //   - --pretend/-p: Show what would be updated (dry-run)
 //   - --ask/-a: Ask for confirmation before updating
 func (a *App) runUpdate(args []string) error {
+	// Load Portage configuration for default paths
+	cfg := a.loadPortageConfig()
+
 	// Parse flags
 	fs := flag.NewFlagSet("update", flag.ContinueOnError)
-	repoPath := fs.String("repo", "/var/db/repos/gentoo", "Path to Portage repository")
+	repoPath := fs.String("repo", cfg.GetPortDir(), "Path to Portage repository")
 	useMock := fs.Bool("mock", false, "Use mock repository for testing")
 	pretend := fs.Bool("pretend", false, "Show what would be updated (dry-run)")
 	fs.BoolVar(pretend, "p", false, "Alias for --pretend")
