@@ -20,6 +20,10 @@ Critical fix for packages with dynamic SRC_URI generation ([#50](https://github.
 - **gcc distfile selection ([#50](https://github.com/grpmsoft/grpm/issues/50))** — `grpm fetch` now downloads only version-specific files (3 files) instead of ALL distfiles from Manifest (70+ files)
 - **Dynamic SRC_URI evaluation** — Packages using eclasses to generate SRC_URI (gcc, chromium, etc.) now work correctly
 - **Manifest filtering** — Only distfiles present in evaluated SRC_URI are included
+- **ver_cut version extraction** — PMS-compliant `ver_cut` implementation for correct SNAPSHOT calculation (e.g., `gcc-13-20250807` instead of broken `gcc-13.4.1_p20250807-20250807`)
+
+### Technical Notes
+- **mvdan.cc/sh workaround** — Custom `ver_cut` implementation uses indexed variables instead of array slicing due to bugs in mvdan.cc/sh interpreter (array slicing broken in subshells). See TODO in `internal/metadata/evaluator.go` for upstream issue tracking.
 
 ### Changed
 - `getDistfilesWithURIs()` now uses two-tier evaluation: interpreter first, regex fallback

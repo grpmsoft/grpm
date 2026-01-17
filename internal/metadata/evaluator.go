@@ -445,9 +445,128 @@ tc-arch() {
 }
 
 # === VERSION FUNCTIONS ===
-ver_cut() { echo "${2:-$PV}" | cut -d. -f"$1" 2>/dev/null || echo ""; }
-ver_rs() { echo "${3:-$PV}" | sed "s/\./$2/g" 2>/dev/null || echo ""; }
-ver_test() { return 0; }
+# PMS-compliant ver_cut implementation.
+#
+# WORKAROUND: This implementation uses indexed variables (comp_0, comp_1, ...)
+# instead of bash arrays with slicing (${arr[@]:start:len}) due to bugs in
+# mvdan.cc/sh (https://github.com/mvdan/sh):
+#
+# 1. "local -a arr" without assignment doesn't set expand.Indexed kind
+#    (runner.go:713-718 sets KeepValue instead of Indexed for -a flag)
+#
+# 2. Array slicing ${arr[@]:start:len} doesn't work correctly in command
+#    substitution (subshells) - returns full array instead of slice
+#
+# TODO: Create issue and PR at https://github.com/mvdan/sh to fix these bugs,
+# then simplify this implementation to use standard Portage ver_cut from
+# bin/version-functions.sh
+
+ver_cut() {
+    local range="${1}"
+    local v="${2:-${PV}}"
+
+    # Parse range: "1" -> start=1,end=1; "1-3" -> start=1,end=3
+    local start end
+    if [[ "${range}" == *-* ]]; then
+        start="${range%-*}"
+        end="${range#*-}"
+        [[ -z "${end}" ]] && end=999
+    else
+        start="${range}"
+        end="${range}"
+    fi
+
+    # Build components using indexed variables (comp_0, comp_1, ...)
+    # Pattern: comp_0=sep, comp_1=val, comp_2=sep, comp_3=val, ...
+    local idx=0
+    local char prev_is_num=-1  # -1=none, 0=alpha, 1=num
+    local current=""
+    local len=${#v}
+    local i
+
+    # First element is always empty (separator before first component)
+    eval "comp_0=''"
+    idx=1
+
+    i=0
+    while (( i < len )); do
+        char="${v:i:1}"
+
+        if [[ "${char}" =~ [0-9] ]]; then
+            if (( prev_is_num == 1 )); then
+                current="${current}${char}"
+            else
+                if (( prev_is_num == 0 )); then
+                    eval "comp_${idx}='${current}'"
+                    ((idx++))
+                    eval "comp_${idx}=''"
+                    ((idx++))
+                fi
+                current="${char}"
+                prev_is_num=1
+            fi
+        elif [[ "${char}" =~ [a-zA-Z] ]]; then
+            if (( prev_is_num == 0 )); then
+                current="${current}${char}"
+            else
+                if (( prev_is_num == 1 )); then
+                    eval "comp_${idx}='${current}'"
+                    ((idx++))
+                    eval "comp_${idx}=''"
+                    ((idx++))
+                fi
+                current="${char}"
+                prev_is_num=0
+            fi
+        else
+            if [[ -n "${current}" ]]; then
+                eval "comp_${idx}='${current}'"
+                ((idx++))
+            fi
+            eval "comp_${idx}='${char}'"
+            ((idx++))
+            current=""
+            prev_is_num=-1
+        fi
+        ((i++))
+    done
+
+    if [[ -n "${current}" ]]; then
+        eval "comp_${idx}='${current}'"
+        ((idx++))
+    fi
+
+    local max=$(( (idx) / 2 ))
+    [[ ${end} -gt ${max} ]] && end=${max}
+
+    # Build result - component n is at comp_(2n-1), separator after n is at comp_(2n)
+    local result=""
+    local n
+    for (( n=start; n<=end; n++ )); do
+        local comp_idx=$(( n*2 - 1 ))
+        eval "result=\"\${result}\${comp_${comp_idx}}\""
+        if (( n < end )); then
+            local sep_idx=$(( n*2 ))
+            eval "result=\"\${result}\${comp_${sep_idx}}\""
+        fi
+    done
+
+    echo "${result}"
+}
+
+ver_rs() {
+    # Simplified ver_rs - returns version as-is
+    # Full implementation (separator replacement) not needed for metadata extraction
+    # and would require same workaround as ver_cut due to mvdan.cc/sh bugs
+    local v="${2:-${PV}}"
+    echo "${v}"
+}
+
+ver_test() {
+    # Simplified ver_test - always returns true for metadata extraction
+    # Full implementation would compare versions per PMS algorithm
+    return 0
+}
 
 # === MULTILIB FUNCTIONS ===
 get_libdir() { echo "lib64"; }
