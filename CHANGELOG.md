@@ -14,6 +14,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.7.10] - 2026-01-17
+
+### Docker Layer Caching Support
+
+> **Build dependencies separately for optimized Docker builds**
+>
+> Requested by community ([#33](https://github.com/grpmsoft/grpm/issues/33)) for Docker layer caching optimization.
+
+### Added
+- **`--onlydeps` / `-o` flag for emerge** — Build dependencies only, skip target package(s)
+  - Useful for Docker layer caching: pre-build dependencies in a separate layer
+  - Example: `grpm emerge --onlydeps app-misc/hello` builds only hello's dependencies
+  - Compatible with versioned atoms: `grpm emerge -o "=sys-devel/gcc-13.4.1"`
+  - Portage-compatible behavior (same as `emerge --onlydeps`)
+
+### Technical Details
+- `internal/cli/emerge.go` — Added `--onlydeps` flag and `filterTargetPackages()` function
+- `internal/cli/emerge_test.go` — 6 test cases for atom filtering
+
+---
+
 ## [0.7.9] - 2026-01-16
 
 ### Versioned Atom Support

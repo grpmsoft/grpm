@@ -60,6 +60,8 @@ func (a *App) runEmerge(args []string) error {
 	force := fs.Bool("force", false, "Force installation (skip collision checks for untracked files)")
 	fs.BoolVar(force, "f", false, "Alias for --force")
 	rootPath := fs.String("root", "/", "Installation root directory (like $ROOT in Portage)")
+	onlyDeps := fs.Bool("onlydeps", false, "Build dependencies only, not the target package(s)")
+	fs.BoolVar(onlyDeps, "o", false, "Alias for --onlydeps")
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -93,6 +95,15 @@ func (a *App) runEmerge(args []string) error {
 	solution, err := a.resolvePackageDependencies(r, packages)
 	if err != nil {
 		return err
+	}
+
+	// Filter out target packages if --onlydeps is specified
+	if *onlyDeps {
+		solution = a.filterTargetPackages(solution, packages)
+		if len(solution) == 0 {
+			logging.Info("No dependencies to build (--onlydeps specified)")
+			return nil
+		}
 	}
 
 	if len(solution) == 0 {
@@ -576,6 +587,38 @@ func (a *App) findEbuildFile(p *pkg.Package, repoPath string) string {
 	}
 
 	return ""
+}
+
+// filterTargetPackages removes the target packages from the solution,
+// leaving only their dependencies. Used for --onlydeps flag.
+//
+// The packages parameter contains atom strings (e.g., "app-misc/hello", "=sys-devel/gcc-13.4.1").
+// Each atom is parsed to extract the package name (category/package), and matching
+// packages are removed from the solution.
+func (a *App) filterTargetPackages(solution map[string]*pkg.Package, packages []string) map[string]*pkg.Package {
+	// Build a set of target package names from atoms
+	targetNames := make(map[string]bool)
+	for _, atomStr := range packages {
+		atom, err := pkg.ParseAtom(atomStr)
+		if err != nil {
+			// If parsing fails, try using the string directly as package name
+			targetNames[atomStr] = true
+			continue
+		}
+		targetNames[atom.CP()] = true
+	}
+
+	// Filter out target packages
+	filtered := make(map[string]*pkg.Package)
+	for name, p := range solution {
+		if !targetNames[name] {
+			filtered[name] = p
+		} else if a.verbose {
+			logging.Debug("--onlydeps: excluding target package %s-%s", name, p.Version)
+		}
+	}
+
+	return filtered
 }
 
 // checkBuildTools verifies that all required external tools are available.

@@ -97,6 +97,9 @@ sudo grpm emerge ">=dev-libs/openssl-3.0"
 # Build to alternative root (chroot, stage tarball)
 sudo grpm emerge --root /mnt/gentoo app-misc/hello
 
+# Build dependencies only (useful for Docker layer caching)
+sudo grpm emerge --onlydeps app-misc/hello
+
 # Install from binary
 sudo grpm install --binpkg app-misc/hello
 

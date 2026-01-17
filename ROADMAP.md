@@ -1,6 +1,6 @@
 # GRPM Roadmap
 
-> **Versioned Atom Support (v0.7.9)**
+> **Docker Layer Caching Support (v0.7.10)**
 >
 > Rapid development complete (v0.1.0 → v0.5.0).
 > Infrastructure release complete (v0.6.0).
@@ -10,6 +10,7 @@
 > Professional E2E test suite with CI integration (v0.7.7).
 > `--root` flag for chroot/stage tarball builds (v0.7.8).
 > Versioned atom support: `=pkg-1.0`, `>=pkg-2.0` (v0.7.9).
+> `--onlydeps` flag for Docker layer caching (v0.7.10).
 > **98.2% tree coverage verified on real Gentoo!**
 
 ---
@@ -70,7 +71,15 @@ Key insight: **Eclasses don't need Go implementations.** They are loaded dynamic
 
 ## Release History
 
-### v0.7.9 — Versioned Atom Support (Current)
+### v0.7.10 — Docker Layer Caching (Current)
+
+**Build dependencies separately for optimized Docker builds:**
+
+- **`--onlydeps` / `-o` flag** — Build dependencies only, skip target package(s) ([#33](https://github.com/grpmsoft/grpm/issues/33))
+- **Docker optimization** — Pre-build dependencies in a separate layer for better caching
+- **Portage compatible** — Same behavior as `emerge --onlydeps`
+
+### v0.7.9 — Versioned Atom Support
 
 **Fix for Issue #30: emerge now correctly handles versioned atoms:**
 
@@ -178,7 +187,7 @@ Key insight: **Eclasses don't need Go implementations.** They are loaded dynamic
 ## Roadmap to v1.0.0
 
 ```
-v0.7.8 ← CURRENT (Alternative Root Installation)
+v0.7.10 ← CURRENT (Docker Layer Caching)
     │   ✅ v0.6.0: Distfile fetching, debug helpers, coverage analyzer
     │   ✅ v0.7.0: Portage-style logging
     │   ✅ v0.7.2-v0.7.4: Portage compatibility fixes
@@ -186,6 +195,8 @@ v0.7.8 ← CURRENT (Alternative Root Installation)
     │   ✅ v0.7.6: Version selection fix, emerge flags
     │   ✅ v0.7.7: E2E tests + CI integration
     │   ✅ v0.7.8: --root flag for chroot/stage builds
+    │   ✅ v0.7.9: Versioned atom support
+    │   ✅ v0.7.10: --onlydeps flag for Docker caching
     │   ✅ 98.2% tree coverage on real Gentoo!
     ↓
 v0.8.0 — Production Hardening (2 tasks)
@@ -316,4 +327,4 @@ Key deliverables:
 ---
 
 *This roadmap evolves based on community feedback and project needs.*
-*Last updated: 2026-01-14 (v0.7.8 release)*
+*Last updated: 2026-01-17 (v0.7.10 release)*
