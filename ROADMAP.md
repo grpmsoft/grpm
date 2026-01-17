@@ -1,12 +1,13 @@
 # GRPM Roadmap
 
-> **Package Mask Filtering Release (v0.8.1)**
+> **Package Mask & Keywords Filtering Release (v0.8.1)**
 >
 > Rapid development complete (v0.1.0 → v0.5.0).
 > Infrastructure release complete (v0.6.0).
 > Build quality and security fixes (v0.7.x).
 > Configuration management (v0.8.0).
-> **Solver now respects package.mask — masked packages excluded from resolution (v0.8.1).**
+> **Solver now respects package.mask AND KEYWORDS — full Portage filtering (v0.8.1).**
+> **GRPM now selects same versions as Portage (gcc-15.x, not gcc-16.0.9999)!**
 > **98.2% tree coverage verified on real Gentoo!**
 
 ---
@@ -68,13 +69,16 @@ Key insight: **Eclasses don't need Go implementations.** They are loaded dynamic
 
 ## Release History
 
-### v0.8.1 — Package Mask Filtering (Current)
+### v0.8.1 — Package Mask & Keywords Filtering (Current)
 
-**Solver respects package.mask** ([#46](https://github.com/grpmsoft/grpm/issues/46)):
+**Solver respects package.mask AND KEYWORDS** ([#46](https://github.com/grpmsoft/grpm/issues/46), [#48](https://github.com/grpmsoft/grpm/issues/48)):
 
 - **MaskManager** — Loads masks from repo, profile cascade, and user config
-- **Solver integration** — Masked packages automatically excluded from candidates
+- **KEYWORDS filtering** — Filters packages by `KEYWORDS` vs `ACCEPT_KEYWORDS`
+- **Architecture detection** — Auto-detects system arch for default `ACCEPT_KEYWORDS`
+- **Solver integration** — Masked and unkeyworded packages excluded from candidates
 - **User unmask** — `/etc/portage/package.unmask` overrides all masks
+- **Verified** — GRPM now selects same versions as Portage (gcc-15.x)
 
 ### v0.8.0 — Configuration Management
 

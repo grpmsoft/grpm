@@ -7,19 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.8.1] - 2026-01-17
 
-### Package Mask Filtering
+### Package Mask & Keywords Filtering
 
-Solver now respects `package.mask` — masked packages are excluded from dependency resolution ([#46](https://github.com/grpmsoft/grpm/issues/46)).
+Solver now respects `package.mask` and `KEYWORDS` — masked and unkeyworded packages are excluded from dependency resolution ([#46](https://github.com/grpmsoft/grpm/issues/46), [#48](https://github.com/grpmsoft/grpm/issues/48)).
 
 ### Added
 - **MaskManager** (`internal/mask/`) — Manages masks from multiple sources with proper priority
 - **Multi-source mask loading** — Repository `profiles/package.mask`, profile cascade, user `/etc/portage/package.mask`
 - **User unmask support** — `/etc/portage/package.unmask` overrides all masks
-- **Solver integration** — Masked packages automatically filtered during dependency resolution
-- **CLI integration** — Resolve and emerge commands now use MaskManager for real repositories
+- **KEYWORDS filtering** — Solver filters packages by `KEYWORDS` vs `ACCEPT_KEYWORDS`
+- **Architecture detection** — Auto-detects system architecture for default `ACCEPT_KEYWORDS`
+- **Keywords field in Package** — `pkg.Package` now includes `Keywords` field
+- **Solver integration** — `NewResolverWithFilters()` constructor for combined mask + keyword filtering
+- **CLI integration** — Resolve and emerge commands now use full Portage-compatible filtering
 
-### Known Limitations
-- **KEYWORDS filtering** not yet implemented — Live/9999 ebuilds and unkeyworded packages may still be selected (tracked in [#48](https://github.com/grpmsoft/grpm/issues/48))
+### Fixed
+- **gcc-16.0.9999 selection bug** — Unkeyworded and masked packages are now properly filtered
+- Solver now selects `gcc-15.2.1` (same as Portage) instead of unkeyworded `gcc-16.0.9999`
 
 ---
 

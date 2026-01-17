@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"syscall"
 
 	"github.com/grpmsoft/grpm/internal/config"
@@ -491,8 +492,8 @@ func (a *App) resolvePackageDependencies(r repo.Repository, packages []string) (
 	return solution, nil
 }
 
-// createResolverWithMasks creates a resolver with package.mask filtering.
-// For mock repositories, returns a resolver without mask support.
+// createResolverWithMasks creates a resolver with package.mask and KEYWORDS filtering.
+// For mock repositories, returns a resolver without filtering.
 func (a *App) createResolverWithMasks(r repo.Repository) *solver.PortageResolver {
 	// Check if this is a real Portage repository
 	portageRepo, isPortage := r.(*repo.PortageRepository)
@@ -515,12 +516,65 @@ func (a *App) createResolverWithMasks(r repo.Repository) *solver.PortageResolver
 	// Create mask manager
 	maskMgr, err := mask.NewMaskManager(cfg, portageRepo.Path, profilePath)
 	if err != nil {
-		a.log.Verbose("Could not initialize mask manager, using resolver without masks: %v", err)
-		return solver.NewResolver(r)
+		a.log.Verbose("Could not initialize mask manager: %v", err)
+		// Continue without mask manager - keyword filtering may still work
+		maskMgr = nil
 	}
 
-	a.log.Verbose("Package mask filtering enabled")
-	return solver.NewResolverWithMasks(r, maskMgr)
+	// Get ACCEPT_KEYWORDS from config, with sensible defaults
+	acceptKeywords := a.getAcceptKeywords(cfg)
+
+	a.log.Verbose("Package filtering enabled (mask=%v, keywords=%v)",
+		maskMgr != nil, acceptKeywords)
+
+	return solver.NewResolverWithFilters(r, maskMgr, acceptKeywords)
+}
+
+// getAcceptKeywords returns ACCEPT_KEYWORDS from config or detects defaults.
+// Default is the current architecture (e.g., "amd64" on x86_64 Linux).
+func (a *App) getAcceptKeywords(cfg *config.Config) []string {
+	// First check if ACCEPT_KEYWORDS is set in make.conf
+	if len(cfg.MakeConf.ACCEPT_KEYWORDS) > 0 {
+		a.log.Verbose("Using ACCEPT_KEYWORDS from make.conf: %v", cfg.MakeConf.ACCEPT_KEYWORDS)
+		return cfg.MakeConf.ACCEPT_KEYWORDS
+	}
+
+	// Default to stable architecture (detect from system)
+	arch := a.detectArchitecture()
+	if arch != "" {
+		a.log.Verbose("Using default ACCEPT_KEYWORDS: [%s]", arch)
+		return []string{arch}
+	}
+
+	// Fallback to amd64 (most common)
+	a.log.Verbose("Using fallback ACCEPT_KEYWORDS: [amd64]")
+	return []string{"amd64"}
+}
+
+// detectArchitecture returns the Gentoo architecture keyword for the current system.
+// Maps Go GOARCH to Gentoo KEYWORDS (e.g., amd64, x86, arm64, arm).
+func (a *App) detectArchitecture() string {
+	// Map Go GOARCH to Gentoo KEYWORDS
+	archMap := map[string]string{
+		"amd64":   "amd64",
+		"386":     "x86",
+		"arm64":   "arm64",
+		"arm":     "arm",
+		"ppc64":   "ppc64",
+		"ppc64le": "ppc64",
+		"riscv64": "riscv",
+		"s390x":   "s390",
+		"mips64":  "mips",
+		"loong64": "loong",
+	}
+
+	// Use runtime.GOARCH to get the current architecture
+	if arch, ok := archMap[runtime.GOARCH]; ok {
+		return arch
+	}
+
+	// Fallback for unknown architectures
+	return ""
 }
 
 // detectProfilePath returns the active Portage profile path.
