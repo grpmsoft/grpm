@@ -3,18 +3,47 @@ package solver
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/grpmsoft/grpm/internal/logging"
+	"github.com/grpmsoft/grpm/internal/mask"
 	"github.com/grpmsoft/grpm/internal/pkg"
 	"github.com/grpmsoft/grpm/internal/repo"
 )
 
+// PortageResolver resolves package dependencies using SAT solving.
+// It supports package masking and keyword filtering.
 type PortageResolver struct {
-	repo repo.Repository
+	repo           repo.Repository
+	maskManager    *mask.MaskManager
+	acceptKeywords []string // ACCEPT_KEYWORDS from make.conf (e.g., ["amd64", "~amd64"])
 }
 
+// NewResolver creates a new resolver without mask/keyword support.
+// For full filtering, use NewResolverWithFilters.
 func NewResolver(r repo.Repository) *PortageResolver {
 	return &PortageResolver{repo: r}
+}
+
+// NewResolverWithMasks creates a new resolver with mask filtering support.
+// Masked packages will be excluded from solver consideration.
+// Deprecated: Use NewResolverWithFilters for both mask and keyword filtering.
+func NewResolverWithMasks(r repo.Repository, maskMgr *mask.MaskManager) *PortageResolver {
+	return &PortageResolver{
+		repo:        r,
+		maskManager: maskMgr,
+	}
+}
+
+// NewResolverWithFilters creates a new resolver with both mask and keyword filtering.
+// - maskMgr: filters packages from package.mask
+// - acceptKeywords: filters packages by KEYWORDS (e.g., ["amd64", "~amd64"])
+func NewResolverWithFilters(r repo.Repository, maskMgr *mask.MaskManager, acceptKeywords []string) *PortageResolver {
+	return &PortageResolver{
+		repo:           r,
+		maskManager:    maskMgr,
+		acceptKeywords: acceptKeywords,
+	}
 }
 
 // groupDependenciesByOrGroupID groups dependencies by their OrGroupID
@@ -36,6 +65,12 @@ func (r *PortageResolver) collectDependencies(p *pkg.Package, allPackages map[st
 		return nil // Already processed
 	}
 
+	// Check if this package is masked
+	if r.isMasked(p) {
+		logging.Debug("Skipping masked package: %s-%s", p.Name, p.Version)
+		return nil
+	}
+
 	// Store a copy of the package
 	copyPkg := *p
 	allPackages[p.Name] = &copyPkg
@@ -45,7 +80,8 @@ func (r *PortageResolver) collectDependencies(p *pkg.Package, allPackages map[st
 
 	// Process REQUIRED dependencies only
 	for _, dep := range requiredDeps {
-		depPkg, err := r.repo.LoadPackage(dep.Name)
+		// Use loadUnmaskedPackage to get the best unmasked version
+		depPkg, err := r.loadUnmaskedPackage(dep.Name)
 		if err != nil {
 			logging.Debug("Warning: dependency %s for %s not found: %v", dep.Name, p.Name, err)
 			continue
@@ -63,8 +99,9 @@ func (r *PortageResolver) collectDependencies(p *pkg.Package, allPackages map[st
 		logging.Debug("OR-group %d for %s: %d alternatives", groupID, p.Name, len(alternatives))
 		for _, alt := range alternatives {
 			// Just ensure the alternative package exists in the repository
-			if _, err := r.repo.LoadPackage(alt.Name); err != nil {
-				logging.Debug("Warning: OR-alternative %s not found: %v", alt.Name, err)
+			// Use loadUnmaskedPackage to filter masked alternatives
+			if _, err := r.loadUnmaskedPackage(alt.Name); err != nil {
+				logging.Debug("Warning: OR-alternative %s not found or masked: %v", alt.Name, err)
 			}
 		}
 	}
@@ -139,14 +176,15 @@ func (r *PortageResolver) buildResultFromSolution(solution map[string]string) (m
 
 // loadPackageFromAtom parses a package atom string and loads the matching package.
 // Supports PMS-compliant atoms like "=sys-devel/gcc-13.4.1_p20250807" or ">=dev-libs/openssl-3.0".
-// If no version operator is specified, loads the highest available version.
+// If no version operator is specified, loads the highest available unmasked version.
+// Masked packages are filtered out unless explicitly requested by exact version.
 func (r *PortageResolver) loadPackageFromAtom(atomStr string) (*pkg.Package, error) {
 	// Try to parse as a full atom first
 	atom, err := pkg.ParseAtom(atomStr)
 	if err != nil {
 		// If parsing fails, it might be a simple "category/package" string
-		// Try loading directly
-		return r.repo.LoadPackage(atomStr)
+		// Use loadUnmaskedPackage to filter masked versions
+		return r.loadUnmaskedPackage(atomStr)
 	}
 
 	// If atom has a version constraint, use FindByAtom to get matching packages
@@ -158,6 +196,20 @@ func (r *PortageResolver) loadPackageFromAtom(atomStr string) (*pkg.Package, err
 
 		if len(matches) == 0 {
 			return nil, fmt.Errorf("no packages match atom %s", atomStr)
+		}
+
+		// Filter out masked packages (unless this is an exact version request)
+		// For exact matches (=), we respect the user's explicit request
+		if atom.Operator != "=" {
+			matches = r.filterMaskedPackages(matches)
+			if len(matches) == 0 {
+				return nil, fmt.Errorf("all matching packages for %s are masked", atomStr)
+			}
+		} else {
+			// For exact match, warn if masked but still return it
+			if len(matches) == 1 && r.isMasked(matches[0]) {
+				logging.Debug("Warning: explicitly requested package %s is masked", atomStr)
+			}
 		}
 
 		// Sort matches by version (highest first) and return the best match
@@ -174,8 +226,8 @@ func (r *PortageResolver) loadPackageFromAtom(atomStr string) (*pkg.Package, err
 		return matches[0], nil
 	}
 
-	// No version constraint - load package by category/package name
-	return r.repo.LoadPackage(atom.CP())
+	// No version constraint - load best unmasked version
+	return r.loadUnmaskedPackage(atom.CP())
 }
 
 func (r *PortageResolver) Resolve(packages []string) (map[string]*pkg.Package, error) {
@@ -253,4 +305,147 @@ func contains(slice []string, item string) bool {
 		}
 	}
 	return false
+}
+
+// isMasked checks if a package is masked using the mask manager.
+// Returns false if no mask manager is configured.
+func (r *PortageResolver) isMasked(p *pkg.Package) bool {
+	if r.maskManager == nil || p == nil {
+		return false
+	}
+	return r.maskManager.IsPackageMasked(p)
+}
+
+// filterMaskedPackages filters out masked packages from the list.
+// If mask manager is not configured, returns the original list.
+func (r *PortageResolver) filterMaskedPackages(packages []*pkg.Package) []*pkg.Package {
+	var filtered []*pkg.Package
+
+	for _, p := range packages {
+		// Check package.mask filtering
+		if r.maskManager != nil && r.maskManager.IsPackageMasked(p) {
+			logging.Debug("Filtered masked package: %s-%s", p.Name, p.Version)
+			continue
+		}
+
+		// Check KEYWORDS filtering
+		if r.isKeywordMasked(p) {
+			logging.Debug("Filtered unkeyworded package: %s-%s (KEYWORDS: %v)", p.Name, p.Version, p.Keywords)
+			continue
+		}
+
+		filtered = append(filtered, p)
+	}
+
+	return filtered
+}
+
+// isKeywordMasked returns true if the package is masked due to KEYWORDS.
+// A package is keyword-masked if:
+// - It has no KEYWORDS (unkeyworded/live package)
+// - Its KEYWORDS don't match ACCEPT_KEYWORDS
+func (r *PortageResolver) isKeywordMasked(p *pkg.Package) bool {
+	// No keyword filtering configured - accept all
+	if len(r.acceptKeywords) == 0 {
+		return false
+	}
+
+	// Use package's built-in method for keyword checking
+	return !p.IsKeywordAccepted(r.acceptKeywords)
+}
+
+// loadUnmaskedPackage loads a package, filtering out masked and unkeyworded versions.
+// If the highest version is masked/unkeyworded, it tries to find an acceptable version.
+func (r *PortageResolver) loadUnmaskedPackage(name string) (*pkg.Package, error) {
+	// First try loading the package normally
+	p, err := r.repo.LoadPackage(name)
+	if err != nil {
+		return nil, err
+	}
+
+	// Check if the highest version is acceptable (not masked, keywords accepted)
+	if r.isPackageAcceptable(p) {
+		return p, nil
+	}
+
+	// The highest version is masked/unkeyworded - try to find an acceptable version
+	versions, err := r.repo.GetAllVersions(name)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get versions for %s: %w", name, err)
+	}
+
+	// Filter out masked and unkeyworded versions
+	acceptableVersions := r.filterMaskedPackages(versions)
+	if len(acceptableVersions) == 0 {
+		// All versions are masked or unkeyworded
+		return nil, r.buildMaskError(p)
+	}
+
+	// Sort by version (highest first) and return the best acceptable version
+	sort.Slice(acceptableVersions, func(i, j int) bool {
+		return pkg.CompareVersions(acceptableVersions[i].Version, acceptableVersions[j].Version) > 0
+	})
+
+	logging.Debug("Package %s-%s is masked/unkeyworded, using %s-%s instead",
+		name, p.Version, name, acceptableVersions[0].Version)
+
+	return acceptableVersions[0], nil
+}
+
+// isPackageAcceptable returns true if the package passes all filters (mask and keywords).
+func (r *PortageResolver) isPackageAcceptable(p *pkg.Package) bool {
+	// Check package.mask
+	if r.maskManager != nil && r.maskManager.IsPackageMasked(p) {
+		return false
+	}
+
+	// Check KEYWORDS
+	if r.isKeywordMasked(p) {
+		return false
+	}
+
+	return true
+}
+
+// buildMaskError creates a descriptive error for why a package is masked.
+func (r *PortageResolver) buildMaskError(p *pkg.Package) error {
+	// Check if it's masked by package.mask
+	if r.maskManager != nil && r.maskManager.IsPackageMasked(p) {
+		atom, source := r.maskManager.GetMaskReason(
+			extractCategory(p.Name),
+			extractPackageName(p.Name),
+			p.Version,
+			p.Slot.Name,
+		)
+		return fmt.Errorf("all versions of %s are masked (by %s: %s)", p.Name, source, atom)
+	}
+
+	// Check if it's masked by keywords
+	if r.isKeywordMasked(p) {
+		if len(p.Keywords) == 0 {
+			return fmt.Errorf("all versions of %s are unkeyworded (missing KEYWORDS)", p.Name)
+		}
+		return fmt.Errorf("all versions of %s are keyword-masked (KEYWORDS=%v, ACCEPT_KEYWORDS=%v)",
+			p.Name, p.Keywords, r.acceptKeywords)
+	}
+
+	return fmt.Errorf("all versions of %s are masked", p.Name)
+}
+
+// extractCategory extracts category from "category/package" format.
+func extractCategory(name string) string {
+	parts := strings.SplitN(name, "/", 2)
+	if len(parts) == 2 {
+		return parts[0]
+	}
+	return ""
+}
+
+// extractPackageName extracts package name from "category/package" format.
+func extractPackageName(name string) string {
+	parts := strings.SplitN(name, "/", 2)
+	if len(parts) == 2 {
+		return parts[1]
+	}
+	return name
 }

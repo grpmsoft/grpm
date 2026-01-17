@@ -83,6 +83,7 @@ type Package struct {
 	Version  string
 	Slot     Slot
 	UseFlags map[string]bool
+	Keywords []string // KEYWORDS from ebuild (e.g., ["amd64", "~x86", "-arm"])
 	Deps     []Constraint
 	Provides []Constraint // Virtual packages provided by this package
 }
@@ -96,9 +97,84 @@ func NewPackage(name, version, slotStr string) *Package {
 		Version:  version,
 		Slot:     ParseSlot(slotStr),
 		UseFlags: make(map[string]bool),
+		Keywords: make([]string, 0),
 		Deps:     make([]Constraint, 0),
 		Provides: make([]Constraint, 0),
 	}
+}
+
+// HasKeyword checks if the package has a specific keyword (stable or testing).
+// Supports: "amd64" (stable), "~amd64" (testing), "-amd64" (disabled).
+func (p *Package) HasKeyword(keyword string) bool {
+	for _, kw := range p.Keywords {
+		if kw == keyword {
+			return true
+		}
+	}
+	return false
+}
+
+// IsKeyworded returns true if the package has any KEYWORDS defined.
+// Packages without KEYWORDS are "unkeyworded" and typically masked.
+func (p *Package) IsKeyworded() bool {
+	return len(p.Keywords) > 0
+}
+
+// HasStableKeyword checks if the package has a stable keyword for the given arch.
+// Example: HasStableKeyword("amd64") returns true if KEYWORDS contains "amd64".
+func (p *Package) HasStableKeyword(arch string) bool {
+	return p.HasKeyword(arch)
+}
+
+// HasTestingKeyword checks if the package has a testing keyword for the given arch.
+// Example: HasTestingKeyword("amd64") returns true if KEYWORDS contains "~amd64".
+func (p *Package) HasTestingKeyword(arch string) bool {
+	return p.HasKeyword("~" + arch)
+}
+
+// IsKeywordAccepted checks if the package is accepted given ACCEPT_KEYWORDS.
+// acceptKeywords: list like ["amd64", "~amd64"] from make.conf.
+func (p *Package) IsKeywordAccepted(acceptKeywords []string) bool {
+	// If package has no keywords, it's unkeyworded
+	// Accept only if "**" is in acceptKeywords
+	if !p.IsKeyworded() {
+		for _, ak := range acceptKeywords {
+			if ak == "**" {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Check if any of the package's keywords match accepted keywords
+	for _, kw := range p.Keywords {
+		// Skip negative keywords
+		if strings.HasPrefix(kw, "-") {
+			continue
+		}
+
+		// Check for wildcard matches
+		for _, ak := range acceptKeywords {
+			if ak == "*" || ak == "**" {
+				return true
+			}
+			if ak == "~*" && strings.HasPrefix(kw, "~") {
+				return true
+			}
+			if kw == ak {
+				return true
+			}
+			// Testing keyword matches stable acceptance
+			// e.g., ~amd64 in KEYWORDS matches amd64 in ACCEPT_KEYWORDS
+			if strings.HasPrefix(kw, "~") && kw[1:] == ak {
+				// Need ~amd64 in ACCEPT_KEYWORDS to accept ~amd64 in KEYWORDS
+				// But NOT amd64 - that only accepts stable
+				continue
+			}
+		}
+	}
+
+	return false
 }
 
 // ID returns the unique identifier for this package (Aggregate Root identity)

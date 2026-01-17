@@ -26,6 +26,10 @@ var (
 
 	// portageProvideRe matches PROVIDE="..." in ebuild files.
 	portageProvideRe = coregex.MustCompile(`(?m)^PROVIDE="([^"]+)"`)
+
+	// portageKeywordsRe matches KEYWORDS="..." in ebuild files.
+	// Supports optional leading whitespace (tabs/spaces) for eclasses like toolchain.eclass.
+	portageKeywordsRe = coregex.MustCompile(`(?m)^\s*KEYWORDS="([^"]*)"`)
 )
 
 type PortageRepository struct {
@@ -155,6 +159,7 @@ func (pr *PortageRepository) parseEbuild(name, path string) (*pkg.Package, error
 		Version:  "",
 		Slot:     pkg.Slot{Name: "0"},
 		UseFlags: make(map[string]bool),
+		Keywords: make([]string, 0),
 		Deps:     make([]pkg.Constraint, 0),
 		Provides: make([]pkg.Constraint, 0),
 	}
@@ -217,6 +222,14 @@ func (pr *PortageRepository) parseEbuild(name, path string) (*pkg.Package, error
 			p.UseFlags[flag] = true
 		}
 	}
+
+	// Parse KEYWORDS - critical for keyword masking
+	if matches := portageKeywordsRe.FindStringSubmatch(string(content)); len(matches) > 1 {
+		keywords := strings.Fields(matches[1])
+		p.Keywords = keywords
+		logging.Debug("Parsed KEYWORDS for %s: %v", name, keywords)
+	}
+	// Note: Empty KEYWORDS (len == 0) means unkeyworded/live package
 
 	if matches := portageProvideRe.FindStringSubmatch(string(content)); len(matches) > 1 {
 		provides := strings.Fields(matches[1])
