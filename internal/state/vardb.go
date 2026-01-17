@@ -376,9 +376,19 @@ func (vw *VarDBWriter) Write(installedPkg *InstalledPackage) error {
 	category := parts[0]
 	pkgName := strings.Join(parts[1:], "/")
 
+	// Security: Validate category and package name to prevent path traversal (Issue #36)
+	if err := pkg.ValidateCategoryPackageName(category, pkgName); err != nil {
+		return fmt.Errorf("invalid package name %q: %w", installedPkg.Package.Name, err)
+	}
+
 	// VarDB format: /var/db/pkg/category/packagename-version/
 	pkgDirName := fmt.Sprintf("%s-%s", pkgName, installedPkg.Package.Version)
 	pkgDir := filepath.Join(vw.root, category, pkgDirName)
+
+	// Security: Defense in depth - verify path stays within VarDB root (Issue #36)
+	if err := pkg.ValidatePathContainment(vw.root, pkgDir); err != nil {
+		return fmt.Errorf("invalid path for package %q: %w", installedPkg.Package.Name, err)
+	}
 	if err := os.MkdirAll(pkgDir, 0755); err != nil {
 		return fmt.Errorf("failed to create package directory: %w", err)
 	}

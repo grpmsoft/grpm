@@ -1,6 +1,6 @@
 # GRPM Roadmap
 
-> **Docker Layer Caching Support (v0.7.10)**
+> **Security Release (v0.7.11)**
 >
 > Rapid development complete (v0.1.0 → v0.5.0).
 > Infrastructure release complete (v0.6.0).
@@ -11,6 +11,7 @@
 > `--root` flag for chroot/stage tarball builds (v0.7.8).
 > Versioned atom support: `=pkg-1.0`, `>=pkg-2.0` (v0.7.9).
 > `--onlydeps` flag for Docker layer caching (v0.7.10).
+> **Security fix: Path traversal prevention (v0.7.11).**
 > **98.2% tree coverage verified on real Gentoo!**
 
 ---
@@ -71,7 +72,17 @@ Key insight: **Eclasses don't need Go implementations.** They are loaded dynamic
 
 ## Release History
 
-### v0.7.10 — Docker Layer Caching (Current)
+### v0.7.11 — Security Release (Current)
+
+**Critical security fix: Path traversal prevention ([#36](https://github.com/grpmsoft/grpm/issues/36))**
+
+- **Input validation** — Category/package names validated against PMS format
+- **Path containment** — Defense-in-depth check prevents directory escape
+- **New utilities** — `ValidateCategoryPackageName()`, `ValidatePathContainment()`, `SafeJoinPath()`
+- **86+ security tests** — Comprehensive coverage of attack vectors
+- **Upgrade immediately** — All users should update to prevent potential file access
+
+### v0.7.10 — Docker Layer Caching
 
 **Build dependencies separately for optimized Docker builds:**
 
@@ -188,7 +199,7 @@ Key insight: **Eclasses don't need Go implementations.** They are loaded dynamic
 ## Roadmap to v1.0.0
 
 ```
-v0.7.10 ← CURRENT (Docker Layer Caching)
+v0.7.11 ← CURRENT (Security Release)
     │   ✅ v0.6.0: Distfile fetching, debug helpers, coverage analyzer
     │   ✅ v0.7.0: Portage-style logging
     │   ✅ v0.7.2-v0.7.4: Portage compatibility fixes
@@ -198,6 +209,7 @@ v0.7.10 ← CURRENT (Docker Layer Caching)
     │   ✅ v0.7.8: --root flag for chroot/stage builds
     │   ✅ v0.7.9: Versioned atom support
     │   ✅ v0.7.10: --onlydeps flag for Docker caching
+    │   ✅ v0.7.11: Path traversal security fix (#36)
     │   ✅ 98.2% tree coverage on real Gentoo!
     ↓
 v0.8.0 — Production Hardening (2 tasks)
@@ -328,4 +340,4 @@ Key deliverables:
 ---
 
 *This roadmap evolves based on community feedback and project needs.*
-*Last updated: 2026-01-17 (v0.7.10 release)*
+*Last updated: 2026-01-17 (v0.7.11 security release)*
