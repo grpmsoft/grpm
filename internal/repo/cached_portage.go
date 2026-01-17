@@ -97,6 +97,11 @@ func (cpr *CachedPortageRepository) LoadPackage(name string) (*pkg.Package, erro
 		return nil, fmt.Errorf("invalid package name: %s", name)
 	}
 
+	// Security: Validate category and package name to prevent path traversal (Issue #36)
+	if err := pkg.ValidateCategoryPackageName(category, pkgName); err != nil {
+		return nil, fmt.Errorf("invalid package name %q: %w", name, err)
+	}
+
 	// Try cache first if enabled
 	if cpr.cacheEnabled && cpr.repoCache != nil {
 		// Get all versions from index
@@ -125,6 +130,11 @@ func (cpr *CachedPortageRepository) GetAllVersions(packageName string) ([]*pkg.P
 	category, pkgName, found := strings.Cut(packageName, "/")
 	if !found {
 		return nil, fmt.Errorf("invalid package name: %s", packageName)
+	}
+
+	// Security: Validate category and package name to prevent path traversal (Issue #36)
+	if err := pkg.ValidateCategoryPackageName(category, pkgName); err != nil {
+		return nil, fmt.Errorf("invalid package name %q: %w", packageName, err)
 	}
 
 	// Try index first

@@ -358,6 +358,112 @@ func TestPortageRepository_String(t *testing.T) {
 	}
 }
 
+// TestPortageRepository_LoadPackage_PathTraversal tests path traversal attack prevention.
+// See: https://github.com/grpmsoft/grpm/issues/36
+func TestPortageRepository_LoadPackage_PathTraversal(t *testing.T) {
+	tmpDir := t.TempDir()
+	repo, err := NewPortageRepository(tmpDir)
+	if err != nil {
+		t.Fatalf("NewPortageRepository() error = %v", err)
+	}
+
+	// All these inputs should be rejected with an error
+	// They attempt to escape the repository root via path traversal
+	pathTraversalAttempts := []struct {
+		name  string
+		input string
+	}{
+		// Category-based attacks
+		{"dotdot category", "../etc/passwd"},
+		{"dotdot category with pkg", "../../../etc/passwd"},
+		{"relative dot category", "./passwd"},
+		{"hidden category", ".hidden/pkg"},
+
+		// Package name attacks
+		{"dotdot package", "sys-libs/../../etc"},
+		{"dotdot package complex", "sys-libs/../../../etc/passwd"},
+		{"relative dot package", "sys-libs/./passwd"},
+		{"hidden package", "sys-libs/.hidden"},
+
+		// Combined attacks
+		{"both dotdot", "../etc/../passwd"},
+		{"slash escape", "sys-libs/zlib/../../../etc"},
+
+		// Special characters
+		{"null byte category", "sys\x00libs/zlib"},
+		{"null byte package", "sys-libs/zlib\x00etc"},
+	}
+
+	for _, tt := range pathTraversalAttempts {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := repo.LoadPackage(tt.input)
+			if err == nil {
+				t.Errorf("LoadPackage(%q) should return error for path traversal attempt", tt.input)
+			}
+		})
+	}
+}
+
+// TestPortageRepository_LoadPackageVersion_PathTraversal tests version-specific path traversal.
+// See: https://github.com/grpmsoft/grpm/issues/36
+func TestPortageRepository_LoadPackageVersion_PathTraversal(t *testing.T) {
+	tmpDir := t.TempDir()
+	repo, err := NewPortageRepository(tmpDir)
+	if err != nil {
+		t.Fatalf("NewPortageRepository() error = %v", err)
+	}
+
+	// All these inputs should be rejected
+	pathTraversalAttempts := []struct {
+		name    string
+		pkgName string
+		version string
+	}{
+		{"dotdot category", "../etc", "passwd"},
+		{"dotdot package", "sys-libs/../../etc", "passwd"},
+		{"hidden category", ".hidden/pkg", "1.0"},
+		{"hidden package", "sys-libs/.hidden", "1.0"},
+	}
+
+	for _, tt := range pathTraversalAttempts {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := repo.LoadPackageVersion(tt.pkgName, tt.version)
+			if err == nil {
+				t.Errorf("LoadPackageVersion(%q, %q) should return error for path traversal attempt",
+					tt.pkgName, tt.version)
+			}
+		})
+	}
+}
+
+// TestPortageRepository_GetAllVersions_PathTraversal tests GetAllVersions path traversal.
+// See: https://github.com/grpmsoft/grpm/issues/36
+func TestPortageRepository_GetAllVersions_PathTraversal(t *testing.T) {
+	tmpDir := t.TempDir()
+	repo, err := NewPortageRepository(tmpDir)
+	if err != nil {
+		t.Fatalf("NewPortageRepository() error = %v", err)
+	}
+
+	// All these inputs should be rejected
+	pathTraversalAttempts := []string{
+		"../etc/passwd",
+		"../../../etc/passwd",
+		"sys-libs/../../etc",
+		".hidden/pkg",
+		"sys-libs/.hidden",
+	}
+
+	for _, input := range pathTraversalAttempts {
+		t.Run(input, func(t *testing.T) {
+			_, err := repo.GetAllVersions(input)
+			if err == nil {
+				t.Errorf("GetAllVersions(%q) should return error for path traversal attempt", input)
+			}
+		})
+	}
+}
+
 // BenchmarkPortageRepository_LoadPackage benchmarks package loading.
 func BenchmarkPortageRepository_LoadPackage(b *testing.B) {
 	tmpDir := b.TempDir()

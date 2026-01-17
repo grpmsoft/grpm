@@ -68,6 +68,11 @@ func (pr *PortageRepository) LoadPackage(name string) (*pkg.Package, error) {
 		return nil, fmt.Errorf("invalid package name: %s", name)
 	}
 
+	// Security: Validate category and package name to prevent path traversal (Issue #36)
+	if err := pkg.ValidateCategoryPackageName(category, pkgName); err != nil {
+		return nil, fmt.Errorf("invalid package name %q: %w", name, err)
+	}
+
 	pkgDir := filepath.Join(pr.Path, category, pkgName)
 
 	// Add path logging
@@ -112,6 +117,11 @@ func (pr *PortageRepository) LoadPackageVersion(name, version string) (*pkg.Pack
 	category, pkgName, found := strings.Cut(name, "/")
 	if !found {
 		return nil, fmt.Errorf("invalid package name: %s", name)
+	}
+
+	// Security: Validate category and package name to prevent path traversal (Issue #36)
+	if err := pkg.ValidateCategoryPackageName(category, pkgName); err != nil {
+		return nil, fmt.Errorf("invalid package name %q: %w", name, err)
 	}
 
 	pkgDir := filepath.Join(pr.Path, category, pkgName)
@@ -277,6 +287,11 @@ func (pr *PortageRepository) GetAllVersions(packageName string) ([]*pkg.Package,
 	category, pkgName, found := strings.Cut(packageName, "/")
 	if !found {
 		return nil, fmt.Errorf("invalid package name: %s", packageName)
+	}
+
+	// Security: Validate category and package name to prevent path traversal (Issue #36)
+	if err := pkg.ValidateCategoryPackageName(category, pkgName); err != nil {
+		return nil, fmt.Errorf("invalid package name %q: %w", packageName, err)
 	}
 
 	pkgDir := filepath.Join(pr.Path, category, pkgName)

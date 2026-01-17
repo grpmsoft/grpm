@@ -14,6 +14,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.7.11] - 2026-01-17
+
+### Security Release: Path Traversal Prevention
+
+> **Security Advisory: Path Traversal Vulnerability (CWE-22)**
+>
+> Fixed a path traversal vulnerability that could allow malicious package names
+> to access files outside the repository directory. Reported by Max Steel
+> via Gentoo Forums.
+>
+> **CVE:** Pending assignment
+> **Severity:** High
+> **Affected Versions:** < 0.7.11
+> **Issue:** [#36](https://github.com/grpmsoft/grpm/issues/36)
+
+### Fixed
+
+#### Path Traversal Prevention ([#36](https://github.com/grpmsoft/grpm/issues/36))
+- **Input validation** — Category and package names are now validated against PMS format
+  - Rejects `..`, `.hidden`, null bytes, and other invalid characters
+  - Enforces PMS-compliant naming: `[A-Za-z0-9][A-Za-z0-9+_.-]*` for categories
+  - Enforces PMS-compliant naming: `[A-Za-z0-9][A-Za-z0-9+_-]*` for packages (dots forbidden)
+- **Path containment** — Defense-in-depth check ensures paths stay within base directory
+  - Uses `filepath.Clean()` and prefix comparison
+  - Protects against symlink-based escapes
+
+### Added
+- **New security utilities** (`internal/pkg/pathutil.go`)
+  - `ValidateCategoryPackageName()` — Combined validation for category/package pairs
+  - `ValidatePathContainment()` — Verify path stays within base directory
+  - `SafeJoinPath()` — Safe path joining with traversal protection
+- **Exported validators** (`internal/pkg/atom.go`)
+  - `IsValidCategory()` — PMS-compliant category validation (was private)
+  - `IsValidPackageName()` — PMS-compliant package name validation (was private)
+- **Path traversal test suites** (`internal/repo/portage_test.go`)
+  - `TestPortageRepository_LoadPackage_PathTraversal` — 12 attack vectors
+  - `TestPortageRepository_LoadPackageVersion_PathTraversal` — 4 attack vectors
+  - `TestPortageRepository_GetAllVersions_PathTraversal` — 5 attack vectors
+
+### Changed
+- `internal/repo/portage.go` — `LoadPackage()`, `LoadPackageVersion()`, `GetAllVersions()` now validate input
+- `internal/repo/cached_portage.go` — `LoadPackage()`, `GetAllVersions()` now validate input
+- `internal/state/vardb.go` — Write operations validate category/package + path containment
+
+### Technical Details
+- **Attack vectors blocked:**
+  - `../../../etc/passwd` — Parent directory traversal
+  - `sys-libs/../../etc` — Package name traversal
+  - `.hidden/pkg` — Hidden directory access
+  - `sys\x00libs/zlib` — Null byte injection
+- All 86+ security test cases pass
+- Zero issues from `golangci-lint`
+
+### Upgrade Recommendation
+**All users should upgrade immediately.** This vulnerability could potentially allow
+reading arbitrary files on the system if a malicious package name was processed.
+
+---
+
 ## [0.7.10] - 2026-01-17
 
 ### Docker Layer Caching Support
@@ -1037,7 +1096,13 @@ GRPM (Go Resource Package Manager) is a modern reimplementation of Gentoo's Port
 - **Issues**: https://github.com/grpmsoft/grpm/issues
 - **License**: [Apache-2.0](LICENSE)
 
-[Unreleased]: https://github.com/grpmsoft/grpm/compare/v0.7.5...HEAD
+[Unreleased]: https://github.com/grpmsoft/grpm/compare/v0.7.11...HEAD
+[0.7.11]: https://github.com/grpmsoft/grpm/compare/v0.7.10...v0.7.11
+[0.7.10]: https://github.com/grpmsoft/grpm/compare/v0.7.9...v0.7.10
+[0.7.9]: https://github.com/grpmsoft/grpm/compare/v0.7.8...v0.7.9
+[0.7.8]: https://github.com/grpmsoft/grpm/compare/v0.7.7...v0.7.8
+[0.7.7]: https://github.com/grpmsoft/grpm/compare/v0.7.6...v0.7.7
+[0.7.6]: https://github.com/grpmsoft/grpm/compare/v0.7.5...v0.7.6
 [0.7.5]: https://github.com/grpmsoft/grpm/compare/v0.7.4...v0.7.5
 [0.7.4]: https://github.com/grpmsoft/grpm/compare/v0.7.3...v0.7.4
 [0.7.3]: https://github.com/grpmsoft/grpm/compare/v0.7.2...v0.7.3

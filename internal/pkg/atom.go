@@ -410,9 +410,13 @@ func splitPackageVersion(s string) (pkg, ver string) {
 	return s, ""
 }
 
-// isValidCategory checks if s is a valid category name per PMS.
+// IsValidCategory checks if s is a valid category name per PMS.
 // Format: [A-Za-z0-9][A-Za-z0-9+_.-]*
-func isValidCategory(s string) bool {
+//
+// This function is critical for security - it prevents path traversal attacks
+// by rejecting category names containing ".." or other invalid characters.
+// See: https://github.com/grpmsoft/grpm/issues/36
+func IsValidCategory(s string) bool {
 	if len(s) == 0 {
 		return false
 	}
@@ -432,10 +436,20 @@ func isValidCategory(s string) bool {
 	return true
 }
 
-// isValidPackageName checks if s is a valid package name per PMS.
+// isValidCategory is an alias for internal use.
+// Deprecated: Use IsValidCategory instead.
+func isValidCategory(s string) bool {
+	return IsValidCategory(s)
+}
+
+// IsValidPackageName checks if s is a valid package name per PMS.
 // Format: [A-Za-z0-9][A-Za-z0-9+_-]*
 // Note: '.' is NOT allowed in package names (unlike categories)
-func isValidPackageName(s string) bool {
+//
+// This function is critical for security - it prevents path traversal attacks
+// by rejecting package names containing ".." or other invalid characters.
+// See: https://github.com/grpmsoft/grpm/issues/36
+func IsValidPackageName(s string) bool {
 	if len(s) == 0 {
 		return false
 	}
@@ -454,6 +468,12 @@ func isValidPackageName(s string) bool {
 	}
 
 	return true
+}
+
+// isValidPackageName is an alias for internal use.
+// Deprecated: Use IsValidPackageName instead.
+func isValidPackageName(s string) bool {
+	return IsValidPackageName(s)
 }
 
 // isValidSlot checks if s is a valid slot name per PMS.
