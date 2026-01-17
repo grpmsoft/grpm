@@ -78,6 +78,7 @@ Key insight: **Eclasses don't need Go implementations.** They are loaded dynamic
 - **`--onlydeps` / `-o` flag** — Build dependencies only, skip target package(s) ([#33](https://github.com/grpmsoft/grpm/issues/33))
 - **Docker optimization** — Pre-build dependencies in a separate layer for better caching
 - **Portage compatible** — Same behavior as `emerge --onlydeps`
+- **Fix: Versioned atom version selection** — `=sys-devel/gcc-13.4.1` now correctly selects specified version ([#32](https://github.com/grpmsoft/grpm/issues/32))
 
 ### v0.7.9 — Versioned Atom Support
 
