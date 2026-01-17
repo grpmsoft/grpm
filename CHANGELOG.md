@@ -5,17 +5,16 @@ All notable changes to GRPM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.8.0] - 2026-01-17
 
-### Fixed
-- **Repository path detection** ([#41](https://github.com/grpmsoft/grpm/issues/41)) — Commands now use `make.conf` PORTDIR instead of hardcoded `/var/db/repos/gentoo`
-  - Affected commands: `search`, `info`, `update`
-  - Users with non-standard repository locations can now use GRPM without `--repo` flag
+### Configuration Management Release
 
-### Planned
-- Performance optimization for large dependency graphs
-- Web UI for daemon management
-- Native GUI application ([gogpu/ui](https://github.com/gogpu/ui))
+Full Portage configuration compatibility ([#40](https://github.com/grpmsoft/grpm/issues/40), [#41](https://github.com/grpmsoft/grpm/issues/41), [#42](https://github.com/grpmsoft/grpm/issues/42)):
+
+### Added
+- **Dynamic make.conf parser** — Variable expansion (`${VAR}`, `$VAR`), `source` directive, circular reference prevention
+- **repos.conf support** — INI format parsing, `[DEFAULT]` main-repo, Portage fallback chain (repos.conf → PORTDIR → auto-detect)
+- **package.use patterns** — Full atom syntax (`=`, `>=`, `~`, `=*`, slots, wildcards), priority-based USE flag resolution, USE_EXPAND support
 
 ---
 

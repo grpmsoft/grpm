@@ -1,6 +1,6 @@
 # GRPM Roadmap
 
-> **Security Release (v0.7.11)**
+> **Configuration Management Release (v0.8.0)**
 >
 > Rapid development complete (v0.1.0 → v0.5.0).
 > Infrastructure release complete (v0.6.0).
@@ -11,7 +11,8 @@
 > `--root` flag for chroot/stage tarball builds (v0.7.8).
 > Versioned atom support: `=pkg-1.0`, `>=pkg-2.0` (v0.7.9).
 > `--onlydeps` flag for Docker layer caching (v0.7.10).
-> **Security fix: Path traversal prevention (v0.7.11).**
+> Security fix: Path traversal prevention (v0.7.11).
+> **Dynamic make.conf, repos.conf, and package.use pattern matching (v0.8.0).**
 > **98.2% tree coverage verified on real Gentoo!**
 
 ---
@@ -50,6 +51,7 @@ Key insight: **Eclasses don't need Go implementations.** They are loaded dynamic
 | Category | Features |
 |----------|----------|
 | **Core** | SAT solver, version comparison, slot/subslot, USE flags |
+| **Configuration** | make.conf, repos.conf, package.use/mask/keywords with full Portage compatibility |
 | **Build Systems** | autotools, CMake, Meson |
 | **Languages** | Python (distutils-r1), Rust (cargo.eclass), Go (go-module.eclass) |
 | **Multilib** | 32-bit/64-bit ABI support |
@@ -72,7 +74,15 @@ Key insight: **Eclasses don't need Go implementations.** They are loaded dynamic
 
 ## Release History
 
-### v0.7.11 — Security Release (Current)
+### v0.8.0 — Configuration Management (Current)
+
+**Full Portage configuration compatibility** ([#40](https://github.com/grpmsoft/grpm/issues/40), [#41](https://github.com/grpmsoft/grpm/issues/41), [#42](https://github.com/grpmsoft/grpm/issues/42)):
+
+- **make.conf** — Dynamic parser with variable expansion, `source` directive
+- **repos.conf** — INI format, Portage fallback chain for repository detection
+- **package.use** — Full atom syntax, priority-based resolution, USE_EXPAND
+
+### v0.7.11 — Security Release
 
 **Critical security fix: Path traversal prevention ([#36](https://github.com/grpmsoft/grpm/issues/36))**
 
