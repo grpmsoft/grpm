@@ -175,24 +175,28 @@ func (a *App) IsDaemonMode() bool {
 	return a.client.IsDaemonAvailable()
 }
 
-// ExecuteViaDaemon executes command via daemon
+// ExecuteViaDaemon executes command via daemon gRPC API.
+// This is a placeholder for future daemon-mode command routing.
+// Currently all commands are handled by specific run* methods.
 func (a *App) ExecuteViaDaemon(command string, args []string) error {
 	if !a.client.IsDaemonAvailable() {
 		return fmt.Errorf("daemon not available")
 	}
 
-	// TODO: Implement gRPC call in Phase 2
 	a.log.Verbose("Executing via daemon: %s %v", command, args)
 
-	return fmt.Errorf("not implemented yet (Phase 2)")
+	// TODO: Implement gRPC call when daemon command routing is added
+	return fmt.Errorf("daemon command routing not implemented")
 }
 
-// ExecuteStandalone executes command in standalone mode
+// ExecuteStandalone executes command in standalone mode (without daemon).
+// This is a placeholder for future generic command routing.
+// Currently all commands are handled by specific run* methods.
 func (a *App) ExecuteStandalone(command string, args []string) error {
 	a.log.Verbose("Executing in standalone mode: %s %v", command, args)
 
-	// TODO: Implement direct execution in Phase 4
-	return fmt.Errorf("not implemented yet (Phase 4)")
+	// TODO: Implement when generic command routing is needed
+	return fmt.Errorf("generic command routing not implemented")
 }
 
 // GetClient returns the underlying client

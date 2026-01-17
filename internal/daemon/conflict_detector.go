@@ -130,10 +130,10 @@ func (cd *ConflictDetector) checkJobConflict(newJob, existingJob *Job, newAffect
 		}
 	}
 
-	// 3. Check slot conflicts (Phase 4+)
+	// 3. Check slot conflicts
 	// TODO: Implement slot conflict detection using package metadata
 
-	// 4. Check blocker conflicts (Phase 4+)
+	// 4. Check blocker conflicts
 	// TODO: Implement blocker detection (packages that block each other)
 
 	return nil

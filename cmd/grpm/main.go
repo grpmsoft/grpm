@@ -39,7 +39,7 @@ func runDaemon() error {
 	log.SetPrefix("[daemon] ")
 	log.Printf("GRPM daemon version %s (commit: %s, built: %s)", Version, GitCommit, BuildDate)
 
-	// Load configuration (use defaults for Phase 1)
+	// Load configuration
 	config := daemon.DefaultConfig()
 
 	// Create daemon

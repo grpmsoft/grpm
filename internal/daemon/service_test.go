@@ -192,12 +192,9 @@ func TestGRPCService_InstallPackage(t *testing.T) {
 				t.Error("Expected non-empty stage")
 			}
 		case *pb.InstallPackageResponse_Completion:
-			// Phase 2: Should indicate not implemented
-			if event.Completion.Success {
-				t.Error("Expected success=false for Phase 2 stub")
-			}
+			// Installation completed (success or failure)
 		case *pb.InstallPackageResponse_Error:
-			// OK for Phase 2 stub
+			// Error event is valid response
 		default:
 			t.Errorf("Unexpected event type: %T", event)
 		}
