@@ -106,6 +106,25 @@ func (pr *PortageRepository) LoadPackage(name string) (*pkg.Package, error) {
 	return pr.parseEbuild(name, filepath.Join(pkgDir, pkgName+"-"+latestVersion+".ebuild"))
 }
 
+// LoadPackageVersion loads a specific version of a package.
+// Returns error if the exact version is not found.
+func (pr *PortageRepository) LoadPackageVersion(name, version string) (*pkg.Package, error) {
+	category, pkgName, found := strings.Cut(name, "/")
+	if !found {
+		return nil, fmt.Errorf("invalid package name: %s", name)
+	}
+
+	pkgDir := filepath.Join(pr.Path, category, pkgName)
+	ebuildPath := filepath.Join(pkgDir, pkgName+"-"+version+".ebuild")
+
+	// Check if the specific version exists
+	if _, err := os.Stat(ebuildPath); os.IsNotExist(err) {
+		return nil, fmt.Errorf("version %s not found for %s", version, name)
+	}
+
+	return pr.parseEbuild(name, ebuildPath)
+}
+
 func (pr *PortageRepository) parseEbuild(name, path string) (*pkg.Package, error) {
 	// Check cache first
 	if cached, ok := pr.cache.Load(path); ok {

@@ -116,14 +116,21 @@ func (r *PortageResolver) addPackageConstraints(adapter *GophersatAdapter, p *pk
 	}
 }
 
-// buildResultFromSolution builds the final result map from the SAT solution
+// buildResultFromSolution builds the final result map from the SAT solution.
+// The solution map contains package names as keys and selected versions as values.
 func (r *PortageResolver) buildResultFromSolution(solution map[string]string) (map[string]*pkg.Package, error) {
 	result := make(map[string]*pkg.Package)
-	for name := range solution {
-		p, err := r.repo.LoadPackage(name)
+	for name, version := range solution {
+		// Load the specific version that was selected by the SAT solver
+		p, err := r.repo.LoadPackageVersion(name, version)
 		if err != nil {
-			logging.Debug("Warning: package %s not found: %v", name, err)
-			continue
+			// Fallback to LoadPackage if LoadPackageVersion fails
+			// This handles cases where version might be empty
+			p, err = r.repo.LoadPackage(name)
+			if err != nil {
+				logging.Debug("Warning: package %s not found: %v", name, err)
+				continue
+			}
 		}
 		result[name] = p
 	}

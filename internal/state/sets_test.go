@@ -558,6 +558,13 @@ func (r *mockRepo) LoadPackage(name string) (*pkg.Package, error) {
 	return nil, repo.ErrPackageNotFound
 }
 
+func (r *mockRepo) LoadPackageVersion(name, version string) (*pkg.Package, error) {
+	if p, ok := r.packages[name]; ok && p.Version == version {
+		return p, nil
+	}
+	return nil, repo.ErrPackageNotFound
+}
+
 func (r *mockRepo) LoadPackages(names []string) ([]*pkg.Package, error) {
 	var result []*pkg.Package
 	for _, name := range names {

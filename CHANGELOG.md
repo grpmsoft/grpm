@@ -29,9 +29,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Compatible with versioned atoms: `grpm emerge -o "=sys-devel/gcc-13.4.1"`
   - Portage-compatible behavior (same as `emerge --onlydeps`)
 
+### Fixed
+- **Versioned atoms now correctly select specified version** ([#32](https://github.com/grpmsoft/grpm/issues/32))
+  - Previously: `=sys-devel/gcc-13.4.1_p20250807` would incorrectly select `gcc-16.0.9999` (latest)
+  - Now: Resolver properly uses version from SAT solver solution via `LoadPackageVersion()`
+  - Root cause: `buildResultFromSolution()` was ignoring the version and loading latest instead
+
 ### Technical Details
 - `internal/cli/emerge.go` — Added `--onlydeps` flag and `filterTargetPackages()` function
 - `internal/cli/emerge_test.go` — 6 test cases for atom filtering
+- `internal/repo/repository.go` — Added `LoadPackageVersion()` to Repository interface
+- `internal/repo/portage.go` — Implemented `LoadPackageVersion()` for exact version loading
+- `internal/solver/resolver.go` — Fixed `buildResultFromSolution()` to use `LoadPackageVersion()`
 
 ---
 

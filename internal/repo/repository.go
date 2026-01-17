@@ -7,8 +7,11 @@ import (
 // Repository provides access to package storage following DDD Repository pattern
 // It acts as a collection-like interface to packages, abstracting persistence details
 type Repository interface {
-	// LoadPackage loads a single package by exact name
+	// LoadPackage loads a single package by exact name (highest version)
 	LoadPackage(name string) (*pkg.Package, error)
+
+	// LoadPackageVersion loads a specific version of a package
+	LoadPackageVersion(name, version string) (*pkg.Package, error)
 
 	// LoadPackages loads multiple packages by exact names
 	LoadPackages(names []string) ([]*pkg.Package, error)
