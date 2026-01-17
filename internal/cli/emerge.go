@@ -62,12 +62,18 @@ func (a *App) runEmerge(args []string) error {
 	rootPath := fs.String("root", "/", "Installation root directory (like $ROOT in Portage)")
 	onlyDeps := fs.Bool("onlydeps", false, "Build dependencies only, not the target package(s)")
 	fs.BoolVar(onlyDeps, "o", false, "Alias for --onlydeps")
+	showInfo := fs.Bool("info", false, "Show system environment information")
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil // Help was requested, not an error
 		}
 		return err
+	}
+
+	// Handle --info (doesn't require packages)
+	if *showInfo {
+		return a.runSystemInfo(cfg, *repoPath)
 	}
 
 	packages := fs.Args()
@@ -126,7 +132,8 @@ func (a *App) runEmerge(args []string) error {
 	}
 	fmt.Println()
 	for name, p := range solution {
-		fmt.Printf("[ebuild  N    ] %s-%s USE=\"...\"\n", name, p.Version)
+		useStr := FormatUSEFlags(p, cfg)
+		fmt.Printf("[ebuild  N    ] %s-%s %s\n", name, p.Version, useStr)
 	}
 	fmt.Printf("\nTotal: %d package(s)\n", len(solution))
 
@@ -626,6 +633,11 @@ func (a *App) filterTargetPackages(solution map[string]*pkg.Package, packages []
 // Analyzes the ebuilds in the solution to determine which eclasses are inherited,
 // then checks if the tools required by those eclasses are present on the system.
 //
+// This uses per-package tool checking via CheckForEclassesOnly(), which only
+// checks tools explicitly mapped to the inherited eclasses. This prevents
+// packages like sys-libs/glibc from requiring Rust, Java, or Ruby when they
+// don't actually need those tools.
+//
 // Returns an error if required tools are missing, with suggestions for installation.
 func (a *App) checkBuildTools(solution map[string]*pkg.Package, repoPath string) error {
 	logging.Debug("Checking external tool availability...")
@@ -668,8 +680,11 @@ func (a *App) checkBuildTools(solution map[string]*pkg.Package, repoPath string)
 		eclassList = append(eclassList, eclass)
 	}
 
-	// Check tools for all eclasses
-	result := checker.CheckForEclasses(eclassList)
+	// Check tools ONLY for the specific eclasses inherited by these packages.
+	// This uses CheckForEclassesOnly() instead of CheckForEclasses() to avoid
+	// requiring tools from the global registry (e.g., Rust for cargo eclass)
+	// when the packages don't actually inherit those eclasses.
+	result := checker.CheckForEclassesOnly(eclassList)
 
 	if a.verbose {
 		logging.Debug("Detected eclasses: %v", eclassList)
@@ -691,5 +706,20 @@ func (a *App) checkBuildTools(solution map[string]*pkg.Package, repoPath string)
 		logging.Debug("All %d required tools are available", len(result.Required))
 	}
 
+	return nil
+}
+
+// runSystemInfo displays system environment information (emerge --info).
+//
+// This is the GRPM equivalent of Portage's "emerge --info" command.
+// It displays:
+//   - GRPM version and Go version
+//   - System uname and memory info
+//   - Key installed packages (gcc, glibc, binutils, etc.)
+//   - Repository information
+//   - Configuration variables (CFLAGS, USE, etc.)
+func (a *App) runSystemInfo(cfg *config.Config, repoPath string) error {
+	info := GatherSystemInfo(a.version, cfg, repoPath)
+	fmt.Print(FormatSystemInfo(info))
 	return nil
 }

@@ -254,7 +254,13 @@ func (a *App) runResolve(args []string) error {
 	pkgResolver := a.createResolverWithMasks(r)
 	solution, err := pkgResolver.Resolve(packages)
 	if err != nil {
-		return fmt.Errorf("resolution failed: %w", err)
+		// Wrap with user-friendly error
+		if len(packages) == 1 {
+			// Try to find similar packages for single package queries
+			similar := repo.FindSimilarPackages(packages[0], *repoPath, 3)
+			return WrapPackageNotFound(packages[0], similar, err)
+		}
+		return WrapResolutionError(packages[0], err)
 	}
 
 	if len(solution) == 0 {

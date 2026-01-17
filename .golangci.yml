@@ -44,6 +44,12 @@ linters:
           - gofmt
           - goimports
 
+      # CLI commands with many flags naturally have high complexity
+      - path: internal/cli/emerge\.go
+        text: "runEmerge"
+        linters:
+          - gocyclo
+
 issues:
   # Show all issues
   max-issues-per-linter: 0

@@ -5,6 +5,29 @@ All notable changes to GRPM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.2] - 2026-01-17
+
+### UX Improvements Release
+
+User experience improvements and bug fixes based on community feedback.
+
+### Added
+- **`emerge --info` command** — Displays system environment like Portage (Go version, platform, memory, repos, installed packages)
+- **USE flags in `--pretend` output** — Shows `USE="flag1 -flag2"` in emerge pretend mode
+- **User-friendly error messages** — Clear error messages with package suggestions when packages not found
+- **Similar package search** — Fuzzy matching algorithm suggests similar packages on typos (e.g., "neofatch" → "neofetch")
+- **Per-package tool check** — `grpm tools --check` now shows which tools are needed by specific eclasses
+
+### Fixed
+- **Search version display** — Versions now sorted correctly using PMS version comparison
+- **Info command filtering** — Respects mask and keyword filtering like resolve/emerge
+- **Dependency deduplication** — Info output no longer shows duplicate dependencies
+
+### Changed
+- Error messages now use `errors.As()` for proper wrapped error handling
+
+---
+
 ## [0.8.1] - 2026-01-17
 
 ### Package Mask, Keywords Filtering & Atom Parsing Fix

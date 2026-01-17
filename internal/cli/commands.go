@@ -5,9 +5,12 @@ import (
 	"flag"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 
+	"github.com/grpmsoft/grpm/internal/config"
 	"github.com/grpmsoft/grpm/internal/logging"
+	"github.com/grpmsoft/grpm/internal/mask"
 	"github.com/grpmsoft/grpm/internal/pkg"
 	"github.com/grpmsoft/grpm/internal/repo"
 	"github.com/grpmsoft/grpm/internal/solver"
@@ -86,12 +89,28 @@ func (a *App) runSearch(args []string) error {
 				}
 				found++
 
-				// Try to get latest version
-				versions, _ := filepath.Glob(filepath.Join(pkgPath, "*.ebuild"))
+				// Try to get latest version using PMS-compliant version comparison
+				ebuilds, _ := filepath.Glob(filepath.Join(pkgPath, "*.ebuild"))
 				latestVersion := "unknown"
-				if len(versions) > 0 {
-					ebuildName := filepath.Base(versions[len(versions)-1])
-					latestVersion = strings.TrimSuffix(strings.TrimPrefix(ebuildName, pkgName+"-"), ".ebuild")
+				if len(ebuilds) > 0 {
+					// Extract all versions from ebuild filenames
+					var parsedVersions []string
+					for _, ebuildPath := range ebuilds {
+						ebuildName := filepath.Base(ebuildPath)
+						version := strings.TrimSuffix(strings.TrimPrefix(ebuildName, pkgName+"-"), ".ebuild")
+						if version != "" {
+							parsedVersions = append(parsedVersions, version)
+						}
+					}
+
+					// Sort versions using PMS-compliant comparison (ascending order)
+					if len(parsedVersions) > 0 {
+						sort.Slice(parsedVersions, func(i, j int) bool {
+							return pkg.CompareVersions(parsedVersions[i], parsedVersions[j]) < 0
+						})
+						// Take the highest version (last after ascending sort)
+						latestVersion = parsedVersions[len(parsedVersions)-1]
+					}
 				}
 
 				fmt.Printf("*  %s\n", fullName)
@@ -144,10 +163,17 @@ func (a *App) runInfo(args []string) error {
 		return err
 	}
 
-	// Load package from atom (handles versioned atoms like "=sys-devel/gcc-13.4.1")
-	p, err := a.loadPackageFromAtom(r, atomStr)
+	// Load package with mask/keyword filtering (like resolver does)
+	// This ensures `grpm info sys-devel/gcc` shows gcc-15.x instead of gcc-16.0.9999
+	p, err := a.loadBestPackageVersion(r, atomStr, *repoPath, cfg)
 	if err != nil {
-		return fmt.Errorf("package '%s' not found: %w", atomStr, err)
+		// Fall back to loadPackageFromAtom for explicit version requests or errors
+		p, err = a.loadPackageFromAtom(r, atomStr)
+		if err != nil {
+			// Wrap with user-friendly error
+			similar := repo.FindSimilarPackages(atomStr, *repoPath, 3)
+			return WrapPackageNotFound(atomStr, similar, err)
+		}
 	}
 
 	// Display package information
@@ -173,9 +199,23 @@ func (a *App) runInfo(args []string) error {
 	}
 
 	if len(p.Deps) > 0 {
-		fmt.Printf("\nDependencies (%d):\n", len(p.Deps))
+		// Deduplicate and sort dependencies
+		seen := make(map[string]bool)
+		var uniqueDeps []string
+
 		for _, dep := range p.Deps {
-			fmt.Printf("  %s\n", dep.String())
+			depStr := dep.String()
+			if !seen[depStr] {
+				seen[depStr] = true
+				uniqueDeps = append(uniqueDeps, depStr)
+			}
+		}
+
+		sort.Strings(uniqueDeps)
+
+		fmt.Printf("\nDependencies (%d):\n", len(uniqueDeps))
+		for _, depStr := range uniqueDeps {
+			fmt.Printf("  %s\n", depStr)
 		}
 	}
 
@@ -683,4 +723,111 @@ func (a *App) loadPackageFromAtom(r repo.Repository, atomStr string) (*pkg.Packa
 
 	// No version specified - load latest
 	return r.LoadPackage(cp)
+}
+
+// loadBestPackageVersion loads the best (stable, unmasked) version of a package.
+//
+// This applies the same filtering as the resolver:
+//   - Excludes masked packages (package.mask)
+//   - Excludes unkeyworded packages (KEYWORDS vs ACCEPT_KEYWORDS)
+//   - Returns the highest stable version
+//
+// For explicit version requests (atoms with version operators like =, >=, etc.),
+// this function returns an error to allow fallback to loadPackageFromAtom.
+//
+// Example:
+//
+//	// Returns gcc-15.2.1 instead of gcc-16.0.9999 (masked)
+//	p, err := app.loadBestPackageVersion(repo, "sys-devel/gcc", repoPath, cfg)
+func (a *App) loadBestPackageVersion(r repo.Repository, atomStr, repoPath string, cfg *config.Config) (*pkg.Package, error) {
+	// Try to parse as a PMS atom
+	atom, err := pkg.ParseAtom(atomStr)
+	if err != nil {
+		// If parsing fails, treat as simple category/package
+		atom = &pkg.Atom{
+			Category: "",
+			Package:  atomStr,
+		}
+		// Try to split category/package
+		if parts := strings.SplitN(atomStr, "/", 2); len(parts) == 2 {
+			atom.Category = parts[0]
+			atom.Package = parts[1]
+		} else {
+			return nil, fmt.Errorf("invalid package atom: %s", atomStr)
+		}
+	}
+
+	// If atom has an explicit version, defer to loadPackageFromAtom
+	// User explicitly requested a specific version
+	if atom.HasVersion() {
+		return nil, fmt.Errorf("explicit version requested, use loadPackageFromAtom")
+	}
+
+	// Get category/package
+	cp := atom.CP()
+
+	// Check if this is a Portage repository
+	portageRepo, isPortage := r.(*repo.PortageRepository)
+	if !isPortage {
+		// Mock repository - no filtering needed
+		return r.LoadPackage(cp)
+	}
+
+	// Get all versions of this package
+	versions, err := portageRepo.GetAllVersions(cp)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get versions for %s: %w", cp, err)
+	}
+
+	if len(versions) == 0 {
+		return nil, fmt.Errorf("no versions found for %s", cp)
+	}
+
+	// Create mask manager for filtering
+	profilePath := a.detectProfilePath()
+	maskMgr, err := mask.NewMaskManager(cfg, repoPath, profilePath)
+	if err != nil {
+		a.log.Verbose("Could not initialize mask manager: %v", err)
+		// Continue without mask filtering
+		maskMgr = nil
+	}
+
+	// Get ACCEPT_KEYWORDS
+	acceptKeywords := a.getAcceptKeywords(cfg)
+
+	// Filter versions: exclude masked and unkeyworded packages
+	var acceptableVersions []*pkg.Package
+	for _, p := range versions {
+		// Check package.mask
+		if maskMgr != nil && maskMgr.IsPackageMasked(p) {
+			logging.Debug("Filtered masked package: %s-%s", p.Name, p.Version)
+			continue
+		}
+
+		// Check KEYWORDS
+		if len(acceptKeywords) > 0 && !p.IsKeywordAccepted(acceptKeywords) {
+			logging.Debug("Filtered unkeyworded package: %s-%s (KEYWORDS: %v)",
+				p.Name, p.Version, p.Keywords)
+			continue
+		}
+
+		acceptableVersions = append(acceptableVersions, p)
+	}
+
+	if len(acceptableVersions) == 0 {
+		// All versions are masked or unkeyworded
+		// Return error to trigger fallback
+		return nil, fmt.Errorf("no unmasked/keyworded versions found for %s", cp)
+	}
+
+	// Sort by version (highest first) and return the best
+	sort.Slice(acceptableVersions, func(i, j int) bool {
+		return pkg.CompareVersions(acceptableVersions[i].Version, acceptableVersions[j].Version) > 0
+	})
+
+	bestVersion := acceptableVersions[0]
+	logging.Debug("Best version for %s: %s (filtered %d/%d versions)",
+		cp, bestVersion.Version, len(versions)-len(acceptableVersions), len(versions))
+
+	return bestVersion, nil
 }

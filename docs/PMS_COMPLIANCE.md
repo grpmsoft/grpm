@@ -2,7 +2,7 @@
 
 > **GRPM Implementation Status per [Package Manager Specification](https://projects.gentoo.org/pms/)**
 >
-> **Version:** v0.8.1
+> **Version:** v0.8.2
 > **Last Updated:** 2026-01-17
 > **License:** This document follows PMS under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/)
 
@@ -576,12 +576,15 @@ EAPI 7+ cross-compilation variables (SYSROOT, ESYSROOT, BROOT) are defined but n
 
 ## Roadmap to Full Compliance
 
-### v0.8.2 (In Progress)
+### v0.8.2 (Complete)
 
-- [ ] `emerge --info` command (system environment display)
-- [ ] USE flags display in `emerge --pretend`
-- [ ] User-friendly error messages
-- [ ] Apply filtering to info/search commands
+- [x] `emerge --info` command (system environment display)
+- [x] USE flags display in `emerge --pretend`
+- [x] User-friendly error messages with package suggestions
+- [x] Apply filtering to info/search commands
+- [x] Per-package tool check based on eclasses
+- [x] Search version sorting (PMS-compliant)
+- [x] Dependency deduplication in info output
 
 ### v0.9.0 (Planned)
 
