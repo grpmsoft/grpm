@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Repository path detection** ([#41](https://github.com/grpmsoft/grpm/issues/41)) — Commands now use `make.conf` PORTDIR instead of hardcoded `/var/db/repos/gentoo`
+  - Affected commands: `search`, `info`, `update`
+  - Users with non-standard repository locations can now use GRPM without `--repo` flag
+
 ### Planned
 - Performance optimization for large dependency graphs
 - Web UI for daemon management
