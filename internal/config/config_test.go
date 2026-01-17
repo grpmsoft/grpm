@@ -1,8 +1,10 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -1513,5 +1515,493 @@ location = /from/reposconf
 	// repos.conf should take precedence
 	if loc != "/from/reposconf" {
 		t.Errorf("GetMainRepoLocation() = %q, want %q (repos.conf should override PORTDIR)", loc, "/from/reposconf")
+	}
+}
+
+// TestGetPackageUSEForPackage_BasicPatterns tests basic pattern matching for package.use.
+func TestGetPackageUSEForPackage_BasicPatterns(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create package.use with various patterns
+	packageUsePath := filepath.Join(tmpDir, "package.use")
+	content := `# Test patterns
+app-misc/hello unicode
+sys-libs/zlib ssl -debug
+`
+	if err := os.WriteFile(packageUsePath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+
+	// Test basic category/package match
+	flags := cfg.GetPackageUSEForPackage("app-misc", "hello", "2.10", "0")
+	if len(flags) != 1 || flags[0] != "unicode" {
+		t.Errorf("GetPackageUSEForPackage(app-misc/hello) = %v, want [unicode]", flags)
+	}
+
+	// Test package with negative flag
+	flags = cfg.GetPackageUSEForPackage("sys-libs", "zlib", "1.2.13", "0")
+	if len(flags) != 2 {
+		t.Errorf("GetPackageUSEForPackage(sys-libs/zlib) = %v, want 2 flags", flags)
+	}
+
+	// Test non-matching package
+	flags = cfg.GetPackageUSEForPackage("dev-libs", "openssl", "3.0.0", "0")
+	if flags != nil {
+		t.Errorf("GetPackageUSEForPackage(non-matching) = %v, want nil", flags)
+	}
+}
+
+// TestGetPackageUSEForPackage_WildcardPatterns tests wildcard pattern matching.
+func TestGetPackageUSEForPackage_WildcardPatterns(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	packageUsePath := filepath.Join(tmpDir, "package.use")
+	content := `# Wildcard patterns
+*/* -bluetooth
+app-misc/* unicode
+dev-*/* debug
+`
+	if err := os.WriteFile(packageUsePath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+
+	// Test */* matches all
+	flags := cfg.GetPackageUSEForPackage("sys-libs", "zlib", "1.2.13", "0")
+	if len(flags) != 1 || flags[0] != "-bluetooth" {
+		t.Errorf("*/* should match sys-libs/zlib: got %v", flags)
+	}
+
+	// Test app-misc/* matches app-misc/hello
+	flags = cfg.GetPackageUSEForPackage("app-misc", "hello", "2.10", "0")
+	// Should have unicode (more specific) and -bluetooth (from */*)
+	// unicode is more specific than -bluetooth
+	found := make(map[string]bool)
+	for _, f := range flags {
+		found[f] = true
+	}
+	if !found["unicode"] {
+		t.Errorf("app-misc/* should provide unicode: got %v", flags)
+	}
+	if !found["-bluetooth"] {
+		t.Errorf("*/* should provide -bluetooth: got %v", flags)
+	}
+
+	// Test dev-*/* matches dev-libs/openssl
+	flags = cfg.GetPackageUSEForPackage("dev-libs", "openssl", "3.0.0", "0")
+	found = make(map[string]bool)
+	for _, f := range flags {
+		found[f] = true
+	}
+	if !found["debug"] {
+		t.Errorf("dev-*/* should provide debug: got %v", flags)
+	}
+	if !found["-bluetooth"] {
+		t.Errorf("*/* should provide -bluetooth: got %v", flags)
+	}
+}
+
+// TestGetPackageUSEForPackage_VersionConstraints tests version-based pattern matching.
+func TestGetPackageUSEForPackage_VersionConstraints(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	packageUsePath := filepath.Join(tmpDir, "package.use")
+	content := `# Version constraints
+>=app-misc/hello-2.0 ssl
+<app-misc/hello-3.0 -debug
+=app-misc/hello-2.10 test
+`
+	if err := os.WriteFile(packageUsePath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+
+	// Version 2.10 should match all three patterns
+	flags := cfg.GetPackageUSEForPackage("app-misc", "hello", "2.10", "0")
+	found := make(map[string]bool)
+	for _, f := range flags {
+		found[f] = true
+	}
+
+	// =cpv is most specific, should have test
+	if !found["test"] {
+		t.Errorf("=app-misc/hello-2.10 should provide test: got %v", flags)
+	}
+	// >=cpv should provide ssl
+	if !found["ssl"] {
+		t.Errorf(">=app-misc/hello-2.0 should provide ssl: got %v", flags)
+	}
+	// <cpv should provide -debug
+	if !found["-debug"] {
+		t.Errorf("<app-misc/hello-3.0 should provide -debug: got %v", flags)
+	}
+
+	// Version 1.0 should NOT match >=2.0
+	flags = cfg.GetPackageUSEForPackage("app-misc", "hello", "1.0", "0")
+	found = make(map[string]bool)
+	for _, f := range flags {
+		found[f] = true
+	}
+	if found["ssl"] {
+		t.Errorf(">=app-misc/hello-2.0 should NOT match v1.0: got %v", flags)
+	}
+	// But should match <3.0
+	if !found["-debug"] {
+		t.Errorf("<app-misc/hello-3.0 should match v1.0: got %v", flags)
+	}
+
+	// Version 4.0 should NOT match <3.0
+	flags = cfg.GetPackageUSEForPackage("app-misc", "hello", "4.0", "0")
+	found = make(map[string]bool)
+	for _, f := range flags {
+		found[f] = true
+	}
+	if found["-debug"] {
+		t.Errorf("<app-misc/hello-3.0 should NOT match v4.0: got %v", flags)
+	}
+}
+
+// TestGetPackageUSEForPackage_PriorityOverride tests that specific patterns override general ones.
+func TestGetPackageUSEForPackage_PriorityOverride(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	packageUsePath := filepath.Join(tmpDir, "package.use")
+	content := `# Priority: specific overrides general
+*/* -ssl
+app-misc/hello ssl
+`
+	if err := os.WriteFile(packageUsePath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+
+	// app-misc/hello should have ssl (cp is more specific than wildcard)
+	flags := cfg.GetPackageUSEForPackage("app-misc", "hello", "2.10", "0")
+
+	// Check that ssl is enabled (not -ssl)
+	for _, f := range flags {
+		if f == "-ssl" {
+			t.Errorf("More specific app-misc/hello ssl should override */* -ssl: got %v", flags)
+		}
+	}
+
+	found := false
+	for _, f := range flags {
+		if f == "ssl" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("Expected ssl from app-misc/hello: got %v", flags)
+	}
+
+	// sys-libs/zlib should have -ssl from wildcard
+	flags = cfg.GetPackageUSEForPackage("sys-libs", "zlib", "1.2.13", "0")
+	found = false
+	for _, f := range flags {
+		if f == "-ssl" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("Expected -ssl from */* for sys-libs/zlib: got %v", flags)
+	}
+}
+
+// TestGetPackageUSEForPackage_SlotConstraints tests slot-based matching.
+func TestGetPackageUSEForPackage_SlotConstraints(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	packageUsePath := filepath.Join(tmpDir, "package.use")
+	content := `# Slot constraints
+dev-lang/python:3.11 tk
+dev-lang/python:3.12 -tk ssl
+dev-lang/python gdbm
+`
+	if err := os.WriteFile(packageUsePath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+
+	// Python 3.11 slot should have tk (slot-specific) and gdbm (cp)
+	flags := cfg.GetPackageUSEForPackage("dev-lang", "python", "3.11.0", "3.11")
+	found := make(map[string]bool)
+	for _, f := range flags {
+		found[f] = true
+	}
+	if !found["tk"] {
+		t.Errorf("python:3.11 should have tk: got %v", flags)
+	}
+	if !found["gdbm"] {
+		t.Errorf("python should have gdbm: got %v", flags)
+	}
+
+	// Python 3.12 slot should have -tk, ssl, and gdbm
+	flags = cfg.GetPackageUSEForPackage("dev-lang", "python", "3.12.0", "3.12")
+	found = make(map[string]bool)
+	for _, f := range flags {
+		found[f] = true
+	}
+	if !found["-tk"] {
+		t.Errorf("python:3.12 should have -tk: got %v", flags)
+	}
+	if !found["ssl"] {
+		t.Errorf("python:3.12 should have ssl: got %v", flags)
+	}
+	if !found["gdbm"] {
+		t.Errorf("python should have gdbm: got %v", flags)
+	}
+}
+
+// TestGetPackageUSEForPackage_USEExpand tests USE_EXPAND syntax.
+func TestGetPackageUSEForPackage_USEExpand(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	packageUsePath := filepath.Join(tmpDir, "package.use")
+	content := `# USE_EXPAND syntax
+*/* CPU_FLAGS_X86: avx2 sse4_2
+dev-lang/python PYTHON_TARGETS: python3_11 python3_12
+`
+	if err := os.WriteFile(packageUsePath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+
+	// Any package should have CPU_FLAGS_X86 expanded
+	flags := cfg.GetPackageUSEForPackage("app-misc", "hello", "2.10", "0")
+	found := make(map[string]bool)
+	for _, f := range flags {
+		found[f] = true
+	}
+	if !found["cpu_flags_x86_avx2"] {
+		t.Errorf("Expected cpu_flags_x86_avx2 from USE_EXPAND: got %v", flags)
+	}
+	if !found["cpu_flags_x86_sse4_2"] {
+		t.Errorf("Expected cpu_flags_x86_sse4_2 from USE_EXPAND: got %v", flags)
+	}
+
+	// Python should have both CPU_FLAGS and PYTHON_TARGETS expanded
+	flags = cfg.GetPackageUSEForPackage("dev-lang", "python", "3.11.0", "3.11")
+	found = make(map[string]bool)
+	for _, f := range flags {
+		found[f] = true
+	}
+	if !found["python_targets_python3_11"] {
+		t.Errorf("Expected python_targets_python3_11 from USE_EXPAND: got %v", flags)
+	}
+	if !found["python_targets_python3_12"] {
+		t.Errorf("Expected python_targets_python3_12 from USE_EXPAND: got %v", flags)
+	}
+	if !found["cpu_flags_x86_avx2"] {
+		t.Errorf("Expected cpu_flags_x86_avx2 from */* USE_EXPAND: got %v", flags)
+	}
+}
+
+// TestGetPackageUSEForPackage_RevisionOperator tests the ~ (any revision) operator.
+func TestGetPackageUSEForPackage_RevisionOperator(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	packageUsePath := filepath.Join(tmpDir, "package.use")
+	content := `# Revision operator
+~app-misc/hello-2.10 test
+`
+	if err := os.WriteFile(packageUsePath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+
+	// Base version should match
+	flags := cfg.GetPackageUSEForPackage("app-misc", "hello", "2.10", "0")
+	if len(flags) != 1 || flags[0] != "test" {
+		t.Errorf("~app-misc/hello-2.10 should match v2.10: got %v", flags)
+	}
+
+	// Version with revision should match
+	flags = cfg.GetPackageUSEForPackage("app-misc", "hello", "2.10-r1", "0")
+	if len(flags) != 1 || flags[0] != "test" {
+		t.Errorf("~app-misc/hello-2.10 should match v2.10-r1: got %v", flags)
+	}
+
+	// Different base version should NOT match
+	flags = cfg.GetPackageUSEForPackage("app-misc", "hello", "2.11", "0")
+	if len(flags) != 0 {
+		t.Errorf("~app-misc/hello-2.10 should NOT match v2.11: got %v", flags)
+	}
+}
+
+// TestGetPackageUSEForPackage_VersionPrefixOperator tests the =* (version prefix) operator.
+func TestGetPackageUSEForPackage_VersionPrefixOperator(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	packageUsePath := filepath.Join(tmpDir, "package.use")
+	content := `# Version prefix operator
+=app-misc/hello-2* ssl
+=app-misc/hello-2.10* debug
+`
+	if err := os.WriteFile(packageUsePath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+
+	// 2.10 matches both =2* and =2.10*
+	flags := cfg.GetPackageUSEForPackage("app-misc", "hello", "2.10", "0")
+	found := make(map[string]bool)
+	for _, f := range flags {
+		found[f] = true
+	}
+	if !found["ssl"] {
+		t.Errorf("=app-misc/hello-2* should match v2.10: got %v", flags)
+	}
+	if !found["debug"] {
+		t.Errorf("=app-misc/hello-2.10* should match v2.10: got %v", flags)
+	}
+
+	// 2.10.1 matches both
+	flags = cfg.GetPackageUSEForPackage("app-misc", "hello", "2.10.1", "0")
+	found = make(map[string]bool)
+	for _, f := range flags {
+		found[f] = true
+	}
+	if !found["ssl"] {
+		t.Errorf("=app-misc/hello-2* should match v2.10.1: got %v", flags)
+	}
+	if !found["debug"] {
+		t.Errorf("=app-misc/hello-2.10* should match v2.10.1: got %v", flags)
+	}
+
+	// 3.0 should NOT match =2*
+	flags = cfg.GetPackageUSEForPackage("app-misc", "hello", "3.0", "0")
+	if len(flags) != 0 {
+		t.Errorf("=app-misc/hello-2* should NOT match v3.0: got %v", flags)
+	}
+}
+
+// TestGetPackageUSEForPackage_EmptyConfig tests with no package.use file.
+func TestGetPackageUSEForPackage_EmptyConfig(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+
+	flags := cfg.GetPackageUSEForPackage("app-misc", "hello", "2.10", "0")
+	if flags != nil {
+		t.Errorf("Empty config should return nil: got %v", flags)
+	}
+}
+
+// TestGetPackageUSEForPackage_Directory tests loading from package.use directory.
+func TestGetPackageUSEForPackage_Directory(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create package.use as a directory
+	packageUseDir := filepath.Join(tmpDir, "package.use")
+	if err := os.MkdirAll(packageUseDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create multiple files
+	file1 := filepath.Join(packageUseDir, "10-global")
+	file1Content := `*/* -bluetooth
+`
+	if err := os.WriteFile(file1, []byte(file1Content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	file2 := filepath.Join(packageUseDir, "20-specific")
+	file2Content := `app-misc/hello ssl unicode
+`
+	if err := os.WriteFile(file2, []byte(file2Content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+
+	// hello should have ssl, unicode (from 20-specific) and -bluetooth (from 10-global)
+	flags := cfg.GetPackageUSEForPackage("app-misc", "hello", "2.10", "0")
+	found := make(map[string]bool)
+	for _, f := range flags {
+		found[f] = true
+	}
+	if !found["ssl"] {
+		t.Errorf("Expected ssl from 20-specific: got %v", flags)
+	}
+	if !found["unicode"] {
+		t.Errorf("Expected unicode from 20-specific: got %v", flags)
+	}
+	if !found["-bluetooth"] {
+		t.Errorf("Expected -bluetooth from 10-global: got %v", flags)
+	}
+}
+
+// BenchmarkGetPackageUSEForPackage benchmarks pattern matching performance.
+func BenchmarkGetPackageUSEForPackage(b *testing.B) {
+	tmpDir := b.TempDir()
+
+	// Create package.use with many patterns
+	var content strings.Builder
+	content.WriteString("*/* -bluetooth\n")
+	content.WriteString("app-*/* unicode\n")
+	content.WriteString("dev-*/* debug\n")
+	content.WriteString("sys-libs/* hardened\n")
+	for i := 0; i < 100; i++ {
+		content.WriteString(fmt.Sprintf("app-misc/pkg%d ssl\n", i))
+	}
+	content.WriteString("app-misc/hello test\n")
+	content.WriteString(">=app-misc/hello-2.0 ssl\n")
+	content.WriteString("=app-misc/hello-2.10 specific\n")
+
+	packageUsePath := filepath.Join(tmpDir, "package.use")
+	if err := os.WriteFile(packageUsePath, []byte(content.String()), 0644); err != nil {
+		b.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		b.Fatalf("LoadConfig() failed: %v", err)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = cfg.GetPackageUSEForPackage("app-misc", "hello", "2.10", "0")
 	}
 }

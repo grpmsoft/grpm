@@ -30,8 +30,12 @@ type Config struct {
 	// MakeConf contains settings from make.conf
 	MakeConf *MakeConf
 
-	// PackageUSE contains per-package USE flags
+	// PackageUSE contains per-package USE flags (raw atom -> flags mapping)
 	PackageUSE map[string][]string
+
+	// packageUSEEntries contains parsed package.use entries for pattern matching.
+	// Each entry has the parsed atom and expanded USE flags.
+	packageUSEEntries []packageUSEEntry
 
 	// PackageMask contains masked packages
 	PackageMask []string
@@ -41,6 +45,15 @@ type Config struct {
 
 	// PackageLicense contains license acceptances
 	PackageLicense map[string][]string
+}
+
+// packageUSEEntry represents a single parsed entry from package.use.
+type packageUSEEntry struct {
+	// Atom is the parsed package atom with version constraints
+	Atom *PackageAtom
+
+	// Flags contains the USE flags for this entry (after USE_EXPAND expansion)
+	Flags []string
 }
 
 // MakeConf represents settings from make.conf.
@@ -130,6 +143,7 @@ func LoadConfig(root string) (*Config, error) {
 		Root:                  root,
 		MakeConf:              DefaultMakeConf(),
 		PackageUSE:            make(map[string][]string),
+		packageUSEEntries:     make([]packageUSEEntry, 0),
 		PackageMask:           make([]string, 0),
 		PackageAcceptKeywords: make(map[string][]string),
 		PackageLicense:        make(map[string][]string),
@@ -142,8 +156,8 @@ func LoadConfig(root string) (*Config, error) {
 		fmt.Printf("Warning: failed to load make.conf: %v\n", err)
 	}
 
-	// Load package.use
-	if err := cfg.loadPackageFile("package.use", cfg.PackageUSE); err != nil && !os.IsNotExist(err) {
+	// Load package.use (with pattern matching support)
+	if err := cfg.loadPackageUSE(); err != nil && !os.IsNotExist(err) {
 		fmt.Printf("Warning: failed to load package.use: %v\n", err)
 	}
 
@@ -350,6 +364,17 @@ func (c *Config) parseMakeConfLine(line string) {
 // Format: <atom> <values>
 // Example: sys-libs/zlib ssl -debug
 func (c *Config) loadPackageFile(filename string, target map[string][]string) error {
+	return c.loadPackageFileWithParsing(filename, target, false)
+}
+
+// loadPackageUSE loads package.use with pattern parsing support.
+func (c *Config) loadPackageUSE() error {
+	return c.loadPackageFileWithParsing("package.use", c.PackageUSE, true)
+}
+
+// loadPackageFileWithParsing loads a package.* file with optional atom parsing.
+// When parseAtoms is true, entries are also stored in packageUSEEntries for pattern matching.
+func (c *Config) loadPackageFileWithParsing(filename string, target map[string][]string, parseAtoms bool) error {
 	path := filepath.Join(c.Root, filename)
 
 	// Check if it's a file or directory
@@ -363,15 +388,15 @@ func (c *Config) loadPackageFile(filename string, target map[string][]string) er
 
 	if info.IsDir() {
 		// Directory - load all files inside
-		return c.loadPackageDirectory(path, target)
+		return c.loadPackageDirectory(path, target, parseAtoms)
 	}
 
 	// Single file
-	return c.parsePackageFile(path, target)
+	return c.parsePackageFile(path, target, parseAtoms)
 }
 
 // loadPackageDirectory loads all files from a package.* directory.
-func (c *Config) loadPackageDirectory(dirPath string, target map[string][]string) error {
+func (c *Config) loadPackageDirectory(dirPath string, target map[string][]string, parseAtoms bool) error {
 	entries, err := os.ReadDir(dirPath)
 	if err != nil {
 		return err
@@ -383,7 +408,7 @@ func (c *Config) loadPackageDirectory(dirPath string, target map[string][]string
 		}
 
 		filePath := filepath.Join(dirPath, entry.Name())
-		if err := c.parsePackageFile(filePath, target); err != nil {
+		if err := c.parsePackageFile(filePath, target, parseAtoms); err != nil {
 			// Log error but continue with other files
 			fmt.Printf("Warning: failed to parse %s: %v\n", filePath, err)
 		}
@@ -393,7 +418,7 @@ func (c *Config) loadPackageDirectory(dirPath string, target map[string][]string
 }
 
 // parsePackageFile parses a package.* file.
-func (c *Config) parsePackageFile(path string, target map[string][]string) error {
+func (c *Config) parsePackageFile(path string, target map[string][]string, parseAtoms bool) error {
 	file, err := os.Open(path)
 	if err != nil {
 		return err
@@ -415,11 +440,23 @@ func (c *Config) parsePackageFile(path string, target map[string][]string) error
 			continue
 		}
 
-		atom := fields[0]
+		atomStr := fields[0]
 		values := fields[1:]
 
+		// Expand USE_EXPAND syntax (e.g., "CPU_FLAGS_X86: avx2 sse4_2")
+		expandedValues := expandUSEExpand(values)
+
 		// Append values (don't replace - allow multiple entries)
-		target[atom] = append(target[atom], values...)
+		target[atomStr] = append(target[atomStr], expandedValues...)
+
+		// For package.use, also store parsed entry for pattern matching
+		if parseAtoms {
+			parsedAtom := ParseAtom(atomStr)
+			c.packageUSEEntries = append(c.packageUSEEntries, packageUSEEntry{
+				Atom:  parsedAtom,
+				Flags: expandedValues,
+			})
+		}
 	}
 
 	return scanner.Err()
@@ -522,16 +559,123 @@ func readPortageConfigFile(path string) ([]string, error) {
 	return lines, scanner.Err()
 }
 
-// GetPackageUSE returns USE flags for a specific package.
+// GetPackageUSE returns USE flags for a specific package atom (exact match only).
+// For version-aware matching with pattern support, use GetPackageUSEForPackage.
 func (c *Config) GetPackageUSE(atom string) []string {
 	// Check exact match
 	if flags, ok := c.PackageUSE[atom]; ok {
 		return flags
 	}
 
-	// TODO: Check wildcard patterns (e.g., "sys-libs/*")
-
 	return nil
+}
+
+// GetPackageUSEForPackage returns USE flags for a package with full pattern matching.
+// It matches against all package.use entries and returns flags from the most specific
+// matching patterns, with more specific patterns overriding less specific ones.
+//
+// Parameters:
+//   - category: package category (e.g., "app-misc", "sys-libs")
+//   - name: package name (e.g., "hello", "zlib")
+//   - version: package version (e.g., "2.10", "1.2.3_alpha1-r2")
+//   - slot: package slot (e.g., "0", "0/1.22")
+//
+// Pattern priority (highest to lowest):
+//   - Exact version match (=category/package-version)
+//   - Any revision (~category/package-version)
+//   - Version prefix (=category/package-version*)
+//   - Slot-specific (category/package:slot)
+//   - Version range (>=/<=/>/< category/package-version)
+//   - Package only (category/package)
+//   - Wildcard with slot (*/*:slot, category/*:slot)
+//   - Wildcard without slot (*/*:, category/*)
+//
+// Example:
+//
+//	flags := cfg.GetPackageUSEForPackage("app-misc", "hello", "2.10", "0")
+func (c *Config) GetPackageUSEForPackage(category, name, version, slot string) []string {
+	if len(c.packageUSEEntries) == 0 {
+		return nil
+	}
+
+	// Collect all matching entries with their specificities
+	type matchedEntry struct {
+		specificity AtomSpecificity
+		flags       []string
+		index       int // Original order for stable sorting
+	}
+
+	var matches []matchedEntry
+
+	for i, entry := range c.packageUSEEntries {
+		if entry.Atom.Matches(category, name, version, slot) {
+			matches = append(matches, matchedEntry{
+				specificity: entry.Atom.GetSpecificity(),
+				flags:       entry.Flags,
+				index:       i,
+			})
+		}
+	}
+
+	if len(matches) == 0 {
+		return nil
+	}
+
+	// Sort matches by specificity (descending), then by original order (ascending)
+	// This ensures more specific patterns override less specific ones,
+	// and later entries of same specificity override earlier ones.
+	sort.Slice(matches, func(i, j int) bool {
+		if matches[i].specificity != matches[j].specificity {
+			return matches[i].specificity > matches[j].specificity
+		}
+		return matches[i].index < matches[j].index
+	})
+
+	// Build result: accumulate flags from least specific to most specific
+	// This way, more specific patterns override less specific ones
+	flagSet := make(map[string]bool)     // Track enabled flags
+	negativeSet := make(map[string]bool) // Track explicitly disabled flags
+
+	// Process from least specific to most specific (reverse order)
+	for i := len(matches) - 1; i >= 0; i-- {
+		for _, flag := range matches[i].flags {
+			if strings.HasPrefix(flag, "-") {
+				baseFlag := flag[1:]
+				negativeSet[baseFlag] = true
+				delete(flagSet, baseFlag)
+			} else {
+				flagSet[flag] = true
+				delete(negativeSet, flag)
+			}
+		}
+	}
+
+	// Build final result preserving order from most specific matches
+	var result []string
+	seen := make(map[string]bool)
+
+	// Add flags from most specific to least specific, respecting final state
+	for _, m := range matches {
+		for _, flag := range m.flags {
+			baseFlag := flag
+			if strings.HasPrefix(flag, "-") {
+				baseFlag = flag[1:]
+			}
+			if seen[baseFlag] {
+				continue
+			}
+			seen[baseFlag] = true
+
+			// Use the final state
+			if flagSet[baseFlag] {
+				result = append(result, baseFlag)
+			} else if negativeSet[baseFlag] {
+				result = append(result, "-"+baseFlag)
+			}
+		}
+	}
+
+	return result
 }
 
 // IsMasked returns true if the package is masked.
