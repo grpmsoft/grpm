@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/grpmsoft/grpm/internal/logging"
+	"github.com/grpmsoft/grpm/internal/pkg"
+	"github.com/grpmsoft/grpm/internal/repo"
 	"github.com/grpmsoft/grpm/internal/solver"
 	"github.com/grpmsoft/grpm/internal/state"
 )
@@ -134,7 +136,7 @@ func (a *App) runInfo(args []string) error {
 		return fmt.Errorf("no package specified")
 	}
 
-	pkgName := packages[0]
+	atomStr := packages[0]
 
 	// Initialize repository
 	r, err := a.initRepository(*useMock, *repoPath)
@@ -142,44 +144,44 @@ func (a *App) runInfo(args []string) error {
 		return err
 	}
 
-	// Try to load package (will return latest version)
-	pkg, err := r.LoadPackage(pkgName)
+	// Load package from atom (handles versioned atoms like "=sys-devel/gcc-13.4.1")
+	p, err := a.loadPackageFromAtom(r, atomStr)
 	if err != nil {
-		return fmt.Errorf("package '%s' not found: %w", pkgName, err)
+		return fmt.Errorf("package '%s' not found: %w", atomStr, err)
 	}
 
 	// Display package information
 	fmt.Printf("\n%s\n", strings.Repeat("=", 60))
-	fmt.Printf("Package:     %s\n", pkg.Name)
-	fmt.Printf("Version:     %s\n", pkg.Version)
-	fmt.Printf("Slot:        %s\n", pkg.Slot.Name)
-	if pkg.Slot.Subslot != "" {
-		fmt.Printf("Sub-Slot:    %s\n", pkg.Slot.Subslot)
+	fmt.Printf("Package:     %s\n", p.Name)
+	fmt.Printf("Version:     %s\n", p.Version)
+	fmt.Printf("Slot:        %s\n", p.Slot.Name)
+	if p.Slot.Subslot != "" {
+		fmt.Printf("Sub-Slot:    %s\n", p.Slot.Subslot)
 	}
 	fmt.Printf("Repository:  gentoo\n")
 
-	if len(pkg.UseFlags) > 0 {
-		useFlags := make([]string, 0, len(pkg.UseFlags))
-		for flag, enabled := range pkg.UseFlags {
+	if len(p.UseFlags) > 0 {
+		useFlags := make([]string, 0, len(p.UseFlags))
+		for f, enabled := range p.UseFlags {
 			if enabled {
-				useFlags = append(useFlags, flag)
+				useFlags = append(useFlags, f)
 			} else {
-				useFlags = append(useFlags, "-"+flag)
+				useFlags = append(useFlags, "-"+f)
 			}
 		}
 		fmt.Printf("\nUSE flags:   %s\n", strings.Join(useFlags, " "))
 	}
 
-	if len(pkg.Deps) > 0 {
-		fmt.Printf("\nDependencies (%d):\n", len(pkg.Deps))
-		for _, dep := range pkg.Deps {
+	if len(p.Deps) > 0 {
+		fmt.Printf("\nDependencies (%d):\n", len(p.Deps))
+		for _, dep := range p.Deps {
 			fmt.Printf("  %s\n", dep.String())
 		}
 	}
 
-	if len(pkg.Provides) > 0 {
-		fmt.Printf("\nProvides (%d):\n", len(pkg.Provides))
-		for _, prov := range pkg.Provides {
+	if len(p.Provides) > 0 {
+		fmt.Printf("\nProvides (%d):\n", len(p.Provides))
+		for _, prov := range p.Provides {
 			fmt.Printf("  %s\n", prov.Name)
 		}
 	}
@@ -634,4 +636,51 @@ func (e *excludeFlags) String() string {
 func (e *excludeFlags) Set(value string) error {
 	*e = append(*e, value)
 	return nil
+}
+
+// loadPackageFromAtom loads a package from a PMS-compliant atom string.
+//
+// Supports:
+//   - category/package (e.g., "sys-devel/gcc") - loads latest version
+//   - =category/package-version (e.g., "=sys-devel/gcc-13.4.1") - loads exact version
+//   - >=category/package-version (e.g., ">=sys-devel/gcc-13.0") - loads best matching
+//
+// This properly handles versioned atoms that contain version numbers in the package name
+// (like gcc-13.4.1_p20250807) by parsing the atom first to extract category/package.
+func (a *App) loadPackageFromAtom(r repo.Repository, atomStr string) (*pkg.Package, error) {
+	// Try to parse as a PMS atom first
+	atom, err := pkg.ParseAtom(atomStr)
+	if err != nil {
+		// If parsing fails, treat as simple category/package
+		return r.LoadPackage(atomStr)
+	}
+
+	// Get category/package without version
+	cp := atom.CP()
+
+	// Check if repository supports FindByAtom
+	portageRepo, isPortage := r.(*repo.PortageRepository)
+	if !isPortage {
+		// Mock or other repo - just use LoadPackage with CP
+		return r.LoadPackage(cp)
+	}
+
+	// If atom has a version, use FindByAtom to find matching packages
+	if atom.HasVersion() {
+		matches, err := portageRepo.FindByAtom(atom)
+		if err != nil {
+			return nil, fmt.Errorf("failed to find packages matching %s: %w", atomStr, err)
+		}
+
+		if len(matches) == 0 {
+			return nil, fmt.Errorf("no packages match atom %s", atomStr)
+		}
+
+		// Return the best matching version (FindByAtom already filters by atom constraint)
+		// For exact match (=), there should be exactly one result
+		return matches[0], nil
+	}
+
+	// No version specified - load latest
+	return r.LoadPackage(cp)
 }

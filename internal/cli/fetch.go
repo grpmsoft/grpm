@@ -273,29 +273,16 @@ func (a *App) findBestEbuild(pkgDir, pkgName string) (string, string, error) {
 //   - category/package-version (e.g., "app-misc/hello-2.10")
 //   - =category/package-version (e.g., "=app-misc/hello-2.10")
 func (a *App) parsePackageAtom(atom string) (string, error) {
-	// Strip leading operators
-	clean := atom
-	for _, prefix := range []string{">=", "<=", ">", "<", "=", "~"} {
-		if len(clean) > len(prefix) && clean[:len(prefix)] == prefix {
-			clean = clean[len(prefix):]
-			break
-		}
+	// Use pkg.ParseAtom for proper PMS-compliant atom parsing
+	// This correctly handles versioned atoms like "=sys-devel/gcc-13.4.1_p20250807"
+	parsed, err := pkg.ParseAtom(atom)
+	if err != nil {
+		return "", fmt.Errorf("invalid atom %q: %w", atom, err)
 	}
 
-	// Must contain category/package
-	if !filepath.IsAbs(clean) && filepath.Dir(clean) == "." {
-		return "", fmt.Errorf("missing category in atom: %s", atom)
-	}
-
-	// Extract category/package (strip version if present)
-	parts := filepath.SplitList(clean)
-	if len(parts) == 0 {
-		return "", fmt.Errorf("invalid atom format: %s", atom)
-	}
-
-	// For now, just return the clean atom without version parsing
-	// A full implementation would parse versions like Portage does
-	return clean, nil
+	// Return category/package without version (CP form)
+	// e.g., "=sys-devel/gcc-13.4.1_p20250807" -> "sys-devel/gcc"
+	return parsed.CP(), nil
 }
 
 // verifyDistfiles checks existing distfiles against their checksums.
