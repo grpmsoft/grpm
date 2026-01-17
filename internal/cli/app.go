@@ -10,7 +10,9 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"github.com/grpmsoft/grpm/internal/config"
 	"github.com/grpmsoft/grpm/internal/logging"
+	"github.com/grpmsoft/grpm/internal/mask"
 	"github.com/grpmsoft/grpm/internal/pkg"
 	"github.com/grpmsoft/grpm/internal/repo"
 	"github.com/grpmsoft/grpm/internal/solver"
@@ -247,8 +249,8 @@ func (a *App) runResolve(args []string) error {
 		return err
 	}
 
-	// Resolve dependencies
-	pkgResolver := solver.NewResolver(r)
+	// Resolve dependencies (with mask filtering for real repositories)
+	pkgResolver := a.createResolverWithMasks(r)
 	solution, err := pkgResolver.Resolve(packages)
 	if err != nil {
 		return fmt.Errorf("resolution failed: %w", err)
@@ -470,9 +472,12 @@ func (a *App) initRepository(useMock bool, repoPath string) (repo.Repository, er
 	return r, nil
 }
 
-// resolvePackageDependencies resolves package dependencies using SAT solver
+// resolvePackageDependencies resolves package dependencies using SAT solver.
+// For real Portage repositories, masked packages are automatically filtered.
 func (a *App) resolvePackageDependencies(r repo.Repository, packages []string) (map[string]*pkg.Package, error) {
-	resolver := solver.NewResolver(r)
+	// Create resolver with mask support if using real Portage repository
+	resolver := a.createResolverWithMasks(r)
+
 	solution, err := resolver.Resolve(packages)
 	if err != nil {
 		return nil, fmt.Errorf("dependency resolution failed: %w", err)
@@ -484,6 +489,54 @@ func (a *App) resolvePackageDependencies(r repo.Repository, packages []string) (
 	}
 
 	return solution, nil
+}
+
+// createResolverWithMasks creates a resolver with package.mask filtering.
+// For mock repositories, returns a resolver without mask support.
+func (a *App) createResolverWithMasks(r repo.Repository) *solver.PortageResolver {
+	// Check if this is a real Portage repository
+	portageRepo, isPortage := r.(*repo.PortageRepository)
+	if !isPortage {
+		// Mock repository - no mask filtering needed
+		a.log.Verbose("Using resolver without masks (mock repository)")
+		return solver.NewResolver(r)
+	}
+
+	// Load Portage configuration
+	cfg, err := config.LoadConfig("/etc/portage")
+	if err != nil {
+		a.log.Verbose("Could not load Portage config, using resolver without masks: %v", err)
+		return solver.NewResolver(r)
+	}
+
+	// Determine profile path
+	profilePath := a.detectProfilePath()
+
+	// Create mask manager
+	maskMgr, err := mask.NewMaskManager(cfg, portageRepo.Path, profilePath)
+	if err != nil {
+		a.log.Verbose("Could not initialize mask manager, using resolver without masks: %v", err)
+		return solver.NewResolver(r)
+	}
+
+	a.log.Verbose("Package mask filtering enabled")
+	return solver.NewResolverWithMasks(r, maskMgr)
+}
+
+// detectProfilePath returns the active Portage profile path.
+// Returns empty string if profile cannot be determined.
+func (a *App) detectProfilePath() string {
+	// Standard profile symlink location
+	profileLink := "/etc/portage/make.profile"
+
+	// Resolve symlink to get actual profile path
+	target, err := filepath.EvalSymlinks(profileLink)
+	if err != nil {
+		a.log.Verbose("Could not resolve profile symlink: %v", err)
+		return ""
+	}
+
+	return target
 }
 
 // displayPlanAndAsk displays installation plan and asks for confirmation if needed
