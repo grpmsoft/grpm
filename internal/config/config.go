@@ -86,11 +86,15 @@ type MakeConf struct {
 
 	// GENTOO_MIRRORS = list of Gentoo mirrors
 	GENTOO_MIRRORS []string
+
+	// Variables stores all variables dynamically (including custom ones).
+	// This enables ${VAR} expansion and access to arbitrary variables.
+	Variables map[string]string
 }
 
 // DefaultMakeConf returns default make.conf settings.
 func DefaultMakeConf() *MakeConf {
-	return &MakeConf{
+	mc := &MakeConf{
 		CFLAGS:          "-O2 -pipe",
 		CXXFLAGS:        "${CFLAGS}",
 		LDFLAGS:         "",
@@ -105,7 +109,19 @@ func DefaultMakeConf() *MakeConf {
 		PORT_LOGDIR:     "/var/log/portage",
 		PORTAGE_TMPDIR:  "/var/tmp/portage",
 		GENTOO_MIRRORS:  []string{},
+		Variables:       make(map[string]string),
 	}
+	// Initialize Variables map with defaults
+	mc.Variables["CFLAGS"] = mc.CFLAGS
+	mc.Variables["CXXFLAGS"] = mc.CXXFLAGS
+	mc.Variables["LDFLAGS"] = mc.LDFLAGS
+	mc.Variables["MAKEOPTS"] = mc.MAKEOPTS
+	mc.Variables["PORTDIR"] = mc.PORTDIR
+	mc.Variables["DISTDIR"] = mc.DISTDIR
+	mc.Variables["PKGDIR"] = mc.PKGDIR
+	mc.Variables["PORT_LOGDIR"] = mc.PORT_LOGDIR
+	mc.Variables["PORTAGE_TMPDIR"] = mc.PORTAGE_TMPDIR
+	return mc
 }
 
 // LoadConfig loads Portage configuration from the specified directory.
@@ -152,6 +168,21 @@ func LoadConfig(root string) (*Config, error) {
 // loadMakeConf loads settings from make.conf.
 func (c *Config) loadMakeConf() error {
 	path := filepath.Join(c.Root, "make.conf")
+	return c.loadMakeConfFile(path, make(map[string]bool))
+}
+
+// loadMakeConfFile loads a make.conf file with source directive support.
+// The visited map prevents infinite loops from circular source references.
+func (c *Config) loadMakeConfFile(path string, visited map[string]bool) error {
+	// Prevent circular includes
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		absPath = path
+	}
+	if visited[absPath] {
+		return nil // Already processed, skip to prevent infinite loop
+	}
+	visited[absPath] = true
 
 	file, err := os.Open(path)
 	if err != nil {
@@ -168,6 +199,27 @@ func (c *Config) loadMakeConf() error {
 			continue
 		}
 
+		// Handle source directive: source /path/to/file or . /path/to/file
+		if strings.HasPrefix(line, "source ") || strings.HasPrefix(line, ". ") {
+			sourcePath := strings.TrimPrefix(line, "source ")
+			sourcePath = strings.TrimPrefix(sourcePath, ". ")
+			sourcePath = strings.TrimSpace(sourcePath)
+			// Expand variables in the source path
+			sourcePath = c.varexpand(sourcePath)
+			// Handle relative paths
+			if !filepath.IsAbs(sourcePath) {
+				sourcePath = filepath.Join(filepath.Dir(path), sourcePath)
+			}
+			// Recursively load the sourced file
+			if err := c.loadMakeConfFile(sourcePath, visited); err != nil {
+				// Non-critical: log warning but continue
+				if !os.IsNotExist(err) {
+					fmt.Printf("Warning: failed to source %s: %v\n", sourcePath, err)
+				}
+			}
+			continue
+		}
+
 		// Parse variable assignments: VAR="value"
 		if strings.Contains(line, "=") {
 			c.parseMakeConfLine(line)
@@ -177,7 +229,68 @@ func (c *Config) loadMakeConf() error {
 	return scanner.Err()
 }
 
+// varexpand expands ${VAR} and $VAR references in a string.
+// This matches Portage's varexpand() behavior from lib/portage/util/__init__.py.
+// Note: Pattern substitution (${VAR/a/b}) is NOT supported - Portage doesn't support it either.
+func (c *Config) varexpand(value string) string {
+	if c.MakeConf == nil || c.MakeConf.Variables == nil {
+		return value
+	}
+
+	result := value
+	// Handle ${VAR} syntax
+	for {
+		start := strings.Index(result, "${")
+		if start == -1 {
+			break
+		}
+		end := strings.Index(result[start:], "}")
+		if end == -1 {
+			break
+		}
+		end += start
+
+		varName := result[start+2 : end]
+		varValue := c.MakeConf.Variables[varName]
+		result = result[:start] + varValue + result[end+1:]
+	}
+
+	// Handle $VAR syntax (without braces)
+	// Must be done after ${VAR} to avoid conflicts
+	for {
+		start := strings.Index(result, "$")
+		if start == -1 {
+			break
+		}
+		// Skip if it's ${ which was already handled
+		if start+1 < len(result) && result[start+1] == '{' {
+			// This shouldn't happen after the loop above, but be safe
+			break
+		}
+		// Find end of variable name (alphanumeric and underscore)
+		end := start + 1
+		for end < len(result) && (isAlphaNumeric(result[end]) || result[end] == '_') {
+			end++
+		}
+		if end == start+1 {
+			// No valid variable name after $
+			break
+		}
+		varName := result[start+1 : end]
+		varValue := c.MakeConf.Variables[varName]
+		result = result[:start] + varValue + result[end:]
+	}
+
+	return result
+}
+
+// isAlphaNumeric returns true if the byte is a letter, digit, or underscore.
+func isAlphaNumeric(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_'
+}
+
 // parseMakeConfLine parses a single line from make.conf.
+// It expands ${VAR} references and stores all variables in the Variables map.
 func (c *Config) parseMakeConfLine(line string) {
 	parts := strings.SplitN(line, "=", 2)
 	if len(parts) != 2 {
@@ -190,6 +303,16 @@ func (c *Config) parseMakeConfLine(line string) {
 	// Remove quotes
 	value = strings.Trim(value, `"'`)
 
+	// Expand ${VAR} references using previously defined variables
+	value = c.varexpand(value)
+
+	// Store in Variables map (for all variables, including custom ones)
+	if c.MakeConf.Variables == nil {
+		c.MakeConf.Variables = make(map[string]string)
+	}
+	c.MakeConf.Variables[varName] = value
+
+	// Also update typed fields for known variables
 	switch varName {
 	case "CFLAGS":
 		c.MakeConf.CFLAGS = value
@@ -477,4 +600,19 @@ func (c *Config) GetMakeOpts() string {
 		return "-j1"
 	}
 	return c.MakeConf.MAKEOPTS
+}
+
+// GetVariable returns any variable from make.conf by name.
+// This provides access to both standard Portage variables and custom user variables.
+// Returns empty string if variable is not set.
+//
+// Example:
+//
+//	cfg.GetVariable("CFLAGS")           // "-O2 -pipe -march=native"
+//	cfg.GetVariable("MY_CUSTOM_VAR")    // Custom user variable
+func (c *Config) GetVariable(name string) string {
+	if c.MakeConf == nil || c.MakeConf.Variables == nil {
+		return ""
+	}
+	return c.MakeConf.Variables[name]
 }

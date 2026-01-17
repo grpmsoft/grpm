@@ -957,3 +957,379 @@ func TestReadPortageConfigPath_NonExistent(t *testing.T) {
 		t.Errorf("Expected nil lines for non-existent path, got: %v", lines)
 	}
 }
+
+// TestVarexpand tests ${VAR} and $VAR expansion in make.conf values.
+func TestVarexpand(t *testing.T) {
+	cfg := &Config{
+		MakeConf: DefaultMakeConf(),
+	}
+
+	// Set up some variables
+	cfg.MakeConf.Variables["CFLAGS"] = "-O2 -pipe"
+	cfg.MakeConf.Variables["CUSTOM_VAR"] = "custom_value"
+	cfg.MakeConf.Variables["BASE_DIR"] = "/var/db"
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"no expansion", "-O3 -march=native", "-O3 -march=native"},
+		{"${VAR} expansion", "${CFLAGS} -march=native", "-O2 -pipe -march=native"},
+		{"$VAR expansion", "$CFLAGS -march=native", "-O2 -pipe -march=native"},
+		{"multiple ${VAR}", "${BASE_DIR}/repos/${CUSTOM_VAR}", "/var/db/repos/custom_value"},
+		{"mixed ${} and $", "${BASE_DIR}/$CUSTOM_VAR", "/var/db/custom_value"},
+		{"undefined var", "${UNDEFINED_VAR}/path", "/path"},
+		{"partial match $", "test$", "test$"},
+		{"partial match ${", "test${", "test${"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := cfg.varexpand(tt.input)
+			if result != tt.expected {
+				t.Errorf("varexpand(%q) = %q, want %q", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+
+// TestVarexpand_NilConfig tests varexpand with nil config.
+func TestVarexpand_NilConfig(t *testing.T) {
+	cfg := &Config{
+		MakeConf: nil,
+	}
+
+	result := cfg.varexpand("${TEST}")
+	if result != "${TEST}" {
+		t.Errorf("varexpand with nil MakeConf should return input unchanged, got %q", result)
+	}
+}
+
+// TestSourceDirective tests the source directive in make.conf.
+func TestSourceDirective(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create sourced file
+	sourcedPath := filepath.Join(tmpDir, "make.conf.local")
+	sourcedContent := `CFLAGS="-O3 -march=native"
+CUSTOM_VAR="from_sourced_file"
+`
+	if err := os.WriteFile(sourcedPath, []byte(sourcedContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create main make.conf with source directive
+	makeConfPath := filepath.Join(tmpDir, "make.conf")
+	mainContent := `# Main make.conf
+MAKEOPTS="-j8"
+source ` + sourcedPath + `
+USE="ssl -debug"
+`
+	if err := os.WriteFile(makeConfPath, []byte(mainContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+
+	// Check that MAKEOPTS is from main file
+	if cfg.MakeConf.MAKEOPTS != "-j8" {
+		t.Errorf("MAKEOPTS = %q, want %q", cfg.MakeConf.MAKEOPTS, "-j8")
+	}
+
+	// Check that CFLAGS is from sourced file
+	if cfg.MakeConf.CFLAGS != "-O3 -march=native" {
+		t.Errorf("CFLAGS = %q, want %q", cfg.MakeConf.CFLAGS, "-O3 -march=native")
+	}
+
+	// Check that custom variable is accessible
+	if cfg.GetVariable("CUSTOM_VAR") != "from_sourced_file" {
+		t.Errorf("CUSTOM_VAR = %q, want %q", cfg.GetVariable("CUSTOM_VAR"), "from_sourced_file")
+	}
+
+	// Check that USE from main file is applied after source
+	if len(cfg.MakeConf.USE) != 2 || cfg.MakeConf.USE[0] != "ssl" {
+		t.Errorf("USE = %v, want [ssl -debug]", cfg.MakeConf.USE)
+	}
+}
+
+// TestSourceDirective_DotSyntax tests the ". /path" syntax for sourcing files.
+func TestSourceDirective_DotSyntax(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create sourced file
+	sourcedPath := filepath.Join(tmpDir, "custom.conf")
+	sourcedContent := `MY_VAR="dot_syntax_works"
+`
+	if err := os.WriteFile(sourcedPath, []byte(sourcedContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create main make.conf with dot syntax
+	makeConfPath := filepath.Join(tmpDir, "make.conf")
+	mainContent := `. ` + sourcedPath + `
+`
+	if err := os.WriteFile(makeConfPath, []byte(mainContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+
+	if cfg.GetVariable("MY_VAR") != "dot_syntax_works" {
+		t.Errorf("MY_VAR = %q, want %q", cfg.GetVariable("MY_VAR"), "dot_syntax_works")
+	}
+}
+
+// TestSourceDirective_CircularPrevention tests that circular source references are handled.
+func TestSourceDirective_CircularPrevention(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create file A that sources B
+	fileA := filepath.Join(tmpDir, "make.conf")
+	fileB := filepath.Join(tmpDir, "b.conf")
+
+	// A sources B, B sources A (circular)
+	contentA := `VAR_A="from_a"
+source ` + fileB + `
+`
+	contentB := `VAR_B="from_b"
+source ` + fileA + `
+`
+	if err := os.WriteFile(fileA, []byte(contentA), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fileB, []byte(contentB), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Should not hang or crash
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+
+	// Both variables should be set
+	if cfg.GetVariable("VAR_A") != "from_a" {
+		t.Errorf("VAR_A = %q, want %q", cfg.GetVariable("VAR_A"), "from_a")
+	}
+	if cfg.GetVariable("VAR_B") != "from_b" {
+		t.Errorf("VAR_B = %q, want %q", cfg.GetVariable("VAR_B"), "from_b")
+	}
+}
+
+// TestSourceDirective_NonExistent tests sourcing non-existent file (should not fail).
+func TestSourceDirective_NonExistent(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	makeConfPath := filepath.Join(tmpDir, "make.conf")
+	content := `CFLAGS="-O2"
+source /nonexistent/file.conf
+MAKEOPTS="-j4"
+`
+	if err := os.WriteFile(makeConfPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+
+	// Should continue processing after failed source
+	if cfg.MakeConf.CFLAGS != "-O2" {
+		t.Errorf("CFLAGS = %q, want %q", cfg.MakeConf.CFLAGS, "-O2")
+	}
+	if cfg.MakeConf.MAKEOPTS != "-j4" {
+		t.Errorf("MAKEOPTS = %q, want %q", cfg.MakeConf.MAKEOPTS, "-j4")
+	}
+}
+
+// TestSourceDirective_VarInPath tests variable expansion in source path.
+func TestSourceDirective_VarInPath(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create config directory
+	configDir := filepath.Join(tmpDir, "config")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create sourced file
+	sourcedPath := filepath.Join(configDir, "extra.conf")
+	sourcedContent := `EXTRA_VAR="sourced_via_variable"
+`
+	if err := os.WriteFile(sourcedPath, []byte(sourcedContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create main make.conf that defines CONFIG_DIR and sources using it
+	makeConfPath := filepath.Join(tmpDir, "make.conf")
+	mainContent := `CONFIG_DIR="` + configDir + `"
+source ${CONFIG_DIR}/extra.conf
+`
+	if err := os.WriteFile(makeConfPath, []byte(mainContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+
+	if cfg.GetVariable("EXTRA_VAR") != "sourced_via_variable" {
+		t.Errorf("EXTRA_VAR = %q, want %q", cfg.GetVariable("EXTRA_VAR"), "sourced_via_variable")
+	}
+}
+
+// TestGetVariable tests the GetVariable method.
+func TestGetVariable(t *testing.T) {
+	tests := []struct {
+		name     string
+		cfg      *Config
+		varName  string
+		expected string
+	}{
+		{
+			name:     "nil MakeConf",
+			cfg:      &Config{MakeConf: nil},
+			varName:  "CFLAGS",
+			expected: "",
+		},
+		{
+			name:     "nil Variables map",
+			cfg:      &Config{MakeConf: &MakeConf{Variables: nil}},
+			varName:  "CFLAGS",
+			expected: "",
+		},
+		{
+			name: "existing variable",
+			cfg: &Config{
+				MakeConf: &MakeConf{
+					Variables: map[string]string{"CFLAGS": "-O2", "CUSTOM": "value"},
+				},
+			},
+			varName:  "CFLAGS",
+			expected: "-O2",
+		},
+		{
+			name: "custom variable",
+			cfg: &Config{
+				MakeConf: &MakeConf{
+					Variables: map[string]string{"MY_CUSTOM_VAR": "custom_value"},
+				},
+			},
+			varName:  "MY_CUSTOM_VAR",
+			expected: "custom_value",
+		},
+		{
+			name: "non-existent variable",
+			cfg: &Config{
+				MakeConf: &MakeConf{
+					Variables: map[string]string{"OTHER": "val"},
+				},
+			},
+			varName:  "DOES_NOT_EXIST",
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tt.cfg.GetVariable(tt.varName)
+			if result != tt.expected {
+				t.Errorf("GetVariable(%q) = %q, want %q", tt.varName, result, tt.expected)
+			}
+		})
+	}
+}
+
+// TestVariablesMap_Initialization tests that Variables map is initialized correctly.
+func TestVariablesMap_Initialization(t *testing.T) {
+	mc := DefaultMakeConf()
+
+	// Check that Variables map is initialized
+	if mc.Variables == nil {
+		t.Fatal("Variables map should be initialized")
+	}
+
+	// Check that default values are in Variables map
+	expectedVars := map[string]string{
+		"CFLAGS":         "-O2 -pipe",
+		"CXXFLAGS":       "${CFLAGS}",
+		"LDFLAGS":        "",
+		"MAKEOPTS":       "-j1",
+		"PORTDIR":        "/var/db/repos/gentoo",
+		"DISTDIR":        "/var/cache/distfiles",
+		"PKGDIR":         "/var/cache/binpkgs",
+		"PORT_LOGDIR":    "/var/log/portage",
+		"PORTAGE_TMPDIR": "/var/tmp/portage",
+	}
+
+	for varName, expected := range expectedVars {
+		if mc.Variables[varName] != expected {
+			t.Errorf("Variables[%q] = %q, want %q", varName, mc.Variables[varName], expected)
+		}
+	}
+}
+
+// TestCXXFLAGS_Expansion tests that CXXFLAGS="${CFLAGS}" is expanded correctly.
+func TestCXXFLAGS_Expansion(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	makeConfPath := filepath.Join(tmpDir, "make.conf")
+	content := `CFLAGS="-O3 -march=native"
+CXXFLAGS="${CFLAGS}"
+`
+	if err := os.WriteFile(makeConfPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+
+	// CXXFLAGS should be expanded to CFLAGS value
+	if cfg.MakeConf.CXXFLAGS != "-O3 -march=native" {
+		t.Errorf("CXXFLAGS = %q, want %q (expanded from ${CFLAGS})", cfg.MakeConf.CXXFLAGS, "-O3 -march=native")
+	}
+
+	// Also check Variables map
+	if cfg.GetVariable("CXXFLAGS") != "-O3 -march=native" {
+		t.Errorf("GetVariable(CXXFLAGS) = %q, want %q", cfg.GetVariable("CXXFLAGS"), "-O3 -march=native")
+	}
+}
+
+// TestIsAlphaNumeric tests the isAlphaNumeric helper function.
+func TestIsAlphaNumeric(t *testing.T) {
+	tests := []struct {
+		char     byte
+		expected bool
+	}{
+		{'a', true},
+		{'z', true},
+		{'A', true},
+		{'Z', true},
+		{'0', true},
+		{'9', true},
+		{'_', true},
+		{'-', false},
+		{' ', false},
+		{'$', false},
+		{'{', false},
+		{'}', false},
+	}
+
+	for _, tt := range tests {
+		result := isAlphaNumeric(tt.char)
+		if result != tt.expected {
+			t.Errorf("isAlphaNumeric(%q) = %v, want %v", string(tt.char), result, tt.expected)
+		}
+	}
+}
