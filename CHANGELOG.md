@@ -16,9 +16,10 @@ Solver now respects `package.mask` — masked packages are excluded from depende
 - **Multi-source mask loading** — Repository `profiles/package.mask`, profile cascade, user `/etc/portage/package.mask`
 - **User unmask support** — `/etc/portage/package.unmask` overrides all masks
 - **Solver integration** — Masked packages automatically filtered during dependency resolution
+- **CLI integration** — Resolve and emerge commands now use MaskManager for real repositories
 
-### Fixed
-- **gcc-16 selection bug** — Solver no longer selects masked packages like `gcc-16.0.9999` when requesting `gcc-13.x`
+### Known Limitations
+- **KEYWORDS filtering** not yet implemented — Live/9999 ebuilds and unkeyworded packages may still be selected (tracked in [#48](https://github.com/grpmsoft/grpm/issues/48))
 
 ---
 
