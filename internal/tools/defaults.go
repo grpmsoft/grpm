@@ -519,6 +519,12 @@ func registerVCS(r *Registry) {
 // EclassToolMap returns a map of eclass names to required tools.
 //
 // This is useful for looking up what tools an eclass needs.
+// Eclasses that don't require any special tools are NOT listed here -
+// they simply won't trigger any tool checks.
+//
+// IMPORTANT: This map is used by CheckForEclassesOnly() for per-package
+// tool checking. Only add eclasses here if they REQUIRE specific external
+// tools that aren't part of the base system.
 func EclassToolMap() map[string][]string {
 	return map[string][]string{
 		// Build systems
@@ -529,34 +535,50 @@ func EclassToolMap() map[string][]string {
 		"waf":       {"waf", "python"},
 		"qmake":     {"qmake", "make"},
 
-		// Languages
-		"python-single-r1": {"python", "python3"},
-		"python-r1":        {"python", "python3"},
-		"python-any-r1":    {"python", "python3"},
-		"distutils-r1":     {"python", "python3"},
-		"cargo":            {"cargo", "rustc"},
-		"go-module":        {"go"},
-		"perl-module":      {"perl"},
-		"ruby-ng":          {"ruby"},
-		"lua":              {"lua"},
-		"java-pkg-2":       {"java", "javac"},
+		// Languages - only for packages that NEED these runtimes at build time
+		"cargo":       {"cargo", "rustc"},
+		"go-module":   {"go"},
+		"perl-module": {"perl"},
+		"ruby-ng":     {"ruby"},
+		"lua":         {"lua"},
+		"java-pkg-2":  {"java", "javac"},
 
-		// VCS
+		// Python eclasses - python is typically always available on Gentoo
+		// but we include it for completeness
+		"python-single-r1": {"python3"},
+		"python-r1":        {"python3"},
+		"python-any-r1":    {"python3"},
+		"distutils-r1":     {"python3"},
+
+		// VCS - only for live ebuilds that fetch from version control
 		"git-r3":     {"git"},
 		"subversion": {"svn"},
 		"mercurial":  {"hg"},
 		"cvs":        {"cvs"},
 		"darcs":      {"darcs"},
 
-		// Toolchain
-		"toolchain-funcs": {"gcc", "g++"},
-
-		// Desktop
+		// Desktop utilities
 		"xdg-utils": {"desktop-file-validate", "update-desktop-database"},
 		"desktop":   {"desktop-file-validate"},
 
 		// Documentation
 		"docs":   {"doxygen"},
-		"sphinx": {"sphinx-build", "python"},
+		"sphinx": {"sphinx-build", "python3"},
+
+		// NOTE: The following eclasses do NOT require special tools:
+		// - toolchain-funcs: Uses system's default compiler (always available)
+		// - multilib: No special tools needed
+		// - linux-info: Only reads kernel config, no tools needed
+		// - pam: No special tools needed
+		// - bash-completion-r1: No special tools needed
+		// - flag-o-matic: No special tools needed
+		// - eutils: No special tools needed (deprecated)
+		// - xdg: No special tools needed (unlike xdg-utils)
+		// - optfeature: No special tools needed
+		// - edo: No special tools needed
+		// - wrapper: No special tools needed
+		// - systemd: No special tools needed (uses pkg-config internally)
+		// - multiprocessing: No special tools needed
+		// - verify-sig: No special tools needed (uses GPG internally)
 	}
 }

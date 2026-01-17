@@ -322,3 +322,226 @@ func TestCheckerMustHaveToolsUnknown(t *testing.T) {
 		t.Errorf("expected unknown package, got %q", mtErr.Missing[0].Package)
 	}
 }
+
+// TestCheckForEclassesOnly_NoGlobalTools verifies that CheckForEclassesOnly
+// only checks tools from EclassToolMap, not from the registry's ByEclass cache.
+// This prevents packages like sys-libs/glibc from requiring Rust, Java, Ruby, etc.
+func TestCheckForEclassesOnly_NoGlobalTools(t *testing.T) {
+	// Create a registry with tools registered for "toolchain-funcs" eclass
+	// which is inherited by MANY packages (including glibc)
+	r := NewRegistry()
+
+	// These tools are registered for toolchain-funcs in the default registry
+	r.Register(NewTool("gcc", "gcc", "sys-devel/gcc", "C compiler").
+		WithRequiredBy("toolchain-funcs"))
+	r.Register(NewTool("g++", "g++", "sys-devel/gcc", "C++ compiler").
+		WithRequiredBy("toolchain-funcs"))
+
+	// These tools should NOT be required for packages that only inherit toolchain-funcs
+	r.Register(NewTool("rustc", "nonexistent-rustc", "dev-lang/rust", "Rust compiler").
+		WithRequiredBy("cargo"))
+	r.Register(NewTool("cargo", "nonexistent-cargo", "dev-lang/rust", "Rust package manager").
+		WithRequiredBy("cargo"))
+	r.Register(NewTool("java", "nonexistent-java", "virtual/jre", "Java runtime").
+		WithRequiredBy("java-pkg-2"))
+	r.Register(NewTool("ruby", "nonexistent-ruby", "dev-lang/ruby", "Ruby interpreter").
+		WithRequiredBy("ruby-ng"))
+
+	c := NewCheckerWithRegistry(r)
+
+	// Simulate glibc-like package that only inherits toolchain-funcs, multilib, etc.
+	// These eclasses don't have entries in EclassToolMap
+	glibcEclasses := []string{"toolchain-funcs", "multilib", "flag-o-matic", "linux-info"}
+
+	result := c.CheckForEclassesOnly(glibcEclasses)
+
+	// Should NOT require any tools because:
+	// - toolchain-funcs is NOT in EclassToolMap (removed as it's always available)
+	// - multilib, flag-o-matic, linux-info are NOT in EclassToolMap
+	if len(result.Required) != 0 {
+		var names []string
+		for _, tool := range result.Required {
+			names = append(names, tool.Name)
+		}
+		t.Errorf("expected 0 required tools for glibc-like package, got %d: %v",
+			len(result.Required), names)
+	}
+
+	// Should NOT require Rust, Java, Ruby
+	for _, tool := range result.Required {
+		switch tool.Name {
+		case "rustc", "cargo", "java", "ruby":
+			t.Errorf("glibc-like package should not require %s", tool.Name)
+		}
+	}
+
+	// CanBuild should be true (no missing tools)
+	if !result.CanBuild {
+		t.Error("expected CanBuild to be true for glibc-like package")
+	}
+}
+
+// TestCheckForEclassesOnly_OnlyMappedTools verifies that only tools from
+// EclassToolMap are checked, not the full registry.
+func TestCheckForEclassesOnly_OnlyMappedTools(t *testing.T) {
+	// Create registry with cmake tools
+	r := NewRegistry()
+	r.Register(NewTool("cmake", "nonexistent-cmake", "dev-build/cmake", "Build system"))
+	r.Register(NewTool("ninja", "nonexistent-ninja", "dev-build/ninja", "Build tool"))
+	r.Register(NewTool("make", "make", "sys-devel/make", "GNU Make")) // make is usually available
+
+	c := NewCheckerWithRegistry(r)
+
+	// Check for cmake eclass
+	result := c.CheckForEclassesOnly([]string{"cmake"})
+
+	// cmake eclass requires cmake, ninja, make (from EclassToolMap)
+	if len(result.Required) != 3 {
+		var names []string
+		for _, tool := range result.Required {
+			names = append(names, tool.Name)
+		}
+		t.Errorf("expected 3 required tools for cmake, got %d: %v",
+			len(result.Required), names)
+	}
+
+	// Verify the correct tools are required
+	toolNames := make(map[string]bool)
+	for _, tool := range result.Required {
+		toolNames[tool.Name] = true
+	}
+
+	for _, expected := range []string{"cmake", "ninja", "make"} {
+		if !toolNames[expected] {
+			t.Errorf("expected %s to be required for cmake eclass", expected)
+		}
+	}
+}
+
+// TestCheckForEclassesOnly_UnknownEclass verifies that unknown eclasses
+// (not in EclassToolMap) don't require any tools.
+func TestCheckForEclassesOnly_UnknownEclass(t *testing.T) {
+	c := NewChecker()
+
+	// Test with eclasses that are NOT in EclassToolMap
+	result := c.CheckForEclassesOnly([]string{"unknown-eclass", "another-unknown"})
+
+	// Should have no required tools
+	if len(result.Required) != 0 {
+		t.Errorf("expected 0 required tools for unknown eclasses, got %d", len(result.Required))
+	}
+
+	// CanBuild should be true
+	if !result.CanBuild {
+		t.Error("expected CanBuild to be true for unknown eclasses")
+	}
+}
+
+// TestCheckForEclassesOnly_CargoRequiresRust verifies that packages inheriting
+// cargo eclass DO require rustc and cargo.
+func TestCheckForEclassesOnly_CargoRequiresRust(t *testing.T) {
+	// Create registry with Rust tools (non-existent binaries for testing)
+	r := NewRegistry()
+	r.Register(NewTool("rustc", "nonexistent-rustc", "dev-lang/rust", "Rust compiler"))
+	r.Register(NewTool("cargo", "nonexistent-cargo", "dev-lang/rust", "Rust package manager"))
+
+	c := NewCheckerWithRegistry(r)
+
+	// A Rust package inherits cargo eclass
+	result := c.CheckForEclassesOnly([]string{"cargo"})
+
+	// Should require rustc and cargo
+	if len(result.Required) != 2 {
+		var names []string
+		for _, tool := range result.Required {
+			names = append(names, tool.Name)
+		}
+		t.Errorf("expected 2 required tools for cargo eclass, got %d: %v",
+			len(result.Required), names)
+	}
+
+	// Both tools should be missing (nonexistent binaries)
+	if len(result.Missing) != 2 {
+		t.Errorf("expected 2 missing tools, got %d", len(result.Missing))
+	}
+
+	// CanBuild should be false
+	if result.CanBuild {
+		t.Error("expected CanBuild to be false when rustc/cargo are missing")
+	}
+}
+
+// TestCheckForEclassesOnly_EclassToolMapCoverage verifies that common eclasses
+// have proper tool mappings.
+func TestCheckForEclassesOnly_EclassToolMapCoverage(t *testing.T) {
+	eclassMap := EclassToolMap()
+
+	// Verify critical eclasses have mappings
+	criticalEclasses := []struct {
+		eclass   string
+		expected []string
+	}{
+		{"cmake", []string{"cmake", "ninja", "make"}},
+		{"meson", []string{"meson", "ninja"}},
+		{"cargo", []string{"cargo", "rustc"}},
+		{"go-module", []string{"go"}},
+		{"java-pkg-2", []string{"java", "javac"}},
+		{"ruby-ng", []string{"ruby"}},
+		{"git-r3", []string{"git"}},
+		{"mercurial", []string{"hg"}},
+		{"subversion", []string{"svn"}},
+	}
+
+	for _, tc := range criticalEclasses {
+		tools, ok := eclassMap[tc.eclass]
+		if !ok {
+			t.Errorf("expected EclassToolMap to have mapping for %s", tc.eclass)
+			continue
+		}
+
+		// Check each expected tool is present
+		toolSet := make(map[string]bool)
+		for _, tool := range tools {
+			toolSet[tool] = true
+		}
+
+		for _, expected := range tc.expected {
+			if !toolSet[expected] {
+				t.Errorf("expected %s eclass to require %s, tools: %v",
+					tc.eclass, expected, tools)
+			}
+		}
+	}
+}
+
+// TestCheckForEclassesOnly_NoToolchainFuncs verifies that toolchain-funcs
+// is NOT in EclassToolMap (as it uses system compiler which is always available).
+func TestCheckForEclassesOnly_NoToolchainFuncs(t *testing.T) {
+	eclassMap := EclassToolMap()
+
+	// toolchain-funcs should NOT be in the map
+	if _, ok := eclassMap["toolchain-funcs"]; ok {
+		t.Error("toolchain-funcs should NOT be in EclassToolMap - " +
+			"it uses system compiler which is always available")
+	}
+
+	// Verify other "no-tool" eclasses are also not in the map
+	noToolEclasses := []string{
+		"multilib",
+		"linux-info",
+		"pam",
+		"bash-completion-r1",
+		"flag-o-matic",
+		"xdg",
+		"optfeature",
+		"edo",
+		"wrapper",
+		"multiprocessing",
+	}
+
+	for _, eclass := range noToolEclasses {
+		if _, ok := eclassMap[eclass]; ok {
+			t.Errorf("%s should NOT be in EclassToolMap - it doesn't require special tools", eclass)
+		}
+	}
+}

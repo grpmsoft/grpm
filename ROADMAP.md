@@ -1,12 +1,13 @@
 # GRPM Roadmap
 
-> **Package Mask, Keywords & Atom Parsing Release (v0.8.1)**
+> **UX Improvements Release (v0.8.2)**
 >
 > Rapid development complete (v0.1.0 → v0.5.0).
 > Infrastructure release complete (v0.6.0).
 > Build quality and security fixes (v0.7.x).
 > Configuration management (v0.8.0).
-> **Solver filtering + atom parsing fix (v0.8.1, #45, #46, #48).**
+> Solver filtering + atom parsing fix (v0.8.1).
+> **UX improvements: emerge --info, USE flags display, user-friendly errors (v0.8.2).**
 > **98.2% tree coverage verified on real Gentoo!**
 
 ---
@@ -68,7 +69,20 @@ Key insight: **Eclasses don't need Go implementations.** They are loaded dynamic
 
 ## Release History
 
-### v0.8.1 — Package Mask, Keywords & Atom Parsing (Current)
+### v0.8.2 — UX Improvements (Current)
+
+**User experience improvements and bug fixes based on community feedback:**
+
+- **`emerge --info`** — Displays system environment like Portage (Go version, platform, memory, repos)
+- **USE flags in pretend** — Shows `USE="flag1 -flag2"` in emerge pretend output
+- **User-friendly errors** — Clear error messages with package suggestions on typos
+- **Similar package search** — Fuzzy matching suggests similar packages (e.g., "neofatch" → "neofetch")
+- **Per-package tool check** — `grpm tools --check` shows which tools are needed by specific eclasses
+- **Search version fix** — Versions now sorted correctly using PMS comparison
+- **Info command filtering** — Respects mask and keyword filtering
+- **Dependency deduplication** — Info output no longer shows duplicate dependencies
+
+### v0.8.1 — Package Mask, Keywords & Atom Parsing
 
 **Solver respects package.mask AND KEYWORDS, plus atom parsing fix** ([#45](https://github.com/grpmsoft/grpm/issues/45), [#46](https://github.com/grpmsoft/grpm/issues/46), [#48](https://github.com/grpmsoft/grpm/issues/48)):
 

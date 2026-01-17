@@ -209,6 +209,70 @@ func ExtractInherit(content string) []string {
 	return inherits
 }
 
+// CheckForEclassesOnly checks tool availability ONLY for the specified eclasses.
+//
+// Unlike CheckForEclasses, this does NOT query the registry's ByEclass cache,
+// which can include tools registered for broad eclasses like toolchain-funcs.
+// Instead, it uses ONLY the explicit EclassToolMap() mapping.
+//
+// This is the preferred method for per-package tool checking, as it ensures
+// a package like sys-libs/glibc doesn't require Rust, Java, or Ruby just because
+// those tools are registered in the global registry.
+//
+// Parameters:
+//   - eclasses: List of eclass names inherited by the package
+//
+// Returns a CheckResult with details about required and missing tools.
+func (c *Checker) CheckForEclassesOnly(eclasses []string) *CheckResult {
+	result := &CheckResult{
+		Eclasses: eclasses,
+		CanBuild: true,
+	}
+
+	// Collect tools from static EclassToolMap ONLY
+	seen := make(map[string]bool)
+	eclassMap := EclassToolMap()
+
+	for _, eclass := range eclasses {
+		// Only use static map - skip registry lookup
+		toolNames, ok := eclassMap[eclass]
+		if !ok {
+			// Eclass has no tool requirements - this is fine
+			continue
+		}
+
+		for _, name := range toolNames {
+			if seen[name] {
+				continue
+			}
+			seen[name] = true
+
+			// Get tool info from registry (for Package and Description)
+			tool := c.registry.Get(name)
+			if tool == nil {
+				// Create synthetic entry for unknown tool
+				tool = &Tool{
+					Name:        name,
+					Binary:      name,
+					Package:     "unknown",
+					Description: "Required by " + eclass,
+				}
+			}
+
+			result.Required = append(result.Required, tool)
+
+			if c.detector.IsAvailable(tool.Name) {
+				result.Available = append(result.Available, tool)
+			} else if !tool.Optional {
+				result.Missing = append(result.Missing, tool)
+				result.CanBuild = false
+			}
+		}
+	}
+
+	return result
+}
+
 // MustHaveTools checks if all specified tools are available.
 //
 // Returns nil if all tools are available, or an error with details about missing tools.

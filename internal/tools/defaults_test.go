@@ -140,6 +140,7 @@ func TestEclassToolMap(t *testing.T) {
 	}
 
 	// Check specific mappings
+	// Note: Python eclasses only require python3 (modern standard)
 	tests := []struct {
 		eclass   string
 		expected []string
@@ -148,7 +149,7 @@ func TestEclassToolMap(t *testing.T) {
 		{"meson", []string{"meson", "ninja"}},
 		{"cargo", []string{"cargo", "rustc"}},
 		{"go-module", []string{"go"}},
-		{"python-single-r1", []string{"python", "python3"}},
+		{"python-single-r1", []string{"python3"}},
 	}
 
 	for _, tt := range tests {
