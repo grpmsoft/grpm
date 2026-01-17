@@ -1333,3 +1333,185 @@ func TestIsAlphaNumeric(t *testing.T) {
 		}
 	}
 }
+
+// TestGetMainRepoLocation_ReposConfFile tests repos.conf as a single file.
+func TestGetMainRepoLocation_ReposConfFile(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create repos.conf as a single file
+	reposConfPath := filepath.Join(tmpDir, "repos.conf")
+	content := `[DEFAULT]
+main-repo = gentoo
+
+[gentoo]
+location = /custom/repos/gentoo
+`
+	if err := os.WriteFile(reposConfPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+
+	loc := cfg.GetMainRepoLocation()
+	if loc != "/custom/repos/gentoo" {
+		t.Errorf("GetMainRepoLocation() = %q, want %q", loc, "/custom/repos/gentoo")
+	}
+}
+
+// TestGetMainRepoLocation_ReposConfDirectory tests repos.conf as a directory.
+func TestGetMainRepoLocation_ReposConfDirectory(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create repos.conf as a directory
+	reposConfDir := filepath.Join(tmpDir, "repos.conf")
+	if err := os.MkdirAll(reposConfDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create gentoo.conf
+	gentooConf := filepath.Join(reposConfDir, "gentoo.conf")
+	gentooContent := `[DEFAULT]
+main-repo = myrepo
+
+[myrepo]
+location = /my/custom/repo
+`
+	if err := os.WriteFile(gentooConf, []byte(gentooContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+
+	loc := cfg.GetMainRepoLocation()
+	if loc != "/my/custom/repo" {
+		t.Errorf("GetMainRepoLocation() = %q, want %q", loc, "/my/custom/repo")
+	}
+}
+
+// TestGetMainRepoLocation_FallbackToPortdir tests fallback to PORTDIR from make.conf.
+func TestGetMainRepoLocation_FallbackToPortdir(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create make.conf with PORTDIR (no repos.conf)
+	makeConfPath := filepath.Join(tmpDir, "make.conf")
+	content := `PORTDIR="/usr/portage"
+`
+	if err := os.WriteFile(makeConfPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+
+	loc := cfg.GetMainRepoLocation()
+	if loc != "/usr/portage" {
+		t.Errorf("GetMainRepoLocation() = %q, want %q (PORTDIR fallback)", loc, "/usr/portage")
+	}
+}
+
+// TestGetMainRepoLocation_DefaultGentoo tests that main-repo defaults to "gentoo".
+func TestGetMainRepoLocation_DefaultGentoo(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create repos.conf without [DEFAULT] main-repo
+	reposConfPath := filepath.Join(tmpDir, "repos.conf")
+	content := `[gentoo]
+location = /default/gentoo/path
+`
+	if err := os.WriteFile(reposConfPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+
+	loc := cfg.GetMainRepoLocation()
+	if loc != "/default/gentoo/path" {
+		t.Errorf("GetMainRepoLocation() = %q, want %q", loc, "/default/gentoo/path")
+	}
+}
+
+// TestGetMainRepoLocation_MultipleFilesInDir tests reading multiple files in repos.conf dir.
+func TestGetMainRepoLocation_MultipleFilesInDir(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create repos.conf as a directory
+	reposConfDir := filepath.Join(tmpDir, "repos.conf")
+	if err := os.MkdirAll(reposConfDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create 00-default.conf with DEFAULT section
+	defaultConf := filepath.Join(reposConfDir, "00-default.conf")
+	defaultContent := `[DEFAULT]
+main-repo = gentoo
+`
+	if err := os.WriteFile(defaultConf, []byte(defaultContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create 10-gentoo.conf with repo location
+	gentooConf := filepath.Join(reposConfDir, "10-gentoo.conf")
+	gentooContent := `[gentoo]
+location = /split/gentoo/location
+`
+	if err := os.WriteFile(gentooConf, []byte(gentooContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+
+	loc := cfg.GetMainRepoLocation()
+	if loc != "/split/gentoo/location" {
+		t.Errorf("GetMainRepoLocation() = %q, want %q", loc, "/split/gentoo/location")
+	}
+}
+
+// TestGetMainRepoLocation_ReposConfOverridesPortdir tests repos.conf takes precedence over PORTDIR.
+func TestGetMainRepoLocation_ReposConfOverridesPortdir(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create make.conf with PORTDIR
+	makeConfPath := filepath.Join(tmpDir, "make.conf")
+	makeContent := `PORTDIR="/from/makeconf"
+`
+	if err := os.WriteFile(makeConfPath, []byte(makeContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create repos.conf with different location
+	reposConfPath := filepath.Join(tmpDir, "repos.conf")
+	reposContent := `[DEFAULT]
+main-repo = gentoo
+
+[gentoo]
+location = /from/reposconf
+`
+	if err := os.WriteFile(reposConfPath, []byte(reposContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+
+	loc := cfg.GetMainRepoLocation()
+	// repos.conf should take precedence
+	if loc != "/from/reposconf" {
+		t.Errorf("GetMainRepoLocation() = %q, want %q (repos.conf should override PORTDIR)", loc, "/from/reposconf")
+	}
+}

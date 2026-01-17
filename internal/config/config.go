@@ -616,3 +616,144 @@ func (c *Config) GetVariable(name string) string {
 	}
 	return c.MakeConf.Variables[name]
 }
+
+// GetMainRepoLocation returns the main repository location using Portage's fallback chain:
+//  1. repos.conf -> [DEFAULT] main-repo -> [repo_name] location
+//  2. PORTDIR from make.conf
+//  3. Auto-detect: /var/db/repos/gentoo or /usr/portage
+//
+// This method provides full Portage compatibility for repository location detection.
+func (c *Config) GetMainRepoLocation() string {
+	// 1. Try repos.conf
+	reposConfPath := filepath.Join(c.Root, "repos.conf")
+	info, err := os.Stat(reposConfPath)
+	if err == nil {
+		location := c.loadReposConfMainLocation(reposConfPath, info.IsDir())
+		if location != "" {
+			return location
+		}
+	}
+
+	// 2. Try PORTDIR from make.conf
+	if portdir := c.GetPortDir(); portdir != "" && portdir != "/var/db/repos/gentoo" {
+		// Only use PORTDIR if it was explicitly set (not the default)
+		if c.MakeConf != nil && c.MakeConf.Variables != nil {
+			if _, exists := c.MakeConf.Variables["PORTDIR"]; exists {
+				return portdir
+			}
+		}
+	}
+
+	// 3. Auto-detect
+	modernPath := "/var/db/repos/gentoo"
+	if _, err := os.Stat(modernPath); err == nil {
+		return modernPath
+	}
+
+	legacyPath := "/usr/portage"
+	if _, err := os.Stat(legacyPath); err == nil {
+		return legacyPath
+	}
+
+	return modernPath
+}
+
+// reposConfState holds parsed state from repos.conf files.
+type reposConfState struct {
+	mainRepo string
+	repos    map[string]string // repo name -> location
+}
+
+// loadReposConfMainLocation parses repos.conf to find the main repo location.
+func (c *Config) loadReposConfMainLocation(path string, isDir bool) string {
+	state := &reposConfState{repos: make(map[string]string)}
+
+	if isDir {
+		c.loadReposConfDir(path, state)
+	} else {
+		c.parseReposConfFile(path, state)
+	}
+
+	// Find main repo location
+	mainRepo := state.mainRepo
+	if mainRepo == "" {
+		mainRepo = "gentoo"
+	}
+	if loc, ok := state.repos[mainRepo]; ok {
+		return loc
+	}
+
+	return ""
+}
+
+// loadReposConfDir loads all .conf files from a repos.conf directory.
+func (c *Config) loadReposConfDir(dirPath string, state *reposConfState) {
+	entries, err := os.ReadDir(dirPath)
+	if err != nil {
+		return
+	}
+
+	var files []string
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || strings.HasPrefix(name, ".") {
+			continue
+		}
+		if strings.HasSuffix(name, ".conf") || !strings.Contains(name, ".") {
+			files = append(files, name)
+		}
+	}
+	sort.Strings(files)
+
+	for _, name := range files {
+		c.parseReposConfFile(filepath.Join(dirPath, name), state)
+	}
+}
+
+// parseReposConfFile parses a single repos.conf file.
+func (c *Config) parseReposConfFile(filePath string, state *reposConfState) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return
+	}
+	defer func() { _ = file.Close() }()
+
+	scanner := bufio.NewScanner(file)
+	var currentSection string
+
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
+			continue
+		}
+
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			currentSection = strings.TrimPrefix(strings.TrimSuffix(line, "]"), "[")
+			continue
+		}
+
+		c.parseReposConfKeyValue(line, currentSection, state)
+	}
+}
+
+// parseReposConfKeyValue parses a key=value line from repos.conf.
+func (c *Config) parseReposConfKeyValue(line, section string, state *reposConfState) {
+	if !strings.Contains(line, "=") {
+		return
+	}
+
+	parts := strings.SplitN(line, "=", 2)
+	if len(parts) != 2 {
+		return
+	}
+
+	key := strings.TrimSpace(parts[0])
+	value := strings.TrimSpace(parts[1])
+
+	if section == "DEFAULT" && key == "main-repo" {
+		state.mainRepo = value
+	} else if section != "" && section != "DEFAULT" && key == "location" {
+		state.repos[section] = value
+	}
+}
