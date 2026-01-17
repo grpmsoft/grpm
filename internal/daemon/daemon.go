@@ -41,11 +41,11 @@ type Daemon struct {
 	// Ready channel - signals when daemon is ready to serve
 	ready chan struct{}
 
-	// Application Services (Phase 3+)
+	// Application Services
 	portageRepo    repo.Repository             // Infrastructure: Portage repository
 	packageService *application.PackageService // Application: Package operations
 
-	// Background Services (Phase 4+)
+	// Background Services
 	jobQueue *JobQueue // Job queue for concurrent operations
 }
 
@@ -386,7 +386,7 @@ func (d *Daemon) startRESTTCP() error {
 	return nil
 }
 
-// createRESTHandler creates REST API handler (basic for Phase 1)
+// createRESTHandler creates REST API handler
 func (d *Daemon) createRESTHandler() http.Handler {
 	mux := http.NewServeMux()
 

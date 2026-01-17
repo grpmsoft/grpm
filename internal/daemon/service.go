@@ -59,9 +59,9 @@ func (s *GRPMServer) GetStatus(ctx context.Context, req *pb.GetStatusRequest) (*
 			Version:       info.Version,
 		},
 		System: &pb.SystemStatus{
-			InstalledPackages: 0,         // TODO: Implement in Phase 3
-			AvailableUpdates:  0,         // TODO: Implement in Phase 3
-			PortageVersion:    "unknown", // TODO: Implement in Phase 3
+			InstalledPackages: 0,         // TODO: Query from VarDB
+			AvailableUpdates:  0,         // TODO: Query from resolver
+			PortageVersion:    "unknown", // TODO: Read from profile
 		},
 	}
 
@@ -222,12 +222,13 @@ func (s *GRPMServer) InstallPackage(req *pb.InstallPackageRequest, stream pb.GRP
 
 // RemovePackage removes a package (streaming progress)
 func (s *GRPMServer) RemovePackage(req *pb.RemovePackageRequest, stream pb.GRPMService_RemovePackageServer) error {
-	// Phase 2: Stub implementation
+	// Stub: daemon API for removal not yet implemented
+	// Use CLI standalone mode: grpm remove <package>
 	return stream.Send(&pb.RemovePackageResponse{
 		Event: &pb.RemovePackageResponse_Error{
 			Error: &pb.ErrorEvent{
 				Error:     "not implemented",
-				Details:   "Package removal will be implemented in Phase 3",
+				Details:   "Package removal via daemon not yet implemented. Use CLI directly.",
 				Timestamp: time.Now().Unix(),
 			},
 		},
@@ -236,12 +237,13 @@ func (s *GRPMServer) RemovePackage(req *pb.RemovePackageRequest, stream pb.GRPMS
 
 // UpdateSystem updates the system (streaming progress)
 func (s *GRPMServer) UpdateSystem(req *pb.UpdateSystemRequest, stream pb.GRPMService_UpdateSystemServer) error {
-	// Phase 2: Stub implementation
+	// Stub: daemon API for system update not yet implemented
+	// Use CLI standalone mode: grpm update
 	return stream.Send(&pb.UpdateSystemResponse{
 		Event: &pb.UpdateSystemResponse_Error{
 			Error: &pb.ErrorEvent{
 				Error:     "not implemented",
-				Details:   "System update will be implemented in Phase 3",
+				Details:   "System update via daemon not yet implemented. Use CLI directly.",
 				Timestamp: time.Now().Unix(),
 			},
 		},

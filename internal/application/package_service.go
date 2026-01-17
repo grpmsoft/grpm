@@ -74,7 +74,7 @@ func (s *PackageService) ResolvePackage(packages []string) (*ResolutionResult, e
 	result := &ResolutionResult{
 		Success:           len(conflicts) == 0,
 		PackagesToInstall: packagesToInstall,
-		PackagesToUpdate:  []string{}, // TODO: Implement in Phase 3+
+		PackagesToUpdate:  []string{}, // TODO: Implement in daemon API
 		Conflicts:         conflictStrings,
 		TotalSize:         0, // TODO: Calculate from ebuild metadata
 	}
@@ -157,15 +157,15 @@ func (s *PackageService) InstallPackage(packageName string, progressChan chan<- 
 
 	s.sendProgress(progressChan, "resolved", fmt.Sprintf("Resolved %d packages", len(result.PackagesToInstall)), 30)
 
-	// Step 2: Download packages (TODO: Phase 3+)
+	// Step 2: Download packages (TODO: daemon API)
 	s.sendProgress(progressChan, "downloading", "Downloading packages...", 50)
 	time.Sleep(100 * time.Millisecond) // Simulate work
 
-	// Step 3: Compile packages (TODO: Phase 3+)
+	// Step 3: Compile packages (TODO: daemon API)
 	s.sendProgress(progressChan, "compiling", "Compiling packages...", 70)
 	time.Sleep(100 * time.Millisecond) // Simulate work
 
-	// Step 4: Install packages (TODO: Phase 3+)
+	// Step 4: Install packages (TODO: daemon API)
 	s.sendProgress(progressChan, "installing", "Installing packages...", 90)
 	time.Sleep(100 * time.Millisecond) // Simulate work
 
@@ -180,7 +180,7 @@ func (s *PackageService) InstallPackage(packageName string, progressChan chan<- 
 func (s *PackageService) RemovePackage(packageName string) (*RemovalResult, error) {
 	log.Printf("[PackageService] Removing package: %s", packageName)
 
-	// TODO: Phase 3+ implementation
+	// TODO: daemon API implementation
 	// - Check if package is installed
 	// - Check reverse dependencies
 	// - Remove package files
@@ -189,7 +189,7 @@ func (s *PackageService) RemovePackage(packageName string) (*RemovalResult, erro
 	result := &RemovalResult{
 		Success:        false,
 		RemovedPackage: packageName,
-		Message:        "Package removal not yet implemented (Phase 3+)",
+		Message:        "Package removal not yet implemented (daemon API)",
 	}
 
 	return result, nil
@@ -201,7 +201,7 @@ func (s *PackageService) UpdateSystem(progressChan chan<- InstallProgress) (*Upd
 
 	s.sendProgress(progressChan, "syncing", "Syncing package repository...", 20)
 
-	// TODO: Phase 3+ implementation
+	// TODO: daemon API implementation
 	// - Sync portage tree
 	// - Find outdated packages
 	// - Resolve update dependencies
@@ -210,7 +210,7 @@ func (s *PackageService) UpdateSystem(progressChan chan<- InstallProgress) (*Upd
 	result := &UpdateResult{
 		Success:         false,
 		UpdatedPackages: []string{},
-		Message:         "System update not yet implemented (Phase 3+)",
+		Message:         "System update not yet implemented (daemon API)",
 	}
 
 	return result, nil
