@@ -168,6 +168,7 @@ grpm
 | [Architecture](docs/ARCHITECTURE.md) | System architecture diagram |
 | [Installation Guide](docs/INSTALL.md) | Detailed installation instructions |
 | [CLI Reference](docs/CLI_REFERENCE.md) | Complete command documentation |
+| [PMS Compliance](docs/PMS_COMPLIANCE.md) | Implementation status per PMS specification |
 | [PMS Reference](docs/pms/README.md) | Gentoo Package Manager Specification |
 | [Contributing](CONTRIBUTING.md) | Development guidelines |
 | [Changelog](CHANGELOG.md) | Version history |
