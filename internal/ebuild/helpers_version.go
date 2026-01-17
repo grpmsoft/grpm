@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/grpmsoft/grpm/internal/pkg"
+	"mvdan.cc/sh/v3/expand"
 )
 
 // ============================================================================
@@ -276,6 +277,58 @@ func (h *Helpers) Inherit(args []string) error {
 	// Use background context since inherit is called from bash scripts
 	// which don't have context propagation
 	ctx := context.Background()
+
+	// Load all requested eclasses
+	if err := h.eclassLoader.Inherit(ctx, args); err != nil {
+		return &DieError{Message: fmt.Sprintf("inherit failed: %v", err)}
+	}
+
+	return nil
+}
+
+// InheritWithEnv loads eclasses with access to the interpreter's current environment.
+//
+// This variant receives the environment from the interpreter context, allowing
+// access to variables set during script execution (like EAPI).
+func (h *Helpers) InheritWithEnv(args []string, env expand.Environ) error {
+	if len(args) == 0 {
+		return nil
+	}
+
+	// Check if eclass loader is available
+	if h.eclassLoader == nil {
+		for _, eclass := range args {
+			h.writeStdout(fmt.Sprintf(">>> Inheriting eclass: %s (no loader)\n", eclass))
+		}
+		return nil
+	}
+
+	ctx := context.Background()
+
+	// Pass critical environment variables to the eclass executor
+	// EAPI is required by many eclasses (e.g., toolchain.eclass only supports EAPI 8)
+	if loader, ok := h.eclassLoader.(*DynamicEclassLoader); ok {
+		envVars := map[string]string{}
+
+		// Get variables from the interpreter's environment
+		for _, varName := range []string{
+			"EAPI", "P", "PN", "PV", "PR", "PVR", "PF",
+			"CATEGORY", "SLOT", "USE", "PORTDIR", "DISTDIR",
+			"WORKDIR", "S", "T", "D", "ROOT", "EROOT", "EPREFIX",
+		} {
+			if val := env.Get(varName).String(); val != "" {
+				envVars[varName] = val
+			}
+		}
+
+		// DEBUG: Print extracted variables
+		h.writeStdout(">>> InheritWithEnv: Extracted vars:\n")
+		for k, v := range envVars {
+			h.writeStdout(fmt.Sprintf(">>>   %s=%s\n", k, v))
+		}
+
+		loader.SetEnv(envVars)
+	}
 
 	// Load all requested eclasses
 	if err := h.eclassLoader.Inherit(ctx, args); err != nil {

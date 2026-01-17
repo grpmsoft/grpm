@@ -425,11 +425,38 @@ func (i *Interpreter) execHandler(next interp.ExecHandlerFunc) interp.ExecHandle
 
 		cmd := args[0]
 		cmdArgs := args[1:]
+		hc := interp.HandlerCtx(ctx)
 
 		// Special handling for xargs - needs stdin from context
 		if cmd == "xargs" {
-			hc := interp.HandlerCtx(ctx)
 			return i.helpers.XargsWithStdin(hc.Stdin, cmdArgs)
+		}
+
+		// Special handling for inherit - needs environment from context
+		if cmd == "inherit" {
+			return i.helpers.InheritWithEnv(cmdArgs, hc.Env)
+		}
+
+		// Version functions need to write to context stdout for command substitution
+		// to work (e.g., GCC_RELEASE_VER=$(ver_cut 1-3 ${GCC_PV}))
+		switch cmd {
+		case "ver_cut":
+			if len(cmdArgs) >= 2 {
+				result, err := i.helpers.verCutImpl(cmdArgs[0], cmdArgs[1])
+				if err != nil {
+					return &DieError{Message: fmt.Sprintf("ver_cut: %v", err)}
+				}
+				_, _ = io.WriteString(hc.Stdout, result)
+				return nil
+			}
+			return &DieError{Message: "ver_cut: requires range and version arguments"}
+		case "ver_rs":
+			if len(cmdArgs) >= 3 {
+				result := i.helpers.verRsImpl(cmdArgs[0], cmdArgs[1], cmdArgs[2])
+				_, _ = io.WriteString(hc.Stdout, result)
+				return nil
+			}
+			return &DieError{Message: "ver_rs: requires range, separator, and version arguments"}
 		}
 
 		// Look up command in map

@@ -392,6 +392,11 @@ func (env *Environment) ToMap() map[string]string {
 		result["ESYSROOT"] = env.ESYSROOT
 	}
 
+	// Include ExtraVars (ebuild-specific and metadata extraction variables)
+	for k, v := range env.ExtraVars {
+		result[k] = v
+	}
+
 	return result
 }
 
