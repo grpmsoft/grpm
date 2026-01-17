@@ -370,6 +370,17 @@ func (a *RepositoryAdapter) LoadPackage(name string) (*pkg.Package, error) {
 	return p, err
 }
 
+// LoadPackageVersion loads a specific version of a package.
+func (a *RepositoryAdapter) LoadPackageVersion(name, version string) (*pkg.Package, error) {
+	for _, repo := range a.manager.Repositories() {
+		p, err := repo.LoadPackageVersion(name, version)
+		if err == nil {
+			return p, nil
+		}
+	}
+	return nil, fmt.Errorf("version %s not found for %s in any repository", version, name)
+}
+
 // LoadPackages loads multiple packages.
 func (a *RepositoryAdapter) LoadPackages(names []string) ([]*pkg.Package, error) {
 	result := make([]*pkg.Package, 0, len(names))
@@ -386,6 +397,32 @@ func (a *RepositoryAdapter) LoadPackages(names []string) ([]*pkg.Package, error)
 // FindBySpecification finds packages matching the specification.
 func (a *RepositoryAdapter) FindBySpecification(spec Specification) ([]*pkg.Package, error) {
 	return a.manager.FindBySpecification(spec)
+}
+
+// FindByAtom finds all packages matching a PMS-compliant atom across all repositories.
+func (a *RepositoryAdapter) FindByAtom(atom *pkg.Atom) ([]*pkg.Package, error) {
+	if atom == nil {
+		return nil, fmt.Errorf("atom is nil")
+	}
+
+	var results []*pkg.Package
+	seen := make(map[string]bool)
+
+	for _, repo := range a.manager.Repositories() {
+		packages, err := repo.FindByAtom(atom)
+		if err != nil {
+			continue
+		}
+		for _, p := range packages {
+			key := p.Name + "@" + p.Version
+			if !seen[key] {
+				seen[key] = true
+				results = append(results, p)
+			}
+		}
+	}
+
+	return results, nil
 }
 
 // GetAllVersions returns all versions of a package.

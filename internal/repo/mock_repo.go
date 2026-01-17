@@ -93,6 +93,19 @@ func (m *MockRepository) LoadPackage(name string) (*pkg.Package, error) {
 	return nil, fmt.Errorf("package %s not found", name)
 }
 
+// LoadPackageVersion loads a specific version of a package.
+// For MockRepository, this checks if the stored package matches the requested version.
+func (m *MockRepository) LoadPackageVersion(name, version string) (*pkg.Package, error) {
+	if p, exists := m.packages[name]; exists {
+		if p.Version == version {
+			copyPkg := *p
+			return &copyPkg, nil
+		}
+		return nil, fmt.Errorf("version %s not found for %s (have %s)", version, name, p.Version)
+	}
+	return nil, fmt.Errorf("package %s not found", name)
+}
+
 // FindBySpecification finds packages matching the specification
 func (m *MockRepository) FindBySpecification(spec Specification) ([]*pkg.Package, error) {
 	var result []*pkg.Package
