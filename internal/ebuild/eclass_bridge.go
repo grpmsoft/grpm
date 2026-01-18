@@ -9,9 +9,10 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"path/filepath"
 
 	"github.com/grpmsoft/grpm/internal/eclass"
-	"mvdan.cc/sh/v3/interp"
+	mvdaninterp "mvdan.cc/sh/v3/interp"
 )
 
 // DynamicEclassLoader provides dynamic eclass loading using the eclass package.
@@ -84,7 +85,7 @@ func (a *GoEclassAdapter) ExecutePhase(ctx context.Context, phase string, env ma
 //   - stdout, stderr: Output writers
 func NewDynamicEclassLoader(
 	cache *eclass.Cache,
-	execHandler interp.ExecHandlerFunc,
+	execHandler mvdaninterp.ExecHandlerFunc,
 	stdout, stderr io.Writer,
 ) *DynamicEclassLoader {
 	loader := &DynamicEclassLoader{
@@ -96,18 +97,33 @@ func NewDynamicEclassLoader(
 	// Create hybrid loader with the exec handler
 	loaderOpts := []eclass.HybridLoaderOption{
 		eclass.WithHybridOutput(stdout, stderr),
+		eclass.WithVerbose(true), // Enable verbose to see actual errors
 	}
 
 	loader.hybridLoader = eclass.NewHybridLoader(cache, execHandler, loaderOpts...)
 
 	// Create registry from cache locations
+	// Note: cache.Locations() returns eclass directories (e.g., /var/db/repos/gentoo/eclass)
+	// but NewEclassRegistry expects repository root (e.g., /var/db/repos/gentoo)
+	// So we need to get the parent directory
 	portdir := ""
 	if locs := cache.Locations(); len(locs) > 0 {
-		portdir = locs[0]
+		// Get parent of eclass dir (e.g., /var/db/repos/gentoo/eclass -> /var/db/repos/gentoo)
+		portdir = filepath.Dir(locs[0])
 	}
 	loader.registry = NewEclassRegistry(portdir)
 
 	return loader
+}
+
+// SetEnv sets environment variables in the executor.
+//
+// This should be called before Inherit() to ensure variables like EAPI
+// are available to eclasses.
+func (l *DynamicEclassLoader) SetEnv(vars map[string]string) {
+	for k, v := range vars {
+		l.hybridLoader.GetExecutor().SetVar(k, v)
+	}
 }
 
 // Inherit loads one or more eclasses.
@@ -226,8 +242,13 @@ func SetupDynamicEclassLoading(interp *Interpreter, cache *eclass.Cache) (*Dynam
 		}
 	}
 
+	// loader is captured by closure and assigned after creation
+	var loader *DynamicEclassLoader
+
 	// Create exec handler that uses interpreter's helpers
 	// This allows eclass code to call Go helper functions
+	// Note: Some commands need to use Executor state directly because
+	// the interpreter's helpers don't track state during dynamic execution.
 	execHandler := func(ctx context.Context, args []string) error {
 		if len(args) == 0 {
 			return nil
@@ -235,13 +256,54 @@ func SetupDynamicEclassLoading(interp *Interpreter, cache *eclass.Cache) (*Dynam
 
 		cmd := args[0]
 		cmdArgs := args[1:]
+		hc := mvdaninterp.HandlerCtx(ctx)
+
+		// EXPORT_FUNCTIONS must use the Executor's state directly
+		// because it needs access to currentEclass which is only
+		// tracked by the Executor during dynamic eclass execution
+		if cmd == "EXPORT_FUNCTIONS" && loader != nil {
+			if err := loader.GetExecutor().ExportFunctions(cmdArgs); err != nil {
+				return &DieError{Message: fmt.Sprintf("EXPORT_FUNCTIONS: %v", err)}
+			}
+			return nil
+		}
+
+		// inherit from within eclasses must go through the Executor
+		// to properly handle nested inheritance and EAPI requirements
+		if cmd == "inherit" && loader != nil {
+			if err := loader.Inherit(ctx, cmdArgs); err != nil {
+				return &DieError{Message: fmt.Sprintf("inherit: %v", err)}
+			}
+			return nil
+		}
+
+		// Version functions need to write to context stdout for command substitution
+		switch cmd {
+		case "ver_cut":
+			if len(cmdArgs) >= 2 {
+				result, err := interp.helpers.verCutImpl(cmdArgs[0], cmdArgs[1])
+				if err != nil {
+					return &DieError{Message: fmt.Sprintf("ver_cut: %v", err)}
+				}
+				_, _ = io.WriteString(hc.Stdout, result)
+				return nil
+			}
+			return &DieError{Message: "ver_cut: requires range and version arguments"}
+		case "ver_rs":
+			if len(cmdArgs) >= 3 {
+				result := interp.helpers.verRsImpl(cmdArgs[0], cmdArgs[1], cmdArgs[2])
+				_, _ = io.WriteString(hc.Stdout, result)
+				return nil
+			}
+			return &DieError{Message: "ver_rs: requires range, separator, and version arguments"}
+		}
 
 		// Dispatch to interpreter's command map
 		return interp.dispatchCommand(cmd, cmdArgs)
 	}
 
-	// Create dynamic loader
-	loader := NewDynamicEclassLoader(cache, execHandler, interp.stdout, interp.stderr)
+	// Create dynamic loader (now the closure can access it)
+	loader = NewDynamicEclassLoader(cache, execHandler, interp.stdout, interp.stderr)
 
 	// Replace the default eclass loader
 	// DynamicEclassLoader implements EclassLoaderIface directly

@@ -383,3 +383,209 @@ SRC_URI="https://example.com/test.tar.gz"
 		}
 	}
 }
+
+// TestMetadataEvaluator_EvalMode tests the evaluation mode configuration.
+func TestMetadataEvaluator_EvalMode(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	if err := os.MkdirAll(filepath.Join(tmpDir, "eclass"), 0755); err != nil {
+		t.Fatalf("Failed to create eclass dir: %v", err)
+	}
+
+	evaluator, err := NewMetadataEvaluator(tmpDir)
+	if err != nil {
+		t.Fatalf("Failed to create evaluator: %v", err)
+	}
+
+	// Default mode should be EvalModeGo
+	if evaluator.Mode != EvalModeGo {
+		t.Errorf("Default mode should be EvalModeGo, got %v", evaluator.Mode)
+	}
+
+	// Can change mode
+	evaluator.Mode = EvalModeNativeBash
+	if evaluator.Mode != EvalModeNativeBash {
+		t.Errorf("Expected EvalModeNativeBash after setting, got %v", evaluator.Mode)
+	}
+}
+
+// TestCreateMetadataEnvironment_ExtraVars tests that ExtraVars are properly set.
+func TestCreateMetadataEnvironment_ExtraVars(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	if err := os.MkdirAll(filepath.Join(tmpDir, "eclass"), 0755); err != nil {
+		t.Fatalf("Failed to create eclass dir: %v", err)
+	}
+
+	evaluator, err := NewMetadataEvaluator(tmpDir)
+	if err != nil {
+		t.Fatalf("Failed to create evaluator: %v", err)
+	}
+
+	pkgInfo := &pkg.Package{
+		Name:    "sys-devel/gcc",
+		Version: "13.4.1_p20250807",
+		Slot:    pkg.NewSlot("13", ""),
+	}
+
+	env, err := evaluator.createMetadataEnvironment(pkgInfo, "/path/to/ebuild.ebuild")
+	if err != nil {
+		t.Fatalf("createMetadataEnvironment failed: %v", err)
+	}
+
+	// Check that ExtraVars contains the expected keys
+	if env.ExtraVars == nil {
+		t.Fatal("ExtraVars should not be nil")
+	}
+
+	// TOOLCHAIN_HAS_TESTS should be empty to disable python eclass inheritance
+	if val, ok := env.ExtraVars["TOOLCHAIN_HAS_TESTS"]; !ok || val != "" {
+		t.Errorf("TOOLCHAIN_HAS_TESTS should be empty string, got %q (exists: %v)", val, ok)
+	}
+
+	// TOOLCHAIN_USE_GIT_PATCHES should be empty to disable git-r3 inheritance
+	if val, ok := env.ExtraVars["TOOLCHAIN_USE_GIT_PATCHES"]; !ok || val != "" {
+		t.Errorf("TOOLCHAIN_USE_GIT_PATCHES should be empty string, got %q (exists: %v)", val, ok)
+	}
+
+	// CHOST should be set for tc-arch functions
+	if val, ok := env.ExtraVars["CHOST"]; !ok || val == "" {
+		t.Errorf("CHOST should be set, got %q (exists: %v)", val, ok)
+	}
+}
+
+// TestEnvironment_ToMap_IncludesExtraVars tests that ToMap includes ExtraVars.
+func TestEnvironment_ToMap_IncludesExtraVars(t *testing.T) {
+	env := &Environment{
+		P:        "test-1.0",
+		PN:       "test",
+		PV:       "1.0",
+		PR:       "r0",
+		PVR:      "1.0",
+		PF:       "test-1.0",
+		CATEGORY: "dev-libs",
+		EAPI:     "8",
+		SLOT:     "0",
+		ExtraVars: map[string]string{
+			"MY_VAR":              "my_value",
+			"TOOLCHAIN_HAS_TESTS": "",
+		},
+	}
+
+	envMap := env.ToMap()
+
+	// Check that ExtraVars are in the map
+	if val, ok := envMap["MY_VAR"]; !ok || val != "my_value" {
+		t.Errorf("Expected MY_VAR=my_value in map, got %q (exists: %v)", val, ok)
+	}
+
+	// Empty string value should still be included
+	if _, ok := envMap["TOOLCHAIN_HAS_TESTS"]; !ok {
+		t.Error("TOOLCHAIN_HAS_TESTS should be in map even with empty value")
+	}
+}
+
+// TestMetadataEvaluator_SimpleEclass tests evaluation with a simple eclass.
+func TestMetadataEvaluator_SimpleEclass(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create eclass directory with a simple eclass
+	eclassDir := filepath.Join(tmpDir, "eclass")
+	if err := os.MkdirAll(eclassDir, 0755); err != nil {
+		t.Fatalf("Failed to create eclass dir: %v", err)
+	}
+
+	// Create a simple eclass that sets a variable
+	simpleEclass := `# Copyright 1999-2025 Gentoo Authors
+# Distributed under the terms of the GNU General Public License v2
+
+# @ECLASS: simple.eclass
+# @DESCRIPTION: Simple test eclass
+
+_SIMPLE_URI="https://example.com/simple"
+
+get_simple_uri() {
+	echo "${_SIMPLE_URI}/${P}.tar.gz"
+}
+`
+	if err := os.WriteFile(filepath.Join(eclassDir, "simple.eclass"), []byte(simpleEclass), 0644); err != nil {
+		t.Fatalf("Failed to write eclass: %v", err)
+	}
+
+	// Create package directory
+	pkgDir := filepath.Join(tmpDir, "dev-libs", "testpkg")
+	if err := os.MkdirAll(pkgDir, 0755); err != nil {
+		t.Fatalf("Failed to create package dir: %v", err)
+	}
+
+	// Create ebuild that inherits the simple eclass
+	ebuildContent := `# Copyright 1999-2025 Gentoo Authors
+EAPI=8
+
+inherit simple
+
+DESCRIPTION="Test package"
+SRC_URI="$(get_simple_uri)"
+`
+	ebuildPath := filepath.Join(pkgDir, "testpkg-1.0.ebuild")
+	if err := os.WriteFile(ebuildPath, []byte(ebuildContent), 0644); err != nil {
+		t.Fatalf("Failed to write ebuild: %v", err)
+	}
+
+	// Create evaluator
+	evaluator, err := NewMetadataEvaluator(tmpDir)
+	if err != nil {
+		t.Fatalf("Failed to create evaluator: %v", err)
+	}
+
+	pkgInfo := &pkg.Package{
+		Name:    "dev-libs/testpkg",
+		Version: "1.0",
+		Slot:    pkg.NewSlot("0", ""),
+	}
+
+	// Evaluate SRC_URI
+	ctx := context.Background()
+	srcURI, err := evaluator.EvaluateSrcURI(ctx, ebuildPath, pkgInfo)
+	if err != nil {
+		t.Fatalf("EvaluateSrcURI failed: %v", err)
+	}
+
+	// The SRC_URI should contain the function output
+	if !strings.Contains(srcURI, "example.com") || !strings.Contains(srcURI, "testpkg") {
+		t.Errorf("SRC_URI should contain 'example.com' and 'testpkg', got: %s", srcURI)
+	}
+}
+
+// TestBuildNativeBashScript tests native bash script generation.
+func TestBuildNativeBashScript(t *testing.T) {
+	ebuildContent := `EAPI=8
+SRC_URI="https://example.com/${P}.tar.gz"
+`
+	script := buildNativeBashScript(ebuildContent)
+
+	// Check shebang
+	if !strings.HasPrefix(script, "#!/bin/bash") {
+		t.Error("Script should start with #!/bin/bash")
+	}
+
+	// Check that inherit function is defined
+	if !strings.Contains(script, "inherit()") {
+		t.Error("Script should define inherit function")
+	}
+
+	// Check that EXPORT_FUNCTIONS is defined
+	if !strings.Contains(script, "EXPORT_FUNCTIONS()") {
+		t.Error("Script should define EXPORT_FUNCTIONS")
+	}
+
+	// Check that ebuild content is included
+	if !strings.Contains(script, "SRC_URI=") {
+		t.Error("Script should contain SRC_URI definition")
+	}
+
+	// Check that output line exists
+	if !strings.Contains(script, `echo "${SRC_URI}"`) {
+		t.Error("Script should echo SRC_URI at the end")
+	}
+}

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -18,8 +19,27 @@ import (
 	"github.com/grpmsoft/grpm/internal/pkg"
 )
 
+// EvalMode specifies the bash evaluation backend.
+type EvalMode int
+
+const (
+	// EvalModeGo uses pure Go mvdan.cc/sh interpreter (default).
+	// Cross-platform, no external dependencies.
+	// Limitation: Some advanced bash features not supported.
+	EvalModeGo EvalMode = iota
+
+	// EvalModeNativeBash uses system's /bin/bash.
+	// Full bash compatibility, but requires bash installed.
+	// Recommended for complex eclasses on Gentoo systems.
+	EvalModeNativeBash
+)
+
 // MetadataEvaluator evaluates ebuild metadata by sourcing the ebuild
-// with eclass support via the mvdan.cc/sh bash interpreter.
+// with eclass support.
+//
+// Supports two evaluation modes:
+//   - EvalModeGo (default): Pure Go via mvdan.cc/sh - cross-platform
+//   - EvalModeNativeBash: System bash - full compatibility
 //
 // This is necessary for packages that dynamically generate SRC_URI
 // via eclass functions (e.g., toolchain.eclass's get_gcc_src_uri()).
@@ -29,6 +49,9 @@ type MetadataEvaluator struct {
 
 	// EclassCache is the eclass file cache.
 	EclassCache *eclass.Cache
+
+	// Mode specifies evaluation backend (default: EvalModeGo).
+	Mode EvalMode
 
 	// Verbose enables debug output.
 	Verbose bool
@@ -85,40 +108,160 @@ func (m *MetadataEvaluator) EvaluateSrcURI(ctx context.Context, ebuildPath strin
 		return "", fmt.Errorf("creating environment: %w", err)
 	}
 
-	// Create interpreter with output capture (suppress to avoid noise)
+	// Dispatch to appropriate backend
+	switch m.Mode {
+	case EvalModeNativeBash:
+		return m.evaluateWithNativeBash(ctx, string(content), env)
+	default: // EvalModeGo
+		return m.evaluateWithGo(ctx, string(content), env)
+	}
+}
+
+// evaluateWithGo uses pure Go mvdan.cc/sh interpreter.
+// This is the default, cross-platform approach.
+func (m *MetadataEvaluator) evaluateWithGo(ctx context.Context, ebuildContent string, env *Environment) (string, error) {
 	var stdout, stderr bytes.Buffer
 	interp := NewInterpreter(env, &stdout, &stderr)
 
 	// Setup dynamic eclass loading
 	if m.EclassCache != nil {
 		_, err := SetupDynamicEclassLoading(interp, m.EclassCache)
-		if err != nil {
-			// Non-fatal: continue without dynamic loading
-			if m.Verbose {
-				fmt.Fprintf(os.Stderr, "Warning: dynamic eclass loading unavailable: %v\n", err)
-			}
+		if err != nil && m.Verbose {
+			fmt.Fprintf(os.Stderr, "Warning: dynamic eclass loading unavailable: %v\n", err)
 		}
 	}
 
-	// Build script that sources ebuild and outputs SRC_URI
-	// We need to source the ebuild to execute inherit() and any
-	// variable assignments that depend on eclass functions.
-	script := buildMetadataExtractionScript(string(content))
+	// Build script with eclass infrastructure
+	script := buildMetadataExtractionScript(ebuildContent)
 
 	// Execute the script
 	if err := interp.Run(ctx, script); err != nil {
+		if stderr.Len() > 0 {
+			return "", fmt.Errorf("sourcing ebuild: %w\nstderr: %s", err, stderr.String())
+		}
 		return "", fmt.Errorf("sourcing ebuild: %w", err)
 	}
 
-	// Extract SRC_URI from stdout (the script echoes it)
+	// Extract SRC_URI from stdout
 	srcURI := strings.TrimSpace(stdout.String())
 
-	// If empty, try to get from environment directly via a second pass
+	// If empty, try simple variable extraction as fallback
 	if srcURI == "" {
-		srcURI = extractSrcURIFromContent(string(content), env.ToMap())
+		srcURI = extractSrcURIFromContent(ebuildContent, env.ToMap())
 	}
 
 	return srcURI, nil
+}
+
+// evaluateWithNativeBash uses the system's bash to evaluate the ebuild.
+// This is the most reliable method for complex eclasses that use advanced bash features.
+func (m *MetadataEvaluator) evaluateWithNativeBash(ctx context.Context, ebuildContent string, env *Environment) (string, error) {
+	// Check if bash is available
+	bashPath, err := exec.LookPath("bash")
+	if err != nil {
+		return "", fmt.Errorf("bash not found: %w", err)
+	}
+
+	// Build the extraction script (minimal, bash-native)
+	script := buildNativeBashScript(ebuildContent)
+
+	// Create the command
+	cmd := exec.CommandContext(ctx, bashPath, "-c", script)
+
+	// Set up environment variables
+	envMap := env.ToMap()
+	envSlice := make([]string, 0, len(envMap)+10)
+	for k, v := range envMap {
+		envSlice = append(envSlice, k+"="+v)
+	}
+	// Add PORTDIR explicitly for inherit() to find eclasses
+	envSlice = append(envSlice, "PORTDIR="+m.RepoPath)
+	cmd.Env = append(os.Environ(), envSlice...)
+
+	// Capture output
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	// Run the script
+	if err := cmd.Run(); err != nil {
+		// Include stderr in error message for debugging
+		errMsg := err.Error()
+		if stderr.Len() > 0 {
+			errMsg += "\nstderr: " + stderr.String()
+		}
+		return "", fmt.Errorf("%s", errMsg)
+	}
+
+	return strings.TrimSpace(stdout.String()), nil
+}
+
+// buildNativeBashScript creates a minimal script for native bash execution.
+// This script is simpler because real bash handles all features natively.
+func buildNativeBashScript(ebuildContent string) string {
+	var script strings.Builder
+
+	script.WriteString("#!/bin/bash\n")
+	script.WriteString("set -e\n\n")
+
+	// Define minimal stubs for phase functions (not needed for metadata)
+	phaseFuncs := []string{
+		"pkg_pretend", "pkg_setup", "pkg_nofetch",
+		"src_unpack", "src_prepare", "src_configure",
+		"src_compile", "src_test", "src_install",
+		"pkg_preinst", "pkg_postinst", "pkg_prerm", "pkg_postrm",
+		"pkg_config", "pkg_info",
+	}
+	for _, fn := range phaseFuncs {
+		script.WriteString(fmt.Sprintf("%s() { :; }\n", fn))
+	}
+	script.WriteString("\n")
+
+	// Define inherit function that uses bash's source
+	script.WriteString(`
+# inherit() - Load eclasses
+inherit() {
+    local eclass
+    for eclass in "$@"; do
+        local eclass_file="${PORTDIR}/eclass/${eclass}.eclass"
+        if [[ -f "${eclass_file}" ]]; then
+            local saved_eclass="${ECLASS:-}"
+            ECLASS="${eclass}"
+            source "${eclass_file}"
+            INHERITED="${INHERITED:+${INHERITED} }${eclass}"
+            ECLASS="${saved_eclass}"
+        fi
+    done
+}
+
+# EXPORT_FUNCTIONS
+EXPORT_FUNCTIONS() {
+    local phase
+    local current_eclass="${ECLASS}"
+    for phase in "$@"; do
+        eval "${phase}() { ${current_eclass}_${phase} \"\$@\"; }"
+    done
+}
+
+# Minimal stubs for functions not needed during metadata extraction
+die() { echo "ERROR: $*" >&2; exit 1; }
+einfo() { :; }
+ewarn() { :; }
+eerror() { :; }
+ebegin() { :; }
+eend() { return 0; }
+debug-print() { :; }
+debug-print-function() { :; }
+debug-print-section() { :; }
+eqawarn() { :; }
+`)
+
+	script.WriteString("\n# === Source ebuild ===\n")
+	script.WriteString(ebuildContent)
+	script.WriteString("\n\n# === Output SRC_URI ===\n")
+	script.WriteString("echo \"${SRC_URI}\"\n")
+
+	return script.String()
 }
 
 // createMetadataEnvironment creates a minimal environment for metadata extraction.
@@ -197,6 +340,25 @@ func (m *MetadataEvaluator) createMetadataEnvironment(pkgInfo *pkg.Package, ebui
 
 		// USE flags
 		USE: buildUSEString(pkgInfo.UseFlags),
+
+		// ExtraVars: Disable unnecessary eclass features for metadata extraction.
+		// These prevent eclasses from inheriting problematic dependencies
+		// that aren't needed for SRC_URI evaluation.
+		ExtraVars: map[string]string{
+			// Disable Python-related eclass inheritance in toolchain.eclass
+			// (line 30: [[ -n ${TOOLCHAIN_HAS_TESTS} ]] && inherit python-any-r1)
+			"TOOLCHAIN_HAS_TESTS": "",
+
+			// Disable git-based live builds in toolchain.eclass
+			// (line 50-52: live builds inherit git-r3)
+			"TOOLCHAIN_USE_GIT_PATCHES": "",
+
+			// Provide CHOST for tc-arch and similar functions
+			"CHOST": "x86_64-pc-linux-gnu",
+
+			// CBUILD for cross-compilation checks
+			"CBUILD": "x86_64-pc-linux-gnu",
+		},
 	}
 
 	return env, nil
@@ -217,16 +379,26 @@ func buildUSEString(flags map[string]bool) string {
 // an ebuild and extracts the SRC_URI variable.
 //
 // The script:
-//  1. Defines stub functions for phase functions (so they don't error)
-//  2. Sources the ebuild content (which will call inherit)
-//  3. Echoes the final SRC_URI value
+//  1. Defines inherit() as a bash function that uses `. ` to source eclasses
+//  2. Defines EXPORT_FUNCTIONS() to create phase wrapper functions
+//  3. Defines stub functions for phase functions (so they don't error)
+//  4. Sources the ebuild content (which will call inherit)
+//  5. Echoes the final SRC_URI value
+//
+// CRITICAL: inherit() MUST be a bash function that sources eclasses in the same
+// shell context. Using a separate Go executor loses function definitions.
 func buildMetadataExtractionScript(ebuildContent string) string {
 	var script strings.Builder
 
 	// Header
 	script.WriteString("#!/bin/bash\n\n")
 
+	// Write the eclass/inherit infrastructure
+	script.WriteString(eclassInfrastructure)
+	script.WriteString("\n")
+
 	// Define stub phase functions (they're called during source but we don't need them)
+	// These will be overwritten by EXPORT_FUNCTIONS from eclasses
 	phaseFuncs := []string{
 		"pkg_pretend", "pkg_setup", "pkg_nofetch",
 		"src_unpack", "src_prepare", "src_configure",
@@ -250,6 +422,280 @@ func buildMetadataExtractionScript(ebuildContent string) string {
 
 	return script.String()
 }
+
+// eclassInfrastructure contains bash functions needed for eclass support.
+// These run WITHIN the same bash context, preserving function definitions.
+//
+// NOTE: This is designed for mvdan.cc/sh which has limitations:
+// - No negative array indices (${arr[-1]})
+// - No "declare -p" option
+// - Limited extglob support
+const eclassInfrastructure = `
+# === ECLASS INFRASTRUCTURE ===
+# These functions implement Portage's eclass system for metadata extraction.
+# Designed for compatibility with mvdan.cc/sh interpreter.
+
+# INHERITED tracks which eclasses have been loaded
+INHERITED=""
+
+# Eclass depth counter (simple integer, avoids array limitations)
+__ECLASS_DEPTH=0
+
+# inherit() - Load one or more eclasses by sourcing them directly.
+# This MUST use bash's '. ' (source) command to keep functions in the same context.
+inherit() {
+    local eclass
+    for eclass in "$@"; do
+        # Skip if already inherited
+        if [[ " ${INHERITED} " == *" ${eclass} "* ]]; then
+            continue
+        fi
+
+        # Find eclass file
+        local eclass_file="${PORTDIR}/eclass/${eclass}.eclass"
+        if [[ ! -f "${eclass_file}" ]]; then
+            echo "ERROR: eclass not found: ${eclass}" >&2
+            return 1
+        fi
+
+        # Save and set ECLASS
+        local saved_eclass="${ECLASS:-}"
+        ECLASS="${eclass}"
+        __ECLASS_DEPTH=$((__ECLASS_DEPTH + 1))
+
+        # Source the eclass (CRITICAL: keeps functions in same context)
+        . "${eclass_file}"
+
+        # Update INHERITED
+        INHERITED="${INHERITED:+${INHERITED} }${eclass}"
+
+        # Restore ECLASS
+        __ECLASS_DEPTH=$((__ECLASS_DEPTH - 1))
+        ECLASS="${saved_eclass}"
+    done
+}
+
+# EXPORT_FUNCTIONS - Create wrapper functions for phase functions.
+# When an eclass exports a function, it creates a wrapper that calls ${ECLASS}_${phase}.
+EXPORT_FUNCTIONS() {
+    local phase
+    local current_eclass="${ECLASS}"
+
+    if [[ -z "${current_eclass}" ]]; then
+        echo "ERROR: EXPORT_FUNCTIONS called without ECLASS set" >&2
+        return 1
+    fi
+
+    for phase in "$@"; do
+        # Create wrapper function: phase() calls ${eclass}_${phase}
+        eval "${phase}() { ${current_eclass}_${phase} \"\$@\"; }"
+    done
+}
+
+# die() - Fatal error handler (non-fatal during metadata extraction)
+die() {
+    echo "ERROR: $*" >&2
+    # Don't exit during metadata extraction - allow script to continue
+    return 1
+}
+
+# === DEBUG FUNCTIONS ===
+debug-print-function() { :; }
+debug-print-section() { :; }
+debug-print() { :; }
+
+# === MESSAGE FUNCTIONS ===
+einfo() { :; }
+einfon() { :; }
+ewarn() { :; }
+eerror() { :; }
+ebegin() { :; }
+eend() { return 0; }
+eqawarn() { :; }
+
+# === UTILITY FUNCTIONS ===
+
+# has - Check if element is in list
+has() {
+    local needle="$1"
+    shift
+    local item
+    for item in "$@"; do
+        [[ "${item}" == "${needle}" ]] && return 0
+    done
+    return 1
+}
+
+# has_version - Check if package is installed (stub: always false)
+has_version() { return 1; }
+
+# best_version - Get best installed version (stub: empty)
+best_version() { echo ""; }
+
+# usev - Output USE flag value if set
+usev() {
+    local flag="$1"
+    local default="${2:-${flag}}"
+    if has "${flag}" ${USE}; then
+        echo "${default}"
+        return 0
+    fi
+    return 1
+}
+
+# use - Check if USE flag is enabled
+use() {
+    has "$1" ${USE}
+}
+
+# usex - USE flag expansion (EAPI 5+)
+usex() {
+    local flag="$1"
+    local iftrue="${2:-yes}"
+    local iffalse="${3:-no}"
+    local trueval="${4:-}"
+    local falseval="${5:-}"
+    if use "${flag}"; then
+        echo "${iftrue}${trueval}"
+    else
+        echo "${iffalse}${falseval}"
+    fi
+}
+
+# use_with/use_enable - Configure options based on USE flags
+use_with() {
+    local flag="$1"
+    local opt="${2:-${flag}}"
+    local val="${3:-}"
+    if use "${flag}"; then
+        if [[ -n "${val}" ]]; then
+            echo "--with-${opt}=${val}"
+        else
+            echo "--with-${opt}"
+        fi
+    else
+        echo "--without-${opt}"
+    fi
+}
+
+use_enable() {
+    local flag="$1"
+    local opt="${2:-${flag}}"
+    local val="${3:-}"
+    if use "${flag}"; then
+        if [[ -n "${val}" ]]; then
+            echo "--enable-${opt}=${val}"
+        else
+            echo "--enable-${opt}"
+        fi
+    else
+        echo "--disable-${opt}"
+    fi
+}
+
+# in_iuse - Check if flag is in IUSE
+in_iuse() {
+    has "$1" ${IUSE}
+}
+
+# === TOOLCHAIN FUNCTIONS ===
+tc-is-cross-compiler() { return 1; }
+tc-is-gcc() { return 0; }
+tc-is-clang() { return 1; }
+tc-getCC() { echo "${CC:-gcc}"; }
+tc-getCXX() { echo "${CXX:-g++}"; }
+tc-getLD() { echo "${LD:-ld}"; }
+tc-getAR() { echo "${AR:-ar}"; }
+tc-getNM() { echo "${NM:-nm}"; }
+tc-getRANLIB() { echo "${RANLIB:-ranlib}"; }
+tc-getOBJCOPY() { echo "${OBJCOPY:-objcopy}"; }
+tc-getOBJDUMP() { echo "${OBJDUMP:-objdump}"; }
+tc-getSTRIP() { echo "${STRIP:-strip}"; }
+tc-getPKG_CONFIG() { echo "${PKG_CONFIG:-pkg-config}"; }
+tc-getBUILD_CC() { echo "${BUILD_CC:-${CC:-gcc}}"; }
+tc-getBUILD_CXX() { echo "${BUILD_CXX:-${CXX:-g++}}"; }
+tc-export() { :; }  # Stub - actual export not needed for metadata
+
+tc-arch() {
+    case "${CHOST:-x86_64-pc-linux-gnu}" in
+        x86_64-*) echo "amd64" ;;
+        i?86-*) echo "x86" ;;
+        aarch64-*) echo "arm64" ;;
+        arm-*) echo "arm" ;;
+        powerpc64le-*|ppc64le-*) echo "ppc64" ;;
+        powerpc64-*|ppc64-*) echo "ppc64" ;;
+        powerpc-*|ppc-*) echo "ppc" ;;
+        riscv64-*) echo "riscv" ;;
+        s390x-*) echo "s390" ;;
+        *) echo "amd64" ;;
+    esac
+}
+
+tc-endian() {
+    case "$(tc-arch)" in
+        ppc64|s390) echo "big" ;;
+        *) echo "little" ;;
+    esac
+}
+
+# === MULTILIB FUNCTIONS ===
+get_libdir() { echo "lib64"; }
+multilib_native_use_with() { use_with "$@"; }
+multilib_native_use_enable() { use_enable "$@"; }
+multilib_native_usex() { usex "$@"; }
+
+# === PYTHON ECLASS STUBS ===
+# These stub out python-r1.eclass, python-single-r1.eclass, python-any-r1.eclass
+# since mvdan.cc/sh doesn't support all bash features they use.
+
+# Stub: Pretend python is available
+_python_check_PYTHON_COMPAT() { :; }
+_python_set_impls() { :; }
+python_check_deps() { return 0; }
+python_gen_any_dep() { :; }
+python_gen_cond_dep() { echo ""; }
+python_gen_impl_dep() { echo ""; }
+python_gen_useflags() { echo ""; }
+python_get_PYTHON() { echo "/usr/bin/python3"; }
+python_get_PYTHON_SITEDIR() { echo "/usr/lib/python3/site-packages"; }
+python_get_implementation() { echo "cpython"; }
+python_get_includedir() { echo "/usr/include/python3"; }
+python_get_library_path() { echo "/usr/lib/libpython3.so"; }
+python_get_scriptdir() { echo "/usr/bin"; }
+python_has_version() { return 0; }
+python_is_installed() { return 0; }
+python_is_python3() { return 0; }
+python_foreach_impl() { :; }
+python_domodule() { :; }
+python_doheader() { :; }
+python_newexe() { :; }
+python_newscript() { :; }
+python_doscript() { :; }
+python_scriptinto() { :; }
+python_moduleinto() { :; }
+python_optimize() { :; }
+python_setup() { :; }
+python_fix_shebang() { :; }
+python_export() { :; }
+python_wrapper_setup() { :; }
+
+# EPYTHON stub
+EPYTHON="${EPYTHON:-python3}"
+PYTHON="${PYTHON:-/usr/bin/python3}"
+
+# === MISC STUBS ===
+check_license() { :; }
+optfeature() { :; }
+estack_push() { :; }
+estack_pop() { return 0; }
+eshopts_push() { :; }
+eshopts_pop() { :; }
+# NOTE: ver_cut, ver_rs, ver_test are NOT defined here - they are
+# handled by the Go exec handler which properly writes to stdout
+# for command substitution to work.
+
+# === END ECLASS INFRASTRUCTURE ===
+`
 
 // extractSrcURIFromContent extracts SRC_URI using simple variable expansion.
 // This is a fallback when the interpreter fails to capture the value.
@@ -353,7 +799,11 @@ func buildMultiVarExtractionScript(ebuildContent string, varNames []string) stri
 
 	script.WriteString("#!/bin/bash\n\n")
 
-	// Stub phase functions
+	// Write the eclass/inherit infrastructure
+	script.WriteString(eclassInfrastructure)
+	script.WriteString("\n")
+
+	// Stub phase functions (will be overwritten by EXPORT_FUNCTIONS from eclasses)
 	phaseFuncs := []string{
 		"pkg_pretend", "pkg_setup", "pkg_nofetch",
 		"src_unpack", "src_prepare", "src_configure",

@@ -149,19 +149,27 @@ func NewExecutor(cache *Cache, opts ...ExecutorOption) *Executor {
 //   - Already-inherited eclasses are skipped (no double-loading)
 //   - Metadata variables are backed up, eclass is sourced, then metadata is accumulated
 //   - ECLASS and ECLASS_DEPTH are set during execution
+//
+// Note: This method supports recursive inheritance (eclass calling inherit).
+// The lock is released during script execution to allow nested calls.
 func (e *Executor) Inherit(ctx context.Context, eclasses []string) error {
 	e.mu.Lock()
-	defer e.mu.Unlock()
-
 	e.eclassDepth++
-	defer func() { e.eclassDepth-- }()
+	currentDepth := e.eclassDepth
+	e.mu.Unlock()
 
-	if e.eclassDepth > 1 {
-		e.writeStderr(fmt.Sprintf(">>> Multiple Inheritance (Level: %d)\n", e.eclassDepth))
+	defer func() {
+		e.mu.Lock()
+		e.eclassDepth--
+		e.mu.Unlock()
+	}()
+
+	if currentDepth > 1 {
+		e.writeStderr(fmt.Sprintf(">>> Multiple Inheritance (Level: %d)\n", currentDepth))
 	}
 
 	for _, name := range eclasses {
-		if err := e.inheritSingleLocked(ctx, name); err != nil {
+		if err := e.inheritSingle(ctx, name); err != nil {
 			return fmt.Errorf("inheriting %s: %w", name, err)
 		}
 	}
@@ -169,37 +177,39 @@ func (e *Executor) Inherit(ctx context.Context, eclasses []string) error {
 	return nil
 }
 
-// inheritSingleLocked loads a single eclass.
-// Must be called with lock held.
-func (e *Executor) inheritSingleLocked(ctx context.Context, name string) error {
-	// Check if already inherited
+// inheritSingle loads a single eclass.
+// This method handles its own locking to support recursive inheritance.
+func (e *Executor) inheritSingle(ctx context.Context, name string) error {
+	// Check if already inherited (with lock)
+	e.mu.RLock()
 	for _, existing := range e.inherited {
 		if existing == name {
+			e.mu.RUnlock()
 			e.writeStdout(fmt.Sprintf(">>> Eclass %s already inherited (skipping)\n", name))
 			return nil
 		}
 	}
+	e.mu.RUnlock()
 
 	e.writeStdout(fmt.Sprintf(">>> Inheriting eclass: %s\n", name))
 
-	// Look up eclass in cache
+	// Look up eclass in cache (cache has its own locking)
 	eclass, err := e.cache.Get(name)
 	if err != nil {
 		return err
 	}
 
-	// Set current eclass
+	// Read eclass content before taking lock (file I/O can be slow)
+	content, err := os.ReadFile(eclass.Path)
+	if err != nil {
+		return fmt.Errorf("reading eclass %s: %w", name, err)
+	}
+
+	// Prepare environment changes (with lock)
+	e.mu.Lock()
 	prevEclass := e.currentEclass
 	e.currentEclass = name
 	e.env["ECLASS"] = name
-	defer func() {
-		e.currentEclass = prevEclass
-		if prevEclass != "" {
-			e.env["ECLASS"] = prevEclass
-		} else {
-			delete(e.env, "ECLASS")
-		}
-	}()
 
 	// Backup metadata variables
 	backup := e.backupMetadata()
@@ -208,16 +218,29 @@ func (e *Executor) inheritSingleLocked(ctx context.Context, name string) error {
 	for _, varName := range MetadataVars {
 		delete(e.env, varName)
 	}
+	e.mu.Unlock()
 
-	// Read and parse eclass content
-	content, err := os.ReadFile(eclass.Path)
-	if err != nil {
-		return fmt.Errorf("reading eclass %s: %w", name, err)
+	// Execute eclass content WITHOUT holding lock (allows recursive inherit)
+	execErr := e.executeScript(ctx, string(content), eclass.Path)
+
+	// Finalize (with lock)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	// Restore previous eclass
+	e.currentEclass = prevEclass
+	if prevEclass != "" {
+		e.env["ECLASS"] = prevEclass
+	} else {
+		delete(e.env, "ECLASS")
 	}
 
-	// Execute eclass content
-	if err := e.executeScript(ctx, string(content), eclass.Path); err != nil {
-		return fmt.Errorf("executing eclass %s: %w", name, err)
+	if execErr != nil {
+		// Restore backup on error
+		for varName, val := range backup {
+			e.env[varName] = val
+		}
+		return fmt.Errorf("executing eclass %s: %w", name, execErr)
 	}
 
 	// Accumulate metadata
@@ -268,60 +291,72 @@ func (e *Executor) accumulateMetadata(backup map[string]string) {
 }
 
 // executeScript runs a bash script in the executor's environment.
+// Note: Lock is NOT held during execution to allow scripts to call inherit().
 func (e *Executor) executeScript(ctx context.Context, script, filename string) error {
 	prog, err := e.parser.Parse(strings.NewReader(script), filename)
 	if err != nil {
 		return fmt.Errorf("parsing script: %w", err)
 	}
 
-	// Create runner with current environment
-	runner, err := e.createRunner(ctx)
+	// Create runner with current environment (takes lock internally)
+	runner, err := e.createRunnerLocked(ctx)
 	if err != nil {
 		return fmt.Errorf("creating runner: %w", err)
 	}
 
-	// Execute
+	// Execute WITHOUT holding lock (allows recursive inherit)
 	if err := runner.Run(ctx, prog); err != nil {
 		return err
 	}
 
-	// Update environment from runner
-	e.updateEnvFromRunner(runner)
+	// Update environment from runner (takes lock internally)
+	e.updateEnvFromRunnerLocked(runner)
 
 	return nil
 }
 
-// createRunner creates a new shell interpreter runner.
-func (e *Executor) createRunner(ctx context.Context) (*interp.Runner, error) {
-	// Convert env map to slice
+// createRunnerLocked creates a new shell interpreter runner.
+// This method handles its own locking when copying the environment.
+func (e *Executor) createRunnerLocked(ctx context.Context) (*interp.Runner, error) {
+	// Convert env map to slice (with lock)
+	e.mu.RLock()
 	envPairs := make([]string, 0, len(e.env))
 	for k, v := range e.env {
 		envPairs = append(envPairs, k+"="+v)
 	}
+	execHandler := e.execHandler
+	openHandler := e.openHandler
+	stdout := e.stdout
+	stderr := e.stderr
+	e.mu.RUnlock()
 
-	// Build options
+	// Build options (no lock needed)
 	opts := []interp.RunnerOption{
-		interp.StdIO(nil, e.stdout, e.stderr),
+		interp.StdIO(nil, stdout, stderr),
 		interp.Env(expand.ListEnviron(envPairs...)),
 	}
 
 	// Add exec handler if provided
-	if e.execHandler != nil {
+	if execHandler != nil {
 		opts = append(opts, interp.ExecHandlers(func(next interp.ExecHandlerFunc) interp.ExecHandlerFunc {
-			return e.execHandler
+			return execHandler
 		}))
 	}
 
 	// Add open handler if provided
-	if e.openHandler != nil {
-		opts = append(opts, interp.OpenHandler(e.openHandler))
+	if openHandler != nil {
+		opts = append(opts, interp.OpenHandler(openHandler))
 	}
 
 	return interp.New(opts...)
 }
 
-// updateEnvFromRunner syncs environment changes from the runner back to executor.
-func (e *Executor) updateEnvFromRunner(runner *interp.Runner) {
+// updateEnvFromRunnerLocked syncs environment changes from the runner back to executor.
+// This method handles its own locking when updating the environment.
+func (e *Executor) updateEnvFromRunnerLocked(runner *interp.Runner) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
 	// Iterate over all variables in the runner's Vars map
 	for name, vr := range runner.Vars {
 		// Get the string value
@@ -447,21 +482,18 @@ func (e *Executor) FinalizeMetadata() {
 // Run executes a bash script in the executor's environment.
 //
 // This is useful for running ebuild scripts after eclasses are loaded.
+// Note: Lock is NOT held during execution to allow scripts to call inherit().
 func (e *Executor) Run(ctx context.Context, script string) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
 	return e.executeScript(ctx, script, "script")
 }
 
 // RunFile executes a bash script file.
+// Note: Lock is NOT held during execution to allow scripts to call inherit().
 func (e *Executor) RunFile(ctx context.Context, path string) error {
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("reading script %s: %w", path, err)
 	}
-
-	e.mu.Lock()
-	defer e.mu.Unlock()
 	return e.executeScript(ctx, string(content), path)
 }
 

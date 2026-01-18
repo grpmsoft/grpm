@@ -1,15 +1,18 @@
 package repo
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/coregx/coregex"
 	"github.com/grpmsoft/grpm/internal/logging"
+	"github.com/grpmsoft/grpm/internal/metadata"
 	"github.com/grpmsoft/grpm/internal/pkg"
 )
 
@@ -208,6 +211,35 @@ func (pr *PortageRepository) parseEbuild(name, path string) (*pkg.Package, error
 			logging.Debug("Parsed %d dependencies for %s (%d blockers skipped)",
 				realDepsCount, name, len(parsedDeps)-realDepsCount)
 		}
+	}
+
+	// If no dependencies found via regex, try eclass-aware evaluation.
+	// This is necessary for packages like gcc where DEPEND/RDEPEND/BDEPEND
+	// are defined dynamically in eclasses (e.g., toolchain.eclass).
+	// See: https://github.com/grpmsoft/grpm/issues/50
+	//
+	// Note: The mvdan.cc/sh bash interpreter has limitations with complex bash
+	// features (e.g., @a parameter expansion). The fallback is wrapped in a
+	// deferred recover to prevent panics from crashing the entire program.
+	if len(p.Deps) == 0 {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					// Eclass evaluation panic (e.g., unsupported bash feature)
+					// This is non-fatal - continue with empty deps
+					logging.Debug("Eclass evaluation panic for %s: %v", name, r)
+				}
+			}()
+
+			eclassDeps, err := pr.loadDependenciesWithEclass(path, p)
+			if err == nil && len(eclassDeps) > 0 {
+				p.Deps = eclassDeps
+				logging.Debug("Loaded %d dependencies via eclass evaluation for %s", len(eclassDeps), name)
+			} else if err != nil {
+				// Non-fatal: log warning and continue with empty deps
+				logging.Debug("Eclass evaluation failed for %s: %v", name, err)
+			}
+		}()
 	}
 
 	if matches := portageSlotRe.FindStringSubmatch(string(content)); len(matches) > 1 {
@@ -409,4 +441,84 @@ func (pr *PortageRepository) FindByAtom(atom *pkg.Atom) ([]*pkg.Package, error) 
 	}
 
 	return result, nil
+}
+
+// loadDependenciesWithEclass extracts dependencies from an ebuild using eclass-aware
+// evaluation. This is necessary for packages that define DEPEND/RDEPEND/BDEPEND in
+// eclasses rather than directly in the ebuild (e.g., gcc via toolchain.eclass).
+//
+// This method uses metadata.Evaluator to source the ebuild with eclass support,
+// then parses the resulting dependency strings.
+//
+// Parameters:
+//   - ebuildPath: Path to the ebuild file
+//   - p: Package to populate with dependencies (must have Name and Version set)
+//
+// Returns the list of parsed dependencies, or error if extraction fails.
+func (pr *PortageRepository) loadDependenciesWithEclass(ebuildPath string, p *pkg.Package) ([]pkg.Constraint, error) {
+	// Create metadata evaluator for this repository
+	evaluator, err := metadata.NewEvaluator(pr.Path)
+	if err != nil {
+		return nil, fmt.Errorf("creating metadata evaluator: %w", err)
+	}
+
+	// Extract DEPEND, RDEPEND, BDEPEND, IDEPEND, PDEPEND from ebuild with eclass support
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Convert pkg.Package to metadata.PackageInfo
+	pkgInfo := &metadata.PackageInfo{
+		Name:     p.Name,
+		Version:  p.Version,
+		Slot:     p.Slot.String(),
+		UseFlags: p.UseFlags,
+	}
+
+	varNames := []string{"DEPEND", "RDEPEND", "BDEPEND", "IDEPEND", "PDEPEND"}
+	extractedMetadata, err := evaluator.ExtractMetadata(ctx, ebuildPath, pkgInfo, varNames)
+	if err != nil {
+		return nil, fmt.Errorf("extracting metadata: %w", err)
+	}
+
+	// Parse the dependency strings using EbuildParser
+	var allDeps []pkg.Constraint
+	parser := NewEbuildParser("") // Empty content - we only use parseDependencyString
+
+	// Parse each dependency type
+	depTypes := map[string]DependencyType{
+		"DEPEND":  DepTypeBuild,
+		"RDEPEND": DepTypeRuntime,
+		"BDEPEND": DepTypeBuildtime,
+		"IDEPEND": DepTypeInstall,
+		"PDEPEND": DepTypePostMerge,
+	}
+
+	for varName, depType := range depTypes {
+		depStr := extractedMetadata[varName]
+		if depStr == "" {
+			continue
+		}
+
+		deps, err := parser.parseDependencyString(depStr, depType)
+		if err != nil {
+			logging.Debug("Warning: failed to parse %s for %s: %v", varName, p.Name, err)
+			continue
+		}
+
+		// Convert ParsedDependency to Constraint, skip blockers
+		for _, pd := range deps {
+			if pd.IsBlocker {
+				continue
+			}
+			constraint := pd.Constraint
+			constraint.OrGroupID = pd.OrGroupID
+			allDeps = append(allDeps, constraint)
+		}
+	}
+
+	if len(allDeps) > 0 {
+		logging.Debug("Extracted %d dependencies via eclass evaluation for %s", len(allDeps), p.Name)
+	}
+
+	return allDeps, nil
 }
