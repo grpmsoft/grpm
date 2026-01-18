@@ -1,13 +1,14 @@
 # GRPM Roadmap
 
-> **UX Improvements Release (v0.8.2)**
+> **SRC_URI Evaluation Hotfix (v0.8.3)**
 >
 > Rapid development complete (v0.1.0 → v0.5.0).
 > Infrastructure release complete (v0.6.0).
 > Build quality and security fixes (v0.7.x).
 > Configuration management (v0.8.0).
 > Solver filtering + atom parsing fix (v0.8.1).
-> **UX improvements: emerge --info, USE flags display, user-friendly errors (v0.8.2).**
+> UX improvements: emerge --info, USE flags display, user-friendly errors (v0.8.2).
+> **SRC_URI evaluation fix for gcc and complex eclasses (v0.8.3).**
 > **98.2% tree coverage verified on real Gentoo!**
 
 ---
@@ -69,7 +70,16 @@ Key insight: **Eclasses don't need Go implementations.** They are loaded dynamic
 
 ## Release History
 
-### v0.8.2 — UX Improvements (Current)
+### v0.8.3 — SRC_URI Evaluation Hotfix (Current)
+
+**Critical fix for packages with dynamic SRC_URI generation** ([#50](https://github.com/grpmsoft/grpm/issues/50)):
+
+- **Pure Go SRC_URI evaluation** — Uses mvdan.cc/sh interpreter instead of external bash
+- **Eclass cache system** — Loads and caches eclasses with inheritance support
+- **PMS-compliant ver_cut** — Full version extraction for toolchain.eclass (gcc, etc.)
+- **Workaround for mvdan.cc/sh** — Array slicing bug in subshells, fixed via indexed variables
+
+### v0.8.2 — UX Improvements
 
 **User experience improvements and bug fixes based on community feedback:**
 
@@ -229,11 +239,13 @@ Key insight: **Eclasses don't need Go implementations.** They are loaded dynamic
 ## Roadmap to v1.0.0
 
 ```
-v0.8.1 ← CURRENT (Mask, Keywords & Atom Parsing)
+v0.8.3 ← CURRENT (SRC_URI Evaluation Hotfix)
     │   ✅ v0.6.0: Distfile fetching, debug helpers, coverage analyzer
     │   ✅ v0.7.x: Portage compatibility, security fixes
     │   ✅ v0.8.0: Configuration management (make.conf, repos.conf, package.use)
     │   ✅ v0.8.1: Package mask, KEYWORDS filtering, atom parsing (#45, #46, #48)
+    │   ✅ v0.8.2: UX improvements (emerge --info, USE flags, user-friendly errors)
+    │   ✅ v0.8.3: SRC_URI evaluation fix for gcc/complex eclasses (#50)
     │   ✅ 98.2% tree coverage on real Gentoo!
     ↓
 v0.9.0 — Pre-Release (2 tasks)
@@ -360,4 +372,4 @@ Key deliverables:
 ---
 
 *This roadmap evolves based on community feedback and project needs.*
-*Last updated: 2026-01-17 (v0.8.1 mask, keywords & atom parsing)*
+*Last updated: 2026-01-18 (v0.8.3 SRC_URI evaluation hotfix)*

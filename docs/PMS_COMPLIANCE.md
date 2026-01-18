@@ -2,8 +2,8 @@
 
 > **GRPM Implementation Status per [Package Manager Specification](https://projects.gentoo.org/pms/)**
 >
-> **Version:** v0.8.2
-> **Last Updated:** 2026-01-17
+> **Version:** v0.8.3
+> **Last Updated:** 2026-01-18
 > **License:** This document follows PMS under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/)
 
 ---
