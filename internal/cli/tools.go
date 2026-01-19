@@ -45,6 +45,9 @@ func (a *App) runTools(args []string) error {
 	fs.StringVar(forEclass, "e", "", "Alias for --for-eclass")
 	showPaths := fs.Bool("paths", false, "Show PATH directories")
 
+	// Set custom help handler
+	fs.Usage = func() { fmt.Print(GetCommandHelp("tools")) }
+
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil

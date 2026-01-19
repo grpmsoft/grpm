@@ -30,6 +30,9 @@ func (a *App) runSearch(args []string) error {
 	description := fs.Bool("desc", false, "Search in descriptions too")
 	fs.BoolVar(description, "S", false, "Alias for --desc")
 
+	// Set custom help handler
+	fs.Usage = func() { fmt.Print(GetCommandHelp("search")) }
+
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -143,6 +146,9 @@ func (a *App) runInfo(args []string) error {
 	fs := flag.NewFlagSet("info", flag.ContinueOnError)
 	repoPath := fs.String("repo", cfg.GetPortDir(), "Path to Portage repository")
 	useMock := fs.Bool("mock", false, "Use mock repository for testing")
+
+	// Set custom help handler
+	fs.Usage = func() { fmt.Print(GetCommandHelp("info")) }
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -289,6 +295,9 @@ func (a *App) runUpdate(args []string) error {
 	fs.BoolVar(changedUse, "U", false, "Alias for --changed-use")
 	portageDir := fs.String("portage-dir", "/var/lib/portage", "Portage state directory")
 	profilePath := fs.String("profile", "/etc/portage/make.profile", "Path to active profile")
+
+	// Set custom help handler
+	fs.Usage = func() { fmt.Print(GetCommandHelp("update")) }
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -651,6 +660,9 @@ func (a *App) runRemove(args []string) error {
 	fs.BoolVar(depclean, "c", false, "Alias for --depclean")
 	force := fs.Bool("force", false, "Force removal even if dependencies exist")
 
+	// Set custom help handler
+	fs.Usage = func() { fmt.Print(GetCommandHelp("remove")) }
+
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -714,6 +726,9 @@ func (a *App) runBuild(args []string) error {
 	compression := fs.String("compression", "zstd", "Compression: none, gzip, bzip2, xz, zstd")
 	pretend := fs.Bool("pretend", false, "Show what would be built (dry-run)")
 	fs.BoolVar(pretend, "p", false, "Alias for --pretend")
+
+	// Set custom help handler
+	fs.Usage = func() { fmt.Print(GetCommandHelp("build")) }
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -795,6 +810,9 @@ func (a *App) runDepclean(args []string) error {
 	// Collect exclude flags (can be specified multiple times)
 	var excludes excludeFlags
 	fs.Var(&excludes, "exclude", "Exclude package from removal (can be specified multiple times)")
+
+	// Set custom help handler
+	fs.Usage = func() { fmt.Print(GetCommandHelp("depclean")) }
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {

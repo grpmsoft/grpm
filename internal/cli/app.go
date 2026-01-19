@@ -144,34 +144,10 @@ func (a *App) PrintVersion() {
 	}
 }
 
-// PrintUsage prints usage information
+// PrintUsage prints usage information using the professional help formatter.
 func (a *App) PrintUsage() {
-	fmt.Printf(`GRPM - Go Resource Package Manager v%s
-
-Usage: grpm [global-options] <command> [command-options] [arguments...]
-
-Global Options:
-  -V, --version    Show version information
-  -v, -vv, -vvv    Verbose output (levels 1-3)
-
-Commands:
-  resolve    Resolve package dependencies
-  install    Install packages (binary or source)
-  emerge     Build packages from source
-  remove     Remove installed packages (alias: unmerge)
-  search     Search for packages
-  info       Show package information
-  sync       Synchronize repository
-  update     Update installed packages
-  build      Create binary packages
-  depclean   Remove unused dependencies
-  fetch      Download source files (distfiles)
-  analyze    Analyze repository coverage
-  tools      Check external tool availability
-
-Run 'grpm <command> --help' for command-specific help.
-See docs/CLI_REFERENCE.md for detailed documentation.
-`, a.version)
+	registry := NewCommandRegistry()
+	fmt.Print(FormatMainHelp(a.version, registry.All()))
 }
 
 // IsDaemonMode returns true if running via daemon
@@ -227,6 +203,9 @@ func (a *App) runResolve(args []string) error {
 	dryRun := fs.Bool("dry-run", false, "Alias for --pretend")
 	autounmask := fs.Bool("autounmask", false, "Show USE/keyword changes to resolve conflicts")
 	autounmaskWrite := fs.Bool("autounmask-write", false, "Write autounmask changes to /etc/portage")
+
+	// Set custom help handler
+	fs.Usage = func() { fmt.Print(GetCommandHelp("resolve")) }
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -379,6 +358,9 @@ func (a *App) runInstall(args []string) error {
 	fs.BoolVar(ask, "a", false, "Alias for --ask")
 	autounmask := fs.Bool("autounmask", false, "Show USE/keyword changes to resolve conflicts")
 	autounmaskWrite := fs.Bool("autounmask-write", false, "Write autounmask changes to /etc/portage")
+
+	// Set custom help handler
+	fs.Usage = func() { fmt.Print(GetCommandHelp("install")) }
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -753,6 +735,9 @@ func (a *App) runSync(args []string) error {
 	method := fs.String("method", "auto", "Sync method: rsync, git, or auto")
 	skipGPG := fs.Bool("skip-gpg-verify", false, "Skip GPG signature verification (NOT RECOMMENDED)")
 	preferGit := fs.Bool("prefer-git", false, "Prefer Git over rsync when using auto method")
+
+	// Set custom help handler
+	fs.Usage = func() { fmt.Print(GetCommandHelp("sync")) }
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {

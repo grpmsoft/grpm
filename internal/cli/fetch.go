@@ -51,6 +51,9 @@ func (a *App) runFetch(args []string) error {
 	fs.BoolVar(pretend, "p", false, "Alias for --pretend")
 	verifyOnly := fs.Bool("verify", false, "Only verify existing files, don't download")
 
+	// Set custom help handler
+	fs.Usage = func() { fmt.Print(GetCommandHelp("fetch")) }
+
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
