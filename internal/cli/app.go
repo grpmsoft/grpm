@@ -110,7 +110,7 @@ func (a *App) Run(args []string) error {
 		return a.runInfo(cmdArgs)
 	case "update":
 		return a.runUpdate(cmdArgs)
-	case "remove", "uninstall":
+	case "remove", "uninstall", "unmerge":
 		return a.runRemove(cmdArgs)
 	case "build":
 		return a.runBuild(cmdArgs)
@@ -158,7 +158,7 @@ Commands:
   resolve    Resolve package dependencies
   install    Install packages (binary or source)
   emerge     Build packages from source
-  remove     Remove installed packages
+  remove     Remove installed packages (alias: unmerge)
   search     Search for packages
   info       Show package information
   sync       Synchronize repository

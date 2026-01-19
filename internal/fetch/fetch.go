@@ -40,6 +40,52 @@ var ErrDownloadFailed = errors.New("all download attempts failed")
 // ErrFileNotFound indicates the distfile was not found on any mirror.
 var ErrFileNotFound = errors.New("distfile not found")
 
+// FetchFailedError provides detailed information when all download attempts fail.
+//
+// This error includes the list of URLs that were tried, allowing users to
+// manually download the file if needed. The Error() message follows Portage
+// style for familiarity.
+//
+// Example output:
+//
+//	!!! Couldn't download 'hello-2.10.tar.gz'. Aborting.
+//
+//	The file can be downloaded manually from:
+//	  - https://gentoo.osuosl.org/distfiles/hello-2.10.tar.gz
+//	  - https://ftp.gnu.org/gnu/hello/hello-2.10.tar.gz
+//
+//	Place it in: /var/cache/distfiles/
+type FetchFailedError struct {
+	// Filename is the name of the distfile that failed to download
+	Filename string
+	// URLs are all the URLs that were tried
+	URLs []string
+	// DestDir is where the file should be placed for manual download
+	DestDir string
+	// LastError is the underlying error from the last attempt
+	LastError error
+}
+
+// Error implements the error interface with a Portage-style message.
+func (e *FetchFailedError) Error() string {
+	msg := "!!! Couldn't download '" + e.Filename + "'. Aborting.\n"
+	if len(e.URLs) > 0 {
+		msg += "\nThe file can be downloaded manually from:\n"
+		for _, url := range e.URLs {
+			msg += "  - " + url + "\n"
+		}
+	}
+	if e.DestDir != "" {
+		msg += "\nPlace it in: " + e.DestDir + "/\n"
+	}
+	return msg
+}
+
+// Unwrap returns the underlying error for errors.Is/As support.
+func (e *FetchFailedError) Unwrap() error {
+	return e.LastError
+}
+
 // Fetcher defines the interface for downloading distfiles.
 //
 // Implementations handle mirror selection, download resumption,

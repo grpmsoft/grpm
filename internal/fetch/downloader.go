@@ -180,23 +180,31 @@ func (d *HTTPDownloader) FetchOne(ctx context.Context, distfile Distfile, destDi
 		log.Printf("  %s: download failed: %v", distfile.Filename, err)
 	}
 
-	return fmt.Errorf("%w: %s: %w", ErrDownloadFailed, distfile.Filename, lastErr)
+	return &FetchFailedError{
+		Filename:  distfile.Filename,
+		URLs:      uris,
+		DestDir:   destDir,
+		LastError: lastErr,
+	}
 }
 
 // buildURIList builds the list of URIs to try for a distfile.
 //
-// Priority:
-//  1. Explicit URIs from SRC_URI (if any)
-//  2. Mirror URIs in order of reliability
+// Priority (Portage-compatible):
+//  1. GENTOO_MIRRORS - try official mirrors first (reduces load on upstream)
+//  2. SRC_URI URLs - fallback to original upstream URLs
+//
+// This follows Portage behavior where mirrors are preferred over upstream
+// sources to distribute load and improve availability.
 func (d *HTTPDownloader) buildURIList(distfile Distfile) []string {
 	var uris []string
 
-	// First, add explicit URIs from the distfile
-	uris = append(uris, distfile.URIs...)
-
-	// Then add mirror URIs
+	// First, try GENTOO_MIRRORS (preferred for load distribution)
 	mirrorURIs := d.mirrors.GetURIs(distfile.Filename)
 	uris = append(uris, mirrorURIs...)
+
+	// Then fallback to explicit SRC_URI URLs
+	uris = append(uris, distfile.URIs...)
 
 	return uris
 }
