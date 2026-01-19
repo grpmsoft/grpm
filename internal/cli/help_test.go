@@ -185,7 +185,7 @@ func TestCommandRegistry_AllCommands(t *testing.T) {
 	expectedCommands := []string{
 		"resolve", "install", "emerge", "remove", "search",
 		"info", "sync", "update", "build", "depclean",
-		"fetch", "analyze", "tools", "completion",
+		"fetch", "analyze", "tools", "completion", "doc",
 	}
 
 	if len(commands) != len(expectedCommands) {

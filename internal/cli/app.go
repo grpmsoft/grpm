@@ -126,6 +126,8 @@ func (a *App) Run(args []string) error {
 		return a.runTools(cmdArgs)
 	case "completion":
 		return a.runCompletion(cmdArgs)
+	case "doc":
+		return a.runDoc(cmdArgs)
 	default:
 		return fmt.Errorf("unknown command: %s\nRun 'grpm help' for usage", command)
 	}
@@ -918,5 +920,162 @@ func (a *App) runCompletion(args []string) error {
 		return fmt.Errorf("unsupported shell: %s\nSupported shells: bash, zsh, fish", shell)
 	}
 
+	return nil
+}
+
+// runDoc handles the 'doc' command for generating documentation.
+//
+// Subcommands:
+//
+//	grpm doc man                      # Output main man page to stdout
+//	grpm doc man emerge               # Output emerge man page to stdout
+//	grpm doc man --all --dir ./man    # Generate all man pages to directory
+//
+// This command generates documentation in various formats. Currently only
+// man page generation is supported.
+func (a *App) runDoc(args []string) error {
+	if len(args) == 0 {
+		return a.printDocUsage()
+	}
+
+	subcommand := args[0]
+	subArgs := args[1:]
+
+	switch subcommand {
+	case "man":
+		return a.runDocMan(subArgs)
+	case "help", "--help", "-h":
+		return a.printDocUsage()
+	default:
+		return fmt.Errorf("unknown doc subcommand: %s\nRun 'grpm doc --help' for usage", subcommand)
+	}
+}
+
+// printDocUsage prints usage for the doc command.
+func (a *App) printDocUsage() error {
+	fmt.Println(`grpm doc - Generate documentation
+
+Usage:
+  grpm doc <subcommand> [options]
+
+Subcommands:
+  man           Generate man pages in troff format
+
+Examples:
+  grpm doc man                      # Output main man page to stdout
+  grpm doc man emerge               # Output emerge man page to stdout
+  grpm doc man --all --dir ./man    # Generate all man pages to directory
+  grpm doc man --list               # List all available man pages
+
+Run 'grpm doc <subcommand> --help' for subcommand-specific help.`)
+	return nil
+}
+
+// runDocMan handles the 'doc man' subcommand.
+//
+// Usage:
+//
+//	grpm doc man                      # Output main man page to stdout
+//	grpm doc man emerge               # Output emerge man page to stdout
+//	grpm doc man --all --dir ./man    # Generate all man pages to directory
+//	grpm doc man --list               # List all available man pages
+func (a *App) runDocMan(args []string) error {
+	// Parse flags
+	fs := flag.NewFlagSet("doc man", flag.ContinueOnError)
+	outputDir := fs.String("dir", "", "Output directory for man pages (required with --all)")
+	generateAll := fs.Bool("all", false, "Generate all man pages")
+	listPages := fs.Bool("list", false, "List all available man pages")
+
+	fs.Usage = func() {
+		fmt.Println(`grpm doc man - Generate man pages
+
+Usage:
+  grpm doc man [options] [command]
+
+Options:
+  --all           Generate all man pages (requires --dir)
+  --dir string    Output directory for man pages
+  --list          List all available man pages
+
+Arguments:
+  command         Generate man page for specific command (e.g., emerge, resolve)
+                  If omitted, generates main grpm.1 man page
+
+Examples:
+  grpm doc man                      # Output main grpm.1 to stdout
+  grpm doc man emerge               # Output grpm-emerge.1 to stdout
+  grpm doc man --list               # List available man pages
+  grpm doc man --all --dir ./man    # Generate all pages to ./man/
+
+View generated man page:
+  grpm doc man | man -l -
+  grpm doc man emerge | man -l -`)
+	}
+
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+
+	gen := NewManPageGenerator(a.version)
+
+	// List mode
+	if *listPages {
+		fmt.Println("Available man pages:")
+		fmt.Println("  grpm.1 (main)")
+		for _, name := range gen.CommandNames() {
+			fmt.Printf("  grpm-%s.1\n", name)
+		}
+		return nil
+	}
+
+	// Generate all mode
+	if *generateAll {
+		if *outputDir == "" {
+			return fmt.Errorf("--dir is required when using --all")
+		}
+		return a.generateAllManPages(gen, *outputDir)
+	}
+
+	// Single page mode
+	cmdArgs := fs.Args()
+	if len(cmdArgs) == 0 {
+		// Generate main man page
+		fmt.Print(gen.GenerateMain())
+		return nil
+	}
+
+	// Generate specific command man page
+	cmdName := cmdArgs[0]
+	page := gen.GenerateCommand(cmdName)
+	if page == "" {
+		return fmt.Errorf("unknown command: %s\nRun 'grpm doc man --list' to see available man pages", cmdName)
+	}
+	fmt.Print(page)
+	return nil
+}
+
+// generateAllManPages generates all man pages to the specified directory.
+func (a *App) generateAllManPages(gen *ManPageGenerator, dir string) error {
+	// Ensure directory exists
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to create directory %s: %w", dir, err)
+	}
+
+	pages := gen.GenerateAll()
+	count := 0
+
+	for filename, content := range pages {
+		path := filepath.Join(dir, filename)
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			return fmt.Errorf("failed to write %s: %w", path, err)
+		}
+		a.log.Info("Generated %s", path)
+		count++
+	}
+
+	a.log.Success("Generated %d man page(s) in %s", count, dir)
 	return nil
 }

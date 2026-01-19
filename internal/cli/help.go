@@ -644,6 +644,29 @@ func (r *CommandRegistry) registerAllCommands() {
 		},
 		SeeAlso: []string{"help"},
 	}
+
+	// doc command
+	r.commands["doc"] = CommandMeta{
+		Name:  "doc",
+		Short: "Generate documentation (man pages)",
+		Long: "Generates documentation for GRPM in various formats. " +
+			"Currently supports man page generation in troff/roff format. " +
+			"Man pages can be output to stdout or written to files.",
+		Usage: "doc <subcommand> [options]",
+		Flags: []FlagMeta{
+			{Long: "all", Type: "bool", Description: "Generate all man pages (requires --dir)"},
+			{Long: "dir", Type: "string", Description: "Output directory for man pages"},
+			{Long: "list", Type: "bool", Description: "List all available man pages"},
+		},
+		Examples: []string{
+			"grpm doc man                         # Output main man page to stdout",
+			"grpm doc man emerge                  # Output emerge man page to stdout",
+			"grpm doc man --list                  # List all available man pages",
+			"grpm doc man --all --dir ./man       # Generate all man pages to directory",
+			"grpm doc man | man -l -              # View generated man page directly",
+		},
+		SeeAlso: []string{"help", "completion"},
+	}
 }
 
 // FormatMainHelp generates the main help text for the grpm command.
