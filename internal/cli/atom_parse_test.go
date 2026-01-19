@@ -9,15 +9,13 @@ import (
 	"github.com/grpmsoft/grpm/internal/repo"
 )
 
-// TestParsePackageAtom tests the parsePackageAtom function which extracts
+// TestParsePackageAtom tests the pkg.ParseAtom function which extracts
 // category/package from various PMS-compliant atom formats.
 //
 // This is critical for Issue #45: The function was returning versioned atoms
 // (sys-devel/gcc-13.4.1_p20250807) instead of category/package (sys-devel/gcc),
 // causing Manifest path construction to fail.
 func TestParsePackageAtom(t *testing.T) {
-	app := &App{}
-
 	tests := []struct {
 		name     string
 		atom     string
@@ -134,22 +132,23 @@ func TestParsePackageAtom(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := app.parsePackageAtom(tt.atom)
+			parsed, err := pkg.ParseAtom(tt.atom)
 
 			if tt.wantErr {
 				if err == nil {
-					t.Errorf("parsePackageAtom(%q) expected error containing %q, got nil", tt.atom, tt.errMatch)
+					t.Errorf("ParseAtom(%q) expected error containing %q, got nil", tt.atom, tt.errMatch)
 				}
 				return
 			}
 
 			if err != nil {
-				t.Errorf("parsePackageAtom(%q) unexpected error: %v", tt.atom, err)
+				t.Errorf("ParseAtom(%q) unexpected error: %v", tt.atom, err)
 				return
 			}
 
+			got := parsed.CP()
 			if got != tt.wantCP {
-				t.Errorf("parsePackageAtom(%q) = %q, want %q", tt.atom, got, tt.wantCP)
+				t.Errorf("ParseAtom(%q).CP() = %q, want %q", tt.atom, got, tt.wantCP)
 			}
 		})
 	}
@@ -291,8 +290,6 @@ KEYWORDS="amd64"
 // 1. Wrong Manifest path: /var/db/repos/gentoo/sys-devel/gcc-13.4.1_p20250807/Manifest
 // 2. Wrong SRC_URI parsing
 func TestAtomParsingRegression_Issue45(t *testing.T) {
-	app := &App{}
-
 	// These are the exact atoms from Issue #45
 	problematicAtoms := []struct {
 		atom       string
@@ -305,13 +302,14 @@ func TestAtomParsingRegression_Issue45(t *testing.T) {
 
 	for _, tc := range problematicAtoms {
 		t.Run(tc.atom, func(t *testing.T) {
-			cp, err := app.parsePackageAtom(tc.atom)
+			parsed, err := pkg.ParseAtom(tc.atom)
 			if err != nil {
-				t.Fatalf("parsePackageAtom(%q) failed: %v", tc.atom, err)
+				t.Fatalf("ParseAtom(%q) failed: %v", tc.atom, err)
 			}
 
+			cp := parsed.CP()
 			if cp != tc.expectedCP {
-				t.Errorf("parsePackageAtom(%q) = %q, want %q\n"+
+				t.Errorf("ParseAtom(%q).CP() = %q, want %q\n"+
 					"This would cause Manifest path: .../%s/Manifest (WRONG)\n"+
 					"Instead of: .../%s/Manifest (CORRECT)",
 					tc.atom, cp, tc.expectedCP, cp, tc.expectedCP)
