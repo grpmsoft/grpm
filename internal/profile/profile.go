@@ -108,10 +108,20 @@ func LoadProfile(path string) (*Profile, error) {
 		return nil, fmt.Errorf("profile path is not a directory: %s", path)
 	}
 
+	// Resolve symlink to get actual profile path
+	// This is critical for profile inheritance resolution, as parent paths
+	// are relative to the actual profile directory, not the symlink location.
+	// Example: /etc/portage/make.profile -> /var/db/repos/gentoo/profiles/...
+	resolvedPath, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		// If symlink resolution fails, use original path
+		resolvedPath = path
+	}
+
 	// Create profile
 	profile := &Profile{
-		Path:          path,
-		Name:          extractProfileName(path),
+		Path:          resolvedPath,
+		Name:          extractProfileName(resolvedPath),
 		MakeDefaults:  make(map[string]string),
 		PackageUse:    make(map[string][]string),
 		Keywords:      make(map[string]string),
