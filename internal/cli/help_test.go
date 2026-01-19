@@ -185,7 +185,7 @@ func TestCommandRegistry_AllCommands(t *testing.T) {
 	expectedCommands := []string{
 		"resolve", "install", "emerge", "remove", "search",
 		"info", "sync", "update", "build", "depclean",
-		"fetch", "analyze", "tools",
+		"fetch", "analyze", "tools", "completion",
 	}
 
 	if len(commands) != len(expectedCommands) {
@@ -378,7 +378,8 @@ func TestAllCommandsHaveMetadata(t *testing.T) {
 			if cmd.Usage == "" {
 				t.Error("Empty usage")
 			}
-			if len(cmd.Flags) == 0 {
+			// completion command is special - it takes shell name as positional argument
+			if len(cmd.Flags) == 0 && cmd.Name != "completion" {
 				t.Error("No flags defined")
 			}
 			if len(cmd.Examples) == 0 {

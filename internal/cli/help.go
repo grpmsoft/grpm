@@ -625,6 +625,25 @@ func (r *CommandRegistry) registerAllCommands() {
 		},
 		SeeAlso: []string{"analyze", "emerge"},
 	}
+
+	// completion command
+	r.commands["completion"] = CommandMeta{
+		Name:  "completion",
+		Short: "Generate shell completion scripts",
+		Long: "Generates shell completion scripts for bash, zsh, or fish. " +
+			"The generated scripts provide command and flag completion for GRPM. " +
+			"Run without arguments to see installation instructions.",
+		Usage: "completion [bash|zsh|fish]",
+		Flags: []FlagMeta{},
+		Examples: []string{
+			"grpm completion                      # Show installation instructions",
+			"grpm completion bash                 # Output bash completion script",
+			"grpm completion zsh                  # Output zsh completion script",
+			"grpm completion fish                 # Output fish completion script",
+			"grpm completion bash > /etc/bash_completion.d/grpm  # Install bash completion",
+		},
+		SeeAlso: []string{"help"},
+	}
 }
 
 // FormatMainHelp generates the main help text for the grpm command.

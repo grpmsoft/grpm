@@ -124,6 +124,8 @@ func (a *App) Run(args []string) error {
 		return a.runAnalyze(cmdArgs)
 	case "tools":
 		return a.runTools(cmdArgs)
+	case "completion":
+		return a.runCompletion(cmdArgs)
 	default:
 		return fmt.Errorf("unknown command: %s\nRun 'grpm help' for usage", command)
 	}
@@ -860,4 +862,61 @@ func (a *App) expandPackageArgs(args []string) ([]string, error) {
 	}
 
 	return expanded, nil
+}
+
+// runCompletion handles the 'completion' command.
+//
+// Generates shell completion scripts for bash, zsh, or fish.
+//
+// Usage:
+//
+//	grpm completion bash   # Output bash completion script
+//	grpm completion zsh    # Output zsh completion script
+//	grpm completion fish   # Output fish completion script
+//
+// Installation:
+//
+//	# Bash
+//	grpm completion bash > /etc/bash_completion.d/grpm
+//
+//	# Zsh
+//	grpm completion zsh > ~/.zsh/completions/_grpm
+//
+//	# Fish
+//	grpm completion fish > ~/.config/fish/completions/grpm.fish
+func (a *App) runCompletion(args []string) error {
+	// Parse flags
+	fs := flag.NewFlagSet("completion", flag.ContinueOnError)
+
+	// Set custom help handler
+	fs.Usage = func() { fmt.Print(GetCommandHelp("completion")) }
+
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+
+	shellArgs := fs.Args()
+	if len(shellArgs) == 0 {
+		fmt.Print(GetInstallInstructions())
+		return nil
+	}
+
+	shell := shellArgs[0]
+	gen := NewCompletionGenerator()
+
+	switch shell {
+	case "bash":
+		fmt.Print(gen.GenerateBash())
+	case "zsh":
+		fmt.Print(gen.GenerateZsh())
+	case "fish":
+		fmt.Print(gen.GenerateFish())
+	default:
+		return fmt.Errorf("unsupported shell: %s\nSupported shells: bash, zsh, fish", shell)
+	}
+
+	return nil
 }
