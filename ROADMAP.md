@@ -1,13 +1,12 @@
 # GRPM Roadmap
 
-> **UX Improvements Release (v0.8.2)**
+> **Package Set Hotfix (v0.8.4)**
 >
 > Rapid development complete (v0.1.0 → v0.5.0).
 > Infrastructure release complete (v0.6.0).
 > Build quality and security fixes (v0.7.x).
-> Configuration management (v0.8.0).
-> Solver filtering + atom parsing fix (v0.8.1).
-> **UX improvements: emerge --info, USE flags display, user-friendly errors (v0.8.2).**
+> Configuration management (v0.8.0-v0.8.3).
+> **Package set hotfix: @world, @system, @selected now work in ALL commands (v0.8.4).**
 > **98.2% tree coverage verified on real Gentoo!**
 
 ---
@@ -69,7 +68,25 @@ Key insight: **Eclasses don't need Go implementations.** They are loaded dynamic
 
 ## Release History
 
-### v0.8.2 — UX Improvements (Current)
+### v0.8.4 — Package Set Hotfix (Current)
+
+**Fix for package sets not working in resolve/install/emerge/fetch commands:**
+
+- **SetExpander service** — Unified interface for set expansion across all commands
+- **Set support everywhere** — `grpm resolve @world`, `grpm emerge @system`, `grpm fetch @selected`
+- **@system fix** — Profile symlink properly resolved, multi-parent inheritance working
+- **Profile cycle detection** — Prevents infinite loops in profile chains
+- **Tested on real Gentoo** — 50 system packages correctly found from full profile chain
+
+### v0.8.3 — SRC_URI Evaluation Hotfix
+
+**Critical fix for packages with dynamic SRC_URI generation** ([#50](https://github.com/grpmsoft/grpm/issues/50)):
+
+- **MetadataEvaluator** — Evaluates ebuild metadata via mvdan.cc/sh with eclass support
+- **gcc fix** — Downloads only version-specific files (3) instead of all Manifest files (70+)
+- **ver_cut fix** — PMS-compliant version extraction for correct SNAPSHOT calculation
+
+### v0.8.2 — UX Improvements
 
 **User experience improvements and bug fixes based on community feedback:**
 
@@ -229,14 +246,17 @@ Key insight: **Eclasses don't need Go implementations.** They are loaded dynamic
 ## Roadmap to v1.0.0
 
 ```
-v0.8.1 ← CURRENT (Mask, Keywords & Atom Parsing)
+v0.8.4 ← CURRENT (Package Set Hotfix)
     │   ✅ v0.6.0: Distfile fetching, debug helpers, coverage analyzer
     │   ✅ v0.7.x: Portage compatibility, security fixes
     │   ✅ v0.8.0: Configuration management (make.conf, repos.conf, package.use)
-    │   ✅ v0.8.1: Package mask, KEYWORDS filtering, atom parsing (#45, #46, #48)
+    │   ✅ v0.8.1: Package mask, KEYWORDS filtering, atom parsing
+    │   ✅ v0.8.2: UX improvements (emerge --info, errors)
+    │   ✅ v0.8.3: SRC_URI evaluation hotfix
+    │   ✅ v0.8.4: Package set hotfix (@world, @system, @selected)
     │   ✅ 98.2% tree coverage on real Gentoo!
     ↓
-v0.9.0 — Pre-Release (2 tasks)
+v0.9.0 — Pre-Release
     │   • Community testing program
     │   • Documentation finalization
     ↓
@@ -360,4 +380,4 @@ Key deliverables:
 ---
 
 *This roadmap evolves based on community feedback and project needs.*
-*Last updated: 2026-01-17 (v0.8.1 mask, keywords & atom parsing)*
+*Last updated: 2026-01-19 (v0.8.4 package set hotfix)*

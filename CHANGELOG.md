@@ -5,7 +5,35 @@ All notable changes to GRPM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] - v0.8.3
+## [Unreleased] - v0.8.4
+
+### Package Set Expansion Hotfix
+
+Fix for package sets not working in resolve/install/emerge/fetch commands.
+
+### Added
+- **`SetExpander` service** (`internal/sets/expander.go`) — Unified interface for expanding package sets across all CLI commands
+- **`SetRegistry`** — Central registry for all known sets with pluggable architecture
+- **Set support in all commands**:
+  - `grpm resolve @world` — Resolve dependencies for all world packages
+  - `grpm resolve @system` — Resolve dependencies for all system packages
+  - `grpm install @selected` — Install packages from world file
+  - `grpm emerge @world` — Build all world packages from source
+  - `grpm fetch @system` — Download sources for system packages
+
+### Fixed
+- **@system returning empty packages** — Profile symlink (`/etc/portage/make.profile`) is now properly resolved before storing path, critical for profile inheritance where parent paths are relative to actual profile directory
+- **Multi-parent profile inheritance** — `parent` file can contain multiple lines (multiple parent profiles), now ALL parents are recursively traversed instead of just the first one
+- **Profile cycle detection** — Added visited set to prevent infinite loops in profile chain
+
+### Technical Notes
+- `profile.LoadProfile()` now uses `filepath.EvalSymlinks()` to resolve symlinks
+- `SystemSet.collectProfilePackages()` is recursive with cycle detection via visited map
+- Tested on real Gentoo WSL2: 50 system packages correctly found from full profile chain
+
+---
+
+## [0.8.3] - 2026-01-19
 
 ### SRC_URI Evaluation Hotfix
 

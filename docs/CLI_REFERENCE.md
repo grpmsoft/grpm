@@ -56,7 +56,7 @@ grpm [global-options] <command> [command-options] [arguments...]
 Resolve package dependencies using the SAT solver.
 
 ```
-grpm resolve [options] <package>...
+grpm resolve [options] <package|@set>...
 ```
 
 **Options:**
@@ -68,11 +68,25 @@ grpm resolve [options] <package>...
 | `--pretend`, `-p` | Show what would be resolved (dry-run) | `false` |
 | `--dry-run` | Alias for `--pretend` | `false` |
 
+**Package Sets:**
+
+| Set | Description |
+|-----|-------------|
+| `@world` | All explicitly installed packages + @system |
+| `@system` | Core system packages from profile |
+| `@selected` | User-selected packages (from world file) |
+
 **Examples:**
 
 ```bash
 # Resolve dependencies for a package
 grpm resolve app-misc/hello
+
+# Resolve all world packages
+grpm resolve @world
+
+# Resolve system packages
+grpm resolve @system
 
 # Dry-run mode
 grpm resolve --pretend sys-libs/zlib
@@ -108,7 +122,7 @@ Total: 2 package(s)
 Install packages to the system.
 
 ```
-grpm install [options] <package>...
+grpm install [options] <package|@set>...
 ```
 
 **Options:**
@@ -131,6 +145,9 @@ grpm install [options] <package>...
 ```bash
 # Install a package
 sudo grpm install app-misc/hello
+
+# Install all selected packages
+sudo grpm install @selected
 
 # Install from binary package
 sudo grpm install --binpkg www-servers/nginx
@@ -165,7 +182,7 @@ Would you like to merge these packages? [Yes/No]
 Build packages from source using ebuild executor.
 
 ```
-grpm emerge [options] <package>...
+grpm emerge [options] <package|@set>...
 ```
 
 **Options:**
@@ -175,12 +192,14 @@ grpm emerge [options] <package>...
 | `--repo <path>` | Path to Portage repository | `/var/db/repos/gentoo` |
 | `--distdir <path>` | Directory for source tarballs | `/var/cache/distfiles` |
 | `--tmpdir <path>` | Temporary build directory | `/var/tmp/portage` |
+| `--root <path>` | Install to alternative root (chroot, stage tarball) | `/` |
 | `--mock` | Use mock repository for testing | `false` |
 | `--pretend`, `-p` | Show build plan without building | `false` |
 | `--ask`, `-a` | Ask for confirmation before building | `false` |
 | `--jobs <n>` | Number of parallel make jobs | From MAKEOPTS or 4 |
 | `--keep-work` | Keep work directory after build | `false` |
 | `--test` | Run test phase (make check/test) | `false` |
+| `--onlydeps`, `-o` | Build dependencies only, skip target | `false` |
 | `--skip-tool-check` | Skip external tool validation | `false` |
 
 **Build Phases:**
@@ -199,6 +218,12 @@ grpm emerge [options] <package>...
 # Build from source
 sudo grpm emerge app-misc/hello
 
+# Build all system packages
+sudo grpm emerge @system
+
+# Build all selected packages
+sudo grpm emerge @selected
+
 # Show build plan
 grpm emerge --pretend www-servers/nginx
 
@@ -210,6 +235,12 @@ sudo grpm emerge --keep-work app-misc/hello
 
 # Run tests during build
 sudo grpm emerge --test sys-libs/zlib
+
+# Install to alternative root (chroot, stage tarball)
+sudo grpm emerge --root /mnt/gentoo app-misc/hello
+
+# Build dependencies only (Docker layer caching)
+sudo grpm emerge --onlydeps app-misc/hello
 ```
 
 **Work Directory Structure:**
@@ -403,7 +434,7 @@ sudo grpm sync --skip-gpg-verify
 Download source tarballs (distfiles) for packages.
 
 ```
-grpm fetch [options] <package>...
+grpm fetch [options] <package|@set>...
 ```
 
 **Options:**
@@ -421,6 +452,12 @@ grpm fetch [options] <package>...
 ```bash
 # Download sources for a package
 grpm fetch app-misc/hello
+
+# Download sources for all system packages
+grpm fetch @system
+
+# Download sources for all selected packages
+grpm fetch @selected
 
 # Dry-run mode
 grpm fetch --pretend www-servers/nginx

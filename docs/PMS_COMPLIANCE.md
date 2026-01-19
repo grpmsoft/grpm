@@ -2,8 +2,8 @@
 
 > **GRPM Implementation Status per [Package Manager Specification](https://projects.gentoo.org/pms/)**
 >
-> **Version:** v0.8.2
-> **Last Updated:** 2026-01-17
+> **Version:** v0.8.4
+> **Last Updated:** 2026-01-19
 > **License:** This document follows PMS under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/)
 
 ---
@@ -576,7 +576,7 @@ EAPI 7+ cross-compilation variables (SYSROOT, ESYSROOT, BROOT) are defined but n
 
 ## Roadmap to Full Compliance
 
-### v0.8.2 (Complete)
+### v0.8.2-v0.8.4 (Complete)
 
 - [x] `emerge --info` command (system environment display)
 - [x] USE flags display in `emerge --pretend`
@@ -585,11 +585,14 @@ EAPI 7+ cross-compilation variables (SYSROOT, ESYSROOT, BROOT) are defined but n
 - [x] Per-package tool check based on eclasses
 - [x] Search version sorting (PMS-compliant)
 - [x] Dependency deduplication in info output
+- [x] SRC_URI evaluation with eclass support (v0.8.3)
+- [x] Package sets (@world, @system, @selected) in all commands (v0.8.4)
+- [x] Profile symlink resolution for @system (v0.8.4)
+- [x] Multi-parent profile inheritance (v0.8.4)
 
 ### v0.9.0 (Planned)
 
 - [ ] `package.provided` support
-- [ ] `packages` (system set) support
 - [ ] Improved cross-compilation support
 - [ ] Performance optimization
 
