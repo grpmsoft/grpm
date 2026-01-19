@@ -22,6 +22,7 @@ import (
 	"github.com/grpmsoft/grpm/internal/fetch"
 	"github.com/grpmsoft/grpm/internal/logging"
 	"github.com/grpmsoft/grpm/internal/pkg"
+	"github.com/grpmsoft/grpm/internal/repo"
 	"github.com/grpmsoft/grpm/internal/sandbox"
 )
 
@@ -373,48 +374,100 @@ func (e *Executor) fetchDistfiles(ctx context.Context) error {
 //
 // This is critical for packages using mirror://gnu/, mirror://sourceforge/, etc.
 // Without this expansion, downloads would fail as "mirror://" is not a valid protocol.
+//
+// Uses EvaluateSrcURI for proper variable expansion including custom variables
+// like MY_P, MY_PN, etc. that are common in ebuilds.
 func (e *Executor) getDistfilesWithURIs(manifest *fetch.Manifest) ([]fetch.Distfile, error) {
 	// If no ebuild path, return manifest distfiles
 	if e.EbuildPath == "" {
 		return manifest.GetDistfiles(), nil
 	}
 
-	// Read ebuild content
-	content, err := os.ReadFile(e.EbuildPath)
-	if err != nil {
-		return nil, fmt.Errorf("reading ebuild: %w", err)
+	// Use EvaluateSrcURI for proper variable expansion (handles MY_P, eclasses, etc.)
+	ctx := context.Background()
+	srcURI, evalErr := EvaluateSrcURI(ctx, e.EbuildPath, e.RepoPath, e.Package)
+	if evalErr != nil {
+		logging.Debug("SRC_URI evaluation failed: %v, falling back to regex parsing", evalErr)
 	}
 
-	// Extract SRC_URI from ebuild
-	srcURI := extractEbuildVariable(string(content), "SRC_URI")
+	// If evaluation failed or returned empty, fall back to regex parsing
 	if srcURI == "" {
-		// No SRC_URI - return manifest distfiles without URIs
+		content, err := os.ReadFile(e.EbuildPath)
+		if err != nil {
+			return nil, fmt.Errorf("reading ebuild: %w", err)
+		}
+
+		srcURI = extractEbuildVariable(string(content), "SRC_URI")
+		if srcURI == "" {
+			// No SRC_URI - return manifest distfiles without URIs
+			return manifest.GetDistfiles(), nil
+		}
+
+		// Build variable map for fallback SRC_URI expansion
+		vars := map[string]string{
+			"P":        e.Env.P,
+			"PN":       e.Env.PN,
+			"PV":       e.Env.PV,
+			"PR":       e.Env.PR,
+			"PVR":      e.Env.PVR,
+			"PF":       e.Env.PF,
+			"CATEGORY": e.Env.CATEGORY,
+		}
+
+		// Extract custom variables (MY_P, MY_PN, etc.) for fallback
+		customVars := extractCustomVariables(string(content), vars)
+		for k, v := range customVars {
+			vars[k] = v
+		}
+
+		srcURI = expandVariables(srcURI, vars)
+	}
+
+	// Build variable map for SRC_URI parsing
+	meta := repo.NewPackageMetadata(e.Env.CATEGORY, e.Env.PN, e.Env.PV)
+	vars := map[string]string{
+		"P":        meta.P,
+		"PN":       meta.PN,
+		"PV":       meta.PV,
+		"PR":       meta.PR,
+		"PVR":      meta.PVR,
+		"PF":       meta.PF,
+		"CATEGORY": meta.Category,
+	}
+
+	// Parse SRC_URI entries (no USE flag filtering for fetch - get all files)
+	entries, err := repo.ParseSrcURI(srcURI, nil, vars)
+	if err != nil {
+		logging.Warn("failed to parse SRC_URI: %v, using manifest distfiles", err)
 		return manifest.GetDistfiles(), nil
 	}
-
-	// Build variable map for SRC_URI expansion
-	vars := map[string]string{
-		"P":        e.Env.P,
-		"PN":       e.Env.PN,
-		"PV":       e.Env.PV,
-		"PR":       e.Env.PR,
-		"PVR":      e.Env.PVR,
-		"PF":       e.Env.PF,
-		"CATEGORY": e.Env.CATEGORY,
-	}
-
-	// Expand variables in SRC_URI
-	expandedSrcURI := expandVariables(srcURI, vars)
 
 	// Load third-party mirrors for mirror:// URL expansion
 	thirdPartyMirrors := fetch.ParseThirdPartyMirrors(e.RepoPath)
 
-	// Parse SRC_URI entries and build URI map
-	uriMap := e.parseSrcURIEntries(expandedSrcURI, thirdPartyMirrors)
+	// Build set of filenames from SRC_URI for filtering
+	srcURIFiles := make(map[string]bool)
+	// Build map of filename -> URIs from SRC_URI entries
+	uriMap := make(map[string][]string)
+	for _, entry := range entries {
+		srcURIFiles[entry.Filename] = true
+		if entry.URL != "" {
+			// Expand mirror:// URLs
+			expandedURIs := thirdPartyMirrors.ExpandMirrorURL(entry.URL)
+			uriMap[entry.Filename] = append(uriMap[entry.Filename], expandedURIs...)
+		}
+	}
 
 	// Create distfiles with checksums from manifest and URIs from SRC_URI
+	// IMPORTANT: Only include files that are in the evaluated SRC_URI
+	// This filters out files from other versions in the Manifest
 	var distfiles []fetch.Distfile
 	for _, entry := range manifest.DistFiles {
+		// Skip files not in this version's SRC_URI
+		if !srcURIFiles[entry.Filename] {
+			continue
+		}
+
 		df := fetch.NewDistfile(entry.Filename, entry.Size, entry.Checksums)
 
 		// Add explicit URIs if available
