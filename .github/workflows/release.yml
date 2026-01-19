@@ -342,6 +342,16 @@ jobs:
             dist/checksums.txt
           retention-days: 30
 
+      - name: Merge release branch to main
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/release/')
+        run: |
+          git fetch origin main
+          git checkout main
+          git merge --ff-only ${{ github.ref_name }} -m "chore: merge ${{ github.ref_name }} to main"
+          git push origin main
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   # ============================================================
   # Dry Run Summary (when dry_run is true)
   # ============================================================
