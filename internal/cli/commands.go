@@ -13,6 +13,7 @@ import (
 	"github.com/grpmsoft/grpm/internal/mask"
 	"github.com/grpmsoft/grpm/internal/pkg"
 	"github.com/grpmsoft/grpm/internal/repo"
+	"github.com/grpmsoft/grpm/internal/sets"
 	"github.com/grpmsoft/grpm/internal/solver"
 	"github.com/grpmsoft/grpm/internal/state"
 )
@@ -155,7 +156,15 @@ func (a *App) runInfo(args []string) error {
 		return fmt.Errorf("no package specified")
 	}
 
-	atomStr := packages[0]
+	// Expand set references (@world, @selected, @system)
+	packages, err := a.expandPackageArgs(packages)
+	if err != nil {
+		return err
+	}
+	if len(packages) == 0 {
+		a.log.Info("No packages in specified set(s)")
+		return nil
+	}
 
 	// Initialize repository
 	r, err := a.initRepository(*useMock, *repoPath)
@@ -163,15 +172,31 @@ func (a *App) runInfo(args []string) error {
 		return err
 	}
 
+	// Display info for each package
+	for i, atomStr := range packages {
+		if i > 0 {
+			fmt.Println() // Add blank line between packages
+		}
+		if err := a.displayPackageInfo(r, atomStr, *repoPath, cfg); err != nil {
+			// Log error but continue with other packages
+			a.log.Warn("Could not get info for %s: %v", atomStr, err)
+		}
+	}
+
+	return nil
+}
+
+// displayPackageInfo displays information for a single package atom.
+func (a *App) displayPackageInfo(r repo.Repository, atomStr, repoPath string, cfg *config.Config) error {
 	// Load package with mask/keyword filtering (like resolver does)
 	// This ensures `grpm info sys-devel/gcc` shows gcc-15.x instead of gcc-16.0.9999
-	p, err := a.loadBestPackageVersion(r, atomStr, *repoPath, cfg)
+	p, err := a.loadBestPackageVersion(r, atomStr, repoPath, cfg)
 	if err != nil {
 		// Fall back to loadPackageFromAtom for explicit version requests or errors
 		p, err = a.loadPackageFromAtom(r, atomStr)
 		if err != nil {
 			// Wrap with user-friendly error
-			similar := repo.FindSimilarPackages(atomStr, *repoPath, 3)
+			similar := repo.FindSimilarPackages(atomStr, repoPath, 3)
 			return WrapPackageNotFound(atomStr, similar, err)
 		}
 	}
@@ -272,36 +297,85 @@ func (a *App) runUpdate(args []string) error {
 		return err
 	}
 
-	// Determine target set
+	// Determine targets
 	targets := fs.Args()
-	targetSet := "@world" // Default to @world
-	if len(targets) > 0 {
-		targetSet = targets[0]
+	if len(targets) == 0 {
+		targets = []string{"@world"} // Default to @world
 	}
 
-	// Validate target
+	// Check if any target is a set
+	hasSetTarget := false
+	for _, t := range targets {
+		if sets.IsSetReference(t) {
+			hasSetTarget = true
+			break
+		}
+	}
+
+	// If we have regular package atoms (not sets), use set expansion
+	// to normalize and pass them through the update calculation
+	if !hasSetTarget {
+		// Expand any potential set references (for consistency)
+		expanded, err := a.expandPackageArgs(targets)
+		if err != nil {
+			return err
+		}
+		if len(expanded) == 0 {
+			a.log.Info("No packages to update")
+			return nil
+		}
+		// For regular packages, we still need to use the set manager
+		// but we'll use @selected as the base and filter
+		targets = expanded
+		hasSetTarget = false
+	}
+
+	// Determine the set name for set-based update
 	var setName state.SetName
-	switch targetSet {
-	case "@world", "world":
-		setName = state.SetWorld
-	case "@selected", "selected":
-		setName = state.SetSelected
-	case "@system", "system":
-		setName = state.SetSystem
-	default:
-		return fmt.Errorf("unknown target: %s (use @world, @selected, or @system)", targetSet)
+	if hasSetTarget && len(targets) == 1 {
+		targetSet := targets[0]
+		switch targetSet {
+		case "@world", "world":
+			setName = state.SetWorld
+		case "@selected", "selected":
+			setName = state.SetSelected
+		case "@system", "system":
+			setName = state.SetSystem
+		default:
+			return fmt.Errorf("unknown set: %s (use @world, @selected, or @system)", targetSet)
+		}
+	} else if hasSetTarget {
+		// Multiple sets or mix of sets and packages - expand all
+		expanded, err := a.expandPackageArgs(targets)
+		if err != nil {
+			return err
+		}
+		targets = expanded
+		hasSetTarget = false
 	}
 
+	// For set-based updates, use the state.SetManager
+	if hasSetTarget {
+		return a.runSetUpdate(setName, *repoPath, *useMock, *pretend, *ask, *deep, *newuse, *changedUse, *portageDir, *profilePath)
+	}
+
+	// For regular package updates, use the resolver-based approach
+	// This handles cases like: grpm update app-misc/hello
+	return a.runPackageUpdate(targets, *repoPath, *useMock, *pretend, *ask, *deep, *newuse, *changedUse, *portageDir, *profilePath)
+}
+
+// runSetUpdate handles set-based updates (@world, @selected, @system).
+func (a *App) runSetUpdate(setName state.SetName, repoPath string, useMock, pretend, ask, deep, newuse, changedUse bool, portageDir, profilePath string) error {
 	logging.Action("Calculating updates for %s...", setName)
 
 	// Initialize repository
-	r, err := a.initRepository(*useMock, *repoPath)
+	r, err := a.initRepository(useMock, repoPath)
 	if err != nil {
 		return err
 	}
 
 	// Initialize set manager
-	setManager := state.NewSetManager(*portageDir, *profilePath)
+	setManager := state.NewSetManager(portageDir, profilePath)
 
 	// Get package database (if available)
 	db, err := a.getOrCreatePackageDB()
@@ -324,9 +398,9 @@ func (a *App) runUpdate(args []string) error {
 
 	// Configure update options
 	opts := &state.UpdateOptions{
-		Deep:       *deep,
-		NewUse:     *newuse,
-		ChangedUse: *changedUse,
+		Deep:       deep,
+		NewUse:     newuse,
+		ChangedUse: changedUse,
 		Update:     true,
 	}
 
@@ -342,15 +416,15 @@ func (a *App) runUpdate(args []string) error {
 		return nil
 	}
 
-	a.displayUpdatePlan(plan, setName, *deep, *newuse)
+	a.displayUpdatePlan(plan, setName, deep, newuse)
 
 	// Handle pretend mode
-	if *pretend {
+	if pretend {
 		return nil
 	}
 
 	// Handle ask mode
-	if *ask {
+	if ask {
 		proceed, err := a.askUserConfirmation()
 		if err != nil {
 			return err
@@ -362,6 +436,147 @@ func (a *App) runUpdate(args []string) error {
 
 	// Execute updates
 	return a.executeUpdates(plan, r)
+}
+
+// runPackageUpdate handles updates for specific packages (not sets).
+// This is a simplified update path for individual packages.
+func (a *App) runPackageUpdate(packages []string, repoPath string, useMock, pretend, ask, deep, newuse, changedUse bool, portageDir, profilePath string) error {
+	// Initialize repository
+	r, err := a.initRepository(useMock, repoPath)
+	if err != nil {
+		return err
+	}
+
+	// Get package database
+	db, err := a.getOrCreatePackageDB()
+	if err != nil {
+		return fmt.Errorf("failed to initialize package database: %w", err)
+	}
+
+	// Build update plan for specified packages
+	updates := a.calculatePackageUpdates(packages, r, db, newuse || changedUse)
+
+	if len(updates) == 0 {
+		fmt.Println("\nNo updates available for specified packages.")
+		return nil
+	}
+
+	// Display and confirm update plan
+	a.displayPackageUpdatePlan(packages, updates)
+
+	if pretend {
+		return nil
+	}
+
+	if ask {
+		proceed, err := a.askUserConfirmation()
+		if err != nil {
+			return err
+		}
+		if !proceed {
+			return nil
+		}
+	}
+
+	// Log planned updates
+	a.logPackageUpdates(updates)
+	return nil
+}
+
+// calculatePackageUpdates builds update info for a list of packages.
+func (a *App) calculatePackageUpdates(packages []string, r repo.Repository, db *state.PackageDatabase, checkUse bool) []*state.UpdateInfo {
+	var updates []*state.UpdateInfo
+
+	for _, pkgAtom := range packages {
+		update := a.checkPackageForUpdate(pkgAtom, r, db, checkUse)
+		if update != nil {
+			updates = append(updates, update)
+		}
+	}
+
+	return updates
+}
+
+// checkPackageForUpdate checks if a single package needs updating.
+func (a *App) checkPackageForUpdate(pkgAtom string, r repo.Repository, db *state.PackageDatabase, checkUse bool) *state.UpdateInfo {
+	// Check if installed
+	installedPkg, err := db.Get(pkgAtom)
+	if err != nil {
+		// Not installed - treat as new
+		logging.Verbose("%s is not installed, will be installed", pkgAtom)
+		return &state.UpdateInfo{
+			Atom:             pkgAtom,
+			AvailableVersion: "latest",
+			IsNew:            true,
+		}
+	}
+
+	// Check for newer version
+	resolver := a.createResolverWithMasks(r)
+	solution, err := resolver.Resolve([]string{pkgAtom})
+	if err != nil {
+		logging.Warn("Could not resolve %s: %v", pkgAtom, err)
+		return nil
+	}
+
+	for _, p := range solution {
+		if p.Name == pkgAtom || p.Name == installedPkg.Package.Name {
+			return a.compareVersions(p, installedPkg, checkUse)
+		}
+	}
+
+	return nil
+}
+
+// compareVersions compares package versions and returns update info if needed.
+func (a *App) compareVersions(available *pkg.Package, installed *state.InstalledPackage, checkUse bool) *state.UpdateInfo {
+	cmp := pkg.CompareVersions(available.Version, installed.Package.Version)
+
+	if cmp > 0 {
+		return &state.UpdateInfo{
+			Atom:             available.Name,
+			InstalledVersion: installed.Package.Version,
+			AvailableVersion: available.Version,
+			IsUpgrade:        true,
+		}
+	}
+
+	if cmp == 0 && checkUse {
+		return &state.UpdateInfo{
+			Atom:             available.Name,
+			InstalledVersion: installed.Package.Version,
+			AvailableVersion: available.Version,
+			UseChanged:       true,
+		}
+	}
+
+	return nil
+}
+
+// displayPackageUpdatePlan shows the update plan for specified packages.
+func (a *App) displayPackageUpdatePlan(packages []string, updates []*state.UpdateInfo) {
+	fmt.Printf("\n*** Update plan for %d specified package(s):\n", len(packages))
+	fmt.Println("*** These are the packages that would be merged, in order:")
+	fmt.Println()
+	for _, update := range updates {
+		fmt.Println(update.String())
+	}
+	fmt.Printf("\nTotal: %d package(s)\n", len(updates))
+}
+
+// logPackageUpdates logs the planned updates.
+func (a *App) logPackageUpdates(updates []*state.UpdateInfo) {
+	logging.Action("Would update %d package(s)", len(updates))
+	for _, u := range updates {
+		switch {
+		case u.IsNew:
+			logging.Info("  Installing: %s", u.Atom)
+		case u.IsUpgrade:
+			logging.Info("  Upgrading: %s (%s -> %s)", u.Atom, u.InstalledVersion, u.AvailableVersion)
+		case u.UseChanged:
+			logging.Info("  Rebuilding: %s (USE changed)", u.Atom)
+		}
+	}
 }
 
 // displayUpdatePlan displays the calculated update plan.

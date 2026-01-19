@@ -36,7 +36,7 @@ GRPM (Go Resource Package Manager) is a modern source-based package manager writ
 | **Build Systems** | cmake.eclass, meson.eclass, toolchain-funcs, flag-o-matic |
 | **Language Ecosystems** | Python (distutils-r1), Rust (cargo.eclass), Go (go-module.eclass) |
 | **Multilib Support** | 32-bit/64-bit library support with ABI management |
-| **Package Sets** | @world, @system, @selected, @preserved-rebuild |
+| **Package Sets** | @world, @system, @selected in ALL commands (resolve, install, emerge, fetch) |
 | **Distfile Fetching** | Automatic source downloading with mirror failover |
 | **Coverage Analysis** | Repository compatibility analysis with `grpm analyze` |
 | **Tool Detection** | External tool checking with `grpm tools` |
@@ -100,6 +100,12 @@ sudo grpm emerge --root /mnt/gentoo app-misc/hello
 
 # Build dependencies only (useful for Docker layer caching)
 sudo grpm emerge --onlydeps app-misc/hello
+
+# Work with package sets
+grpm resolve @world              # Resolve all world packages
+grpm resolve @system             # Resolve system packages
+sudo grpm emerge @selected       # Build all selected packages
+grpm fetch @system               # Download sources for system packages
 
 # Install from binary
 sudo grpm install --binpkg app-misc/hello
@@ -192,10 +198,11 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidelines and [AGENTS.md
 
 ## Roadmap
 
-> **Active Development**
+> **v0.9.0 Pre-Release Testing**
 >
 > Rapid development complete. Infrastructure, build quality, and security hardening done.
-> Now focusing on full Portage configuration compatibility. **98.2% tree coverage on real Gentoo!**
+> **98.2% tree coverage verified on real Gentoo WSL2!**
+> Now entering pre-release testing phase with enterprise-grade features.
 
 **Completed Features:**
 - ✅ SAT-based dependency resolution
@@ -211,6 +218,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidelines and [AGENTS.md
 - ✅ package.use pattern matching with atom specificity
 - ✅ package.mask filtering in solver (masked packages excluded)
 - ✅ KEYWORDS filtering in solver (unkeyworded packages excluded)
+- ✅ Package sets (@world, @system, @selected) in all commands
+- ✅ Enterprise tool handling (Portage-compatible BDEPEND)
 
 **v1.0.0** — Production ready after community validation (no fixed date).
 

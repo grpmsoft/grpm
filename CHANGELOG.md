@@ -5,7 +5,74 @@ All notable changes to GRPM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] - v0.8.3
+## [0.9.0] - 2026-01-19
+
+### Enterprise Tool Check Refactoring
+
+Portage-compatible tool handling following enterprise patterns.
+
+### Changed
+- **Tool check is now opt-in** — Replaced `--skip-tool-check` (opt-out) with `--check-tools` (opt-in)
+- **BDEPEND handling** — Tool dependencies are now handled via BDEPEND like Portage, not pre-flight checks
+- **Default behavior** — `grpm emerge @world` works without tool check by default
+- **Error messages** — Updated to suggest installing missing tools instead of skipping check
+
+### Fixed
+- **Collision detection** — Only files are now checked for collisions, directories are skipped (was counting 147 collisions for 49 files)
+- **VarDB persistence** — Packages are now properly tracked in `/var/db/pkg` after installation
+- **Shared file collision** — `/usr/share/info/dir` excluded from collision check (GNU Info directory file shared across packages)
+- **Collision logging** — Added detailed collision reporting for better diagnostics
+
+### Removed
+- **`--skip-tool-check` flag** — Replaced with `--check-tools` (breaking change)
+
+### Technical Notes
+- Portage relies on BDEPEND as regular dependencies, not global tool validation
+- Pre-checking tools for ALL packages (2000+ for @world) was an anti-pattern causing false positives
+- One package with `cargo.eclass` was requiring Rust for entire @world
+- Now follows enterprise pattern: BDEPEND + natural build failures + rich error reporting
+
+### Migration
+```bash
+# Before (v0.8.x):
+grpm emerge --skip-tool-check @world
+
+# After (v0.9.0):
+grpm emerge @world                    # No flag needed (default)
+grpm emerge --check-tools @world      # Optional pre-validation
+```
+
+---
+
+## [0.8.4] - 2026-01-19
+
+### Package Set Expansion Hotfix
+
+Fix for package sets not working in resolve/install/emerge/fetch commands.
+
+### Added
+- **`SetExpander` service** (`internal/sets/expander.go`) — Unified interface for expanding package sets across all CLI commands
+- **`SetRegistry`** — Central registry for all known sets with pluggable architecture
+- **Set support in all commands**:
+  - `grpm resolve @world` — Resolve dependencies for all world packages
+  - `grpm resolve @system` — Resolve dependencies for all system packages
+  - `grpm install @selected` — Install packages from world file
+  - `grpm emerge @world` — Build all world packages from source
+  - `grpm fetch @system` — Download sources for system packages
+
+### Fixed
+- **@system returning empty packages** — Profile symlink (`/etc/portage/make.profile`) is now properly resolved before storing path, critical for profile inheritance where parent paths are relative to actual profile directory
+- **Multi-parent profile inheritance** — `parent` file can contain multiple lines (multiple parent profiles), now ALL parents are recursively traversed instead of just the first one
+- **Profile cycle detection** — Added visited set to prevent infinite loops in profile chain
+
+### Technical Notes
+- `profile.LoadProfile()` now uses `filepath.EvalSymlinks()` to resolve symlinks
+- `SystemSet.collectProfilePackages()` is recursive with cycle detection via visited map
+- Tested on real Gentoo WSL2: 50 system packages correctly found from full profile chain
+
+---
+
+## [0.8.3] - 2026-01-19
 
 ### SRC_URI Evaluation Hotfix
 

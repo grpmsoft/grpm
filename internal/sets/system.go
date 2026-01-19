@@ -86,34 +86,62 @@ func (s *SystemSet) readProfilePackages() ([]*pkg.Atom, error) {
 	}
 
 	// Find all packages files in profile inheritance chain
+	visited := make(map[string]bool)
+	return s.collectProfilePackages(profileDir, visited)
+}
+
+// collectProfilePackages recursively collects packages from profile and all parents.
+func (s *SystemSet) collectProfilePackages(profileDir string, visited map[string]bool) ([]*pkg.Atom, error) {
+	// Normalize path to avoid infinite loops
+	absPath, err := filepath.Abs(profileDir)
+	if err != nil {
+		absPath = profileDir
+	}
+
+	// Check for cycles
+	if visited[absPath] {
+		return nil, nil
+	}
+	visited[absPath] = true
+
 	var atoms []*pkg.Atom
 
-	// Walk up the profile chain
-	currentDir := profileDir
-	for {
-		packagesFile := filepath.Join(currentDir, "packages")
-		if fileAtoms, err := s.parsePackagesFile(packagesFile); err == nil {
-			atoms = append(atoms, fileAtoms...)
+	// Read packages from current profile directory
+	packagesFile := filepath.Join(profileDir, "packages")
+	if fileAtoms, err := s.parsePackagesFile(packagesFile); err == nil {
+		atoms = append(atoms, fileAtoms...)
+	}
+
+	// Read parent file - can contain multiple lines (multiple parents)
+	parentFile := filepath.Join(profileDir, "parent")
+	parentContent, err := os.ReadFile(parentFile)
+	if err != nil {
+		// No parent file - this is the root profile
+		return atoms, nil
+	}
+
+	// Process each parent line
+	lines := strings.Split(string(parentContent), "\n")
+	for _, line := range lines {
+		parentPath := strings.TrimSpace(line)
+
+		// Skip empty lines and comments
+		if parentPath == "" || strings.HasPrefix(parentPath, "#") {
+			continue
 		}
 
-		// Check for parent profile
-		parentFile := filepath.Join(currentDir, "parent")
-		parentContent, err := os.ReadFile(parentFile)
-		if err != nil {
-			break
-		}
-
-		// Parse parent reference
-		parentPath := strings.TrimSpace(string(parentContent))
-		if parentPath == "" {
-			break
-		}
-
-		// Resolve parent path
-		if !filepath.IsAbs(parentPath) {
-			currentDir = filepath.Clean(filepath.Join(currentDir, parentPath))
+		// Resolve parent path relative to current profile
+		var resolvedPath string
+		if filepath.IsAbs(parentPath) {
+			resolvedPath = parentPath
 		} else {
-			currentDir = parentPath
+			resolvedPath = filepath.Clean(filepath.Join(profileDir, parentPath))
+		}
+
+		// Recursively collect from parent
+		parentAtoms, err := s.collectProfilePackages(resolvedPath, visited)
+		if err == nil {
+			atoms = append(atoms, parentAtoms...)
 		}
 	}
 

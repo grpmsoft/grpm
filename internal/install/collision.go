@@ -57,6 +57,10 @@ type CollisionDetector struct {
 
 	// Protected paths that should never be overwritten
 	protectedPaths []string
+
+	// Shared paths that are expected to exist (e.g., /usr/share/info/dir)
+	// These files don't trigger CollisionFileExists errors
+	sharedPaths []string
 }
 
 // NewCollisionDetector creates a new collision detector.
@@ -72,6 +76,10 @@ func NewCollisionDetector(db *state.PackageDatabase) *CollisionDetector {
 			"/etc/mtab",
 			"/boot/vmlinuz",
 			"/boot/initramfs",
+		},
+		// Shared system files that are expected to exist and should not trigger collisions
+		sharedPaths: []string{
+			"/usr/share/info/dir", // GNU Info directory file, shared across all packages
 		},
 	}
 }
@@ -102,6 +110,11 @@ func (cd *CollisionDetector) Detect(filesToInstall []string, packageName string)
 			continue
 		}
 
+		// Skip shared system files (e.g., /usr/share/info/dir)
+		if cd.isShared(path) {
+			continue
+		}
+
 		// Check if file exists
 		if _, err := os.Stat(path); err == nil {
 			// File exists - check who owns it
@@ -128,6 +141,19 @@ func (cd *CollisionDetector) Detect(filesToInstall []string, packageName string)
 	}
 
 	return collisions, nil
+}
+
+// isShared checks if path is a shared system file.
+//
+// Shared files like /usr/share/info/dir are expected to exist and are
+// maintained by multiple packages. They should not trigger collision errors.
+func (cd *CollisionDetector) isShared(path string) bool {
+	for _, shared := range cd.sharedPaths {
+		if path == shared {
+			return true
+		}
+	}
+	return false
 }
 
 // isProtected checks if path is in protected list.
