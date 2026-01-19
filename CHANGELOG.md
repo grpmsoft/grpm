@@ -5,6 +5,36 @@ All notable changes to GRPM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.2] - 2026-01-19
+
+### Emerge Installed Package Filtering
+
+Fixes inconsistency where `resolve` correctly filters installed packages but `emerge` showed full dependency tree.
+
+### Fixed
+- **emerge ignores installed packages** — `grpm emerge -p mc` now shows 1 package instead of 93 (#61)
+
+### Added
+- **Portage-compatible flags for emerge**:
+  - `--deep`, `-D` — Traverse dependencies of already-installed packages
+  - `--with-bdeps` — Include build-time dependencies for installed packages
+  - `--emptytree`, `-e` — Assume no packages installed (full dependency tree)
+  - `--vardb` — Custom path to installed packages database
+
+### Example
+```bash
+# Show only packages to install (default, Portage-compatible)
+grpm emerge -p mc                    # 1 package
+
+# Show full dependency tree
+grpm emerge -e -p mc                 # 93 packages
+
+# Deep update with build deps
+grpm emerge -D --with-bdeps @world
+```
+
+---
+
 ## [0.9.1] - 2026-01-19
 
 ### Enterprise CLI, Dependency Filtering & Mirror Fallback
