@@ -64,6 +64,9 @@ func (a *App) runEmerge(args []string) error {
 	fs.BoolVar(onlyDeps, "o", false, "Alias for --onlydeps")
 	showInfo := fs.Bool("info", false, "Show system environment information")
 
+	// Set custom help handler
+	fs.Usage = func() { fmt.Print(GetCommandHelp("emerge")) }
+
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil // Help was requested, not an error

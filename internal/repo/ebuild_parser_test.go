@@ -100,6 +100,70 @@ func TestTokenizeDependencies(t *testing.T) {
 	}
 }
 
+// TestTokenizeDependencies_USEDepBrackets tests that parentheses inside USE dep
+// brackets [flag(+)] are NOT treated as group delimiters.
+// This is critical for atoms like: sys-fs/e2fsprogs[tools(+)]
+func TestTokenizeDependencies_USEDepBrackets(t *testing.T) {
+	tests := []struct {
+		name           string
+		input          string
+		expectedTokens []string
+	}{
+		{
+			name:           "USE dep with default enabled",
+			input:          "sys-fs/e2fsprogs[tools(+)]",
+			expectedTokens: []string{"sys-fs/e2fsprogs[tools(+)]"},
+		},
+		{
+			name:           "USE dep with default disabled",
+			input:          "dev-libs/openssl[bindist(-)]",
+			expectedTokens: []string{"dev-libs/openssl[bindist(-)]"},
+		},
+		{
+			name:           "Multiple USE deps with defaults",
+			input:          "dev-libs/glib[dbus(+),introspection(-)]",
+			expectedTokens: []string{"dev-libs/glib[dbus(+),introspection(-)]"},
+		},
+		{
+			name:           "USE conditional with USE dep brackets",
+			input:          "kernel_linux? ( sys-fs/e2fsprogs[tools(+)] )",
+			expectedTokens: []string{"kernel_linux?", "(", "sys-fs/e2fsprogs[tools(+)]", ")"},
+		},
+		{
+			name:           "Complex mc-style dependency",
+			input:          "gpm? ( sys-libs/gpm ) kernel_linux? ( sys-fs/e2fsprogs[tools(+)] )",
+			expectedTokens: []string{"gpm?", "(", "sys-libs/gpm", ")", "kernel_linux?", "(", "sys-fs/e2fsprogs[tools(+)]", ")"},
+		},
+		{
+			name:           "Nested USE deps",
+			input:          ">=dev-libs/glib-2.30.0:2[dbus(+)]",
+			expectedTokens: []string{">=dev-libs/glib-2.30.0:2[dbus(+)]"},
+		},
+		{
+			name:           "OR group with USE dep brackets",
+			input:          "|| ( dev-libs/openssl[bindist(+)] dev-libs/libressl )",
+			expectedTokens: []string{"||", "(", "dev-libs/openssl[bindist(+)]", "dev-libs/libressl", ")"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tokens := tokenizeDependencies(tt.input)
+			if len(tokens) != len(tt.expectedTokens) {
+				t.Errorf("tokenizeDependencies(%q) returned %d tokens %v, expected %d tokens %v",
+					tt.input, len(tokens), tokens, len(tt.expectedTokens), tt.expectedTokens)
+				return
+			}
+			for i, expected := range tt.expectedTokens {
+				if tokens[i] != expected {
+					t.Errorf("tokenizeDependencies(%q) token[%d] = %q, expected %q",
+						tt.input, i, tokens[i], expected)
+				}
+			}
+		})
+	}
+}
+
 // TestParseDependencyString tests full dependency string parsing
 func TestParseDependencyString(t *testing.T) {
 	parser := &EbuildParser{}

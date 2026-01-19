@@ -2,7 +2,7 @@
 
 > **GRPM Implementation Status per [Package Manager Specification](https://projects.gentoo.org/pms/)**
 >
-> **Version:** v0.9.0
+> **Version:** v0.9.1
 > **Last Updated:** 2026-01-19
 > **License:** This document follows PMS under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/)
 
@@ -595,6 +595,15 @@ EAPI 7+ cross-compilation variables (SYSROOT, ESYSROOT, BROOT) are defined but n
 - [x] Enterprise tool check refactoring (Portage-compatible BDEPEND)
 - [x] `--check-tools` opt-in flag (replaces `--skip-tool-check`)
 - [x] Tool dependencies via BDEPEND like Portage
+
+### v0.9.1 (Complete)
+
+- [x] Mirror fallback support (Portage-compatible distfile fetching)
+- [x] Enterprise CLI help formatter (professional help output)
+- [x] Shell completion (bash/zsh/fish)
+- [x] Man page generation (`grpm doc man`)
+- [x] "Did you mean?" command suggestions
+- [x] Type-safe CommandName constants
 
 ### v0.9.x (Planned)
 

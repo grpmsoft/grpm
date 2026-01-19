@@ -15,6 +15,7 @@ import (
 	"github.com/grpmsoft/grpm/internal/logging"
 	"github.com/grpmsoft/grpm/internal/mask"
 	"github.com/grpmsoft/grpm/internal/pkg"
+	"github.com/grpmsoft/grpm/internal/profile"
 	"github.com/grpmsoft/grpm/internal/repo"
 	"github.com/grpmsoft/grpm/internal/sets"
 	"github.com/grpmsoft/grpm/internal/solver"
@@ -98,35 +99,61 @@ func (a *App) Run(args []string) error {
 	case "help", "--help", "-h":
 		a.PrintUsage()
 		return nil
-	case "resolve":
+	case string(CmdResolve):
 		return a.runResolve(cmdArgs)
-	case "install":
+	case string(CmdInstall):
 		return a.runInstall(cmdArgs)
-	case "sync":
+	case string(CmdSync):
 		return a.runSync(cmdArgs)
-	case "search":
+	case string(CmdSearch):
 		return a.runSearch(cmdArgs)
-	case "info":
+	case string(CmdInfo):
 		return a.runInfo(cmdArgs)
-	case "update":
+	case string(CmdUpdate):
 		return a.runUpdate(cmdArgs)
-	case "remove", "uninstall":
+	case string(CmdRemove), string(CmdUninstall), string(CmdUnmerge):
 		return a.runRemove(cmdArgs)
-	case "build":
+	case string(CmdBuild):
 		return a.runBuild(cmdArgs)
-	case "emerge":
+	case string(CmdEmerge):
 		return a.runEmerge(cmdArgs)
-	case "depclean":
+	case string(CmdDepclean):
 		return a.runDepclean(cmdArgs)
-	case "fetch":
+	case string(CmdFetch):
 		return a.runFetch(cmdArgs)
-	case "analyze":
+	case string(CmdAnalyze):
 		return a.runAnalyze(cmdArgs)
-	case "tools":
+	case string(CmdTools):
 		return a.runTools(cmdArgs)
+	case string(CmdCompletion):
+		return a.runCompletion(cmdArgs)
+	case string(CmdDoc):
+		return a.runDoc(cmdArgs)
 	default:
-		return fmt.Errorf("unknown command: %s\nRun 'grpm help' for usage", command)
+		return a.handleUnknownCommand(command)
 	}
+}
+
+// handleUnknownCommand handles unknown commands with "Did you mean?" suggestions.
+//
+// This provides a user-friendly experience when users make typos in command names
+// by suggesting similar valid commands using Levenshtein distance.
+func (a *App) handleUnknownCommand(command string) error {
+	// Get suggestions within edit distance of 2
+	suggestions := SuggestCommand(command, GetKnownCommands(), 2)
+
+	var errMsg string
+	if len(suggestions) > 0 {
+		errMsg = fmt.Sprintf("unknown command: %s\n\nDid you mean?\n", command)
+		for _, s := range suggestions {
+			errMsg += fmt.Sprintf("    %s\n", s)
+		}
+		errMsg += "\nRun 'grpm help' for usage."
+	} else {
+		errMsg = fmt.Sprintf("unknown command: %s\nRun 'grpm help' for usage", command)
+	}
+
+	return fmt.Errorf("%s", errMsg)
 }
 
 // Close cleans up application resources
@@ -144,34 +171,10 @@ func (a *App) PrintVersion() {
 	}
 }
 
-// PrintUsage prints usage information
+// PrintUsage prints usage information using the professional help formatter.
 func (a *App) PrintUsage() {
-	fmt.Printf(`GRPM - Go Resource Package Manager v%s
-
-Usage: grpm [global-options] <command> [command-options] [arguments...]
-
-Global Options:
-  -V, --version    Show version information
-  -v, -vv, -vvv    Verbose output (levels 1-3)
-
-Commands:
-  resolve    Resolve package dependencies
-  install    Install packages (binary or source)
-  emerge     Build packages from source
-  remove     Remove installed packages
-  search     Search for packages
-  info       Show package information
-  sync       Synchronize repository
-  update     Update installed packages
-  build      Create binary packages
-  depclean   Remove unused dependencies
-  fetch      Download source files (distfiles)
-  analyze    Analyze repository coverage
-  tools      Check external tool availability
-
-Run 'grpm <command> --help' for command-specific help.
-See docs/CLI_REFERENCE.md for detailed documentation.
-`, a.version)
+	registry := NewCommandRegistry()
+	fmt.Print(FormatMainHelp(a.version, registry.All()))
 }
 
 // IsDaemonMode returns true if running via daemon
@@ -227,6 +230,14 @@ func (a *App) runResolve(args []string) error {
 	dryRun := fs.Bool("dry-run", false, "Alias for --pretend")
 	autounmask := fs.Bool("autounmask", false, "Show USE/keyword changes to resolve conflicts")
 	autounmaskWrite := fs.Bool("autounmask-write", false, "Write autounmask changes to /etc/portage")
+	// Portage-compatible dependency resolution options
+	deep := fs.Bool("deep", false, "Traverse dependencies of already-installed packages")
+	withBdeps := fs.Bool("with-bdeps", false, "Include build-time dependencies for installed packages")
+	emptyTree := fs.Bool("emptytree", false, "Assume no packages are installed (full tree)")
+	varDbPath := fs.String("vardb", "/var/db/pkg", "Path to installed packages database")
+
+	// Set custom help handler
+	fs.Usage = func() { fmt.Print(GetCommandHelp("resolve")) }
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -263,6 +274,27 @@ func (a *App) runResolve(args []string) error {
 
 	// Resolve dependencies (with mask filtering for real repositories)
 	pkgResolver := a.createResolverWithMasks(r)
+
+	// Set resolver options
+	opts := solver.ResolveOptions{
+		Deep:      *deep,
+		WithBdeps: *withBdeps,
+		EmptyTree: *emptyTree || *useMock, // Mock mode implies emptytree
+	}
+	pkgResolver.SetOptions(opts)
+
+	// Load installed packages database (skip for mock or emptytree mode)
+	if !*useMock && !*emptyTree {
+		installedDB := state.NewPackageDatabase(*varDbPath)
+		loader := state.NewVarDBLoader(*varDbPath)
+		if err := loader.LoadInto(installedDB); err != nil {
+			a.log.Verbose("Could not load installed packages: %v (treating as empty)", err)
+		} else {
+			pkgResolver.SetInstalledDB(installedDB)
+			a.log.Verbose("Loaded %d installed packages from %s", installedDB.Count(), *varDbPath)
+		}
+	}
+
 	solution, err := pkgResolver.Resolve(packages)
 	if err != nil {
 		// Wrap with user-friendly error
@@ -379,6 +411,9 @@ func (a *App) runInstall(args []string) error {
 	fs.BoolVar(ask, "a", false, "Alias for --ask")
 	autounmask := fs.Bool("autounmask", false, "Show USE/keyword changes to resolve conflicts")
 	autounmaskWrite := fs.Bool("autounmask-write", false, "Write autounmask changes to /etc/portage")
+
+	// Set custom help handler
+	fs.Usage = func() { fmt.Print(GetCommandHelp("install")) }
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -521,6 +556,7 @@ func (a *App) resolvePackageDependencies(r repo.Repository, packages []string) (
 
 // createResolverWithMasks creates a resolver with package.mask and KEYWORDS filtering.
 // For mock repositories, returns a resolver without filtering.
+// Also configures the repository with config/profile for USE flag filtering.
 func (a *App) createResolverWithMasks(r repo.Repository) *solver.PortageResolver {
 	// Check if this is a real Portage repository
 	portageRepo, isPortage := r.(*repo.PortageRepository)
@@ -537,8 +573,25 @@ func (a *App) createResolverWithMasks(r repo.Repository) *solver.PortageResolver
 		return solver.NewResolver(r)
 	}
 
-	// Determine profile path
+	// Set config on repository for USE flag filtering
+	portageRepo.SetConfig(cfg)
+
+	// Determine profile path and load profile
 	profilePath := a.detectProfilePath()
+	if profilePath != "" {
+		prof, err := profile.LoadProfile(profilePath)
+		if err != nil {
+			a.log.Verbose("Could not load profile: %v", err)
+		} else {
+			// Resolve profile inheritance chain
+			if err := prof.Resolve(); err != nil {
+				a.log.Verbose("Could not resolve profile inheritance: %v", err)
+			} else {
+				portageRepo.SetProfile(prof)
+				a.log.Verbose("Loaded profile: %s (USE filtering enabled)", prof.Name)
+			}
+		}
+	}
 
 	// Create mask manager
 	maskMgr, err := mask.NewMaskManager(cfg, portageRepo.Path, profilePath)
@@ -754,6 +807,9 @@ func (a *App) runSync(args []string) error {
 	skipGPG := fs.Bool("skip-gpg-verify", false, "Skip GPG signature verification (NOT RECOMMENDED)")
 	preferGit := fs.Bool("prefer-git", false, "Prefer Git over rsync when using auto method")
 
+	// Set custom help handler
+	fs.Usage = func() { fmt.Print(GetCommandHelp("sync")) }
+
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -875,4 +931,218 @@ func (a *App) expandPackageArgs(args []string) ([]string, error) {
 	}
 
 	return expanded, nil
+}
+
+// runCompletion handles the 'completion' command.
+//
+// Generates shell completion scripts for bash, zsh, or fish.
+//
+// Usage:
+//
+//	grpm completion bash   # Output bash completion script
+//	grpm completion zsh    # Output zsh completion script
+//	grpm completion fish   # Output fish completion script
+//
+// Installation:
+//
+//	# Bash
+//	grpm completion bash > /etc/bash_completion.d/grpm
+//
+//	# Zsh
+//	grpm completion zsh > ~/.zsh/completions/_grpm
+//
+//	# Fish
+//	grpm completion fish > ~/.config/fish/completions/grpm.fish
+func (a *App) runCompletion(args []string) error {
+	// Parse flags
+	fs := flag.NewFlagSet("completion", flag.ContinueOnError)
+
+	// Set custom help handler
+	fs.Usage = func() { fmt.Print(GetCommandHelp("completion")) }
+
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+
+	shellArgs := fs.Args()
+	if len(shellArgs) == 0 {
+		fmt.Print(GetInstallInstructions())
+		return nil
+	}
+
+	shell := shellArgs[0]
+	gen := NewCompletionGenerator()
+
+	switch shell {
+	case "bash":
+		fmt.Print(gen.GenerateBash())
+	case "zsh":
+		fmt.Print(gen.GenerateZsh())
+	case "fish":
+		fmt.Print(gen.GenerateFish())
+	default:
+		return fmt.Errorf("unsupported shell: %s\nSupported shells: bash, zsh, fish", shell)
+	}
+
+	return nil
+}
+
+// runDoc handles the 'doc' command for generating documentation.
+//
+// Subcommands:
+//
+//	grpm doc man                      # Output main man page to stdout
+//	grpm doc man emerge               # Output emerge man page to stdout
+//	grpm doc man --all --dir ./man    # Generate all man pages to directory
+//
+// This command generates documentation in various formats. Currently only
+// man page generation is supported.
+func (a *App) runDoc(args []string) error {
+	if len(args) == 0 {
+		return a.printDocUsage()
+	}
+
+	subcommand := args[0]
+	subArgs := args[1:]
+
+	switch subcommand {
+	case "man":
+		return a.runDocMan(subArgs)
+	case "help", "--help", "-h":
+		return a.printDocUsage()
+	default:
+		return fmt.Errorf("unknown doc subcommand: %s\nRun 'grpm doc --help' for usage", subcommand)
+	}
+}
+
+// printDocUsage prints usage for the doc command.
+func (a *App) printDocUsage() error {
+	fmt.Println(`grpm doc - Generate documentation
+
+Usage:
+  grpm doc <subcommand> [options]
+
+Subcommands:
+  man           Generate man pages in troff format
+
+Examples:
+  grpm doc man                      # Output main man page to stdout
+  grpm doc man emerge               # Output emerge man page to stdout
+  grpm doc man --all --dir ./man    # Generate all man pages to directory
+  grpm doc man --list               # List all available man pages
+
+Run 'grpm doc <subcommand> --help' for subcommand-specific help.`)
+	return nil
+}
+
+// runDocMan handles the 'doc man' subcommand.
+//
+// Usage:
+//
+//	grpm doc man                      # Output main man page to stdout
+//	grpm doc man emerge               # Output emerge man page to stdout
+//	grpm doc man --all --dir ./man    # Generate all man pages to directory
+//	grpm doc man --list               # List all available man pages
+func (a *App) runDocMan(args []string) error {
+	// Parse flags
+	fs := flag.NewFlagSet("doc man", flag.ContinueOnError)
+	outputDir := fs.String("dir", "", "Output directory for man pages (required with --all)")
+	generateAll := fs.Bool("all", false, "Generate all man pages")
+	listPages := fs.Bool("list", false, "List all available man pages")
+
+	fs.Usage = func() {
+		fmt.Println(`grpm doc man - Generate man pages
+
+Usage:
+  grpm doc man [options] [command]
+
+Options:
+  --all           Generate all man pages (requires --dir)
+  --dir string    Output directory for man pages
+  --list          List all available man pages
+
+Arguments:
+  command         Generate man page for specific command (e.g., emerge, resolve)
+                  If omitted, generates main grpm.1 man page
+
+Examples:
+  grpm doc man                      # Output main grpm.1 to stdout
+  grpm doc man emerge               # Output grpm-emerge.1 to stdout
+  grpm doc man --list               # List available man pages
+  grpm doc man --all --dir ./man    # Generate all pages to ./man/
+
+View generated man page:
+  grpm doc man | man -l -
+  grpm doc man emerge | man -l -`)
+	}
+
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+
+	gen := NewManPageGenerator(a.version)
+
+	// List mode
+	if *listPages {
+		fmt.Println("Available man pages:")
+		fmt.Println("  grpm.1 (main)")
+		for _, name := range gen.CommandNames() {
+			fmt.Printf("  grpm-%s.1\n", name)
+		}
+		return nil
+	}
+
+	// Generate all mode
+	if *generateAll {
+		if *outputDir == "" {
+			return fmt.Errorf("--dir is required when using --all")
+		}
+		return a.generateAllManPages(gen, *outputDir)
+	}
+
+	// Single page mode
+	cmdArgs := fs.Args()
+	if len(cmdArgs) == 0 {
+		// Generate main man page
+		fmt.Print(gen.GenerateMain())
+		return nil
+	}
+
+	// Generate specific command man page
+	cmdName := cmdArgs[0]
+	page := gen.GenerateCommand(cmdName)
+	if page == "" {
+		return fmt.Errorf("unknown command: %s\nRun 'grpm doc man --list' to see available man pages", cmdName)
+	}
+	fmt.Print(page)
+	return nil
+}
+
+// generateAllManPages generates all man pages to the specified directory.
+func (a *App) generateAllManPages(gen *ManPageGenerator, dir string) error {
+	// Ensure directory exists
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to create directory %s: %w", dir, err)
+	}
+
+	pages := gen.GenerateAll()
+	count := 0
+
+	for filename, content := range pages {
+		path := filepath.Join(dir, filename)
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			return fmt.Errorf("failed to write %s: %w", path, err)
+		}
+		a.log.Info("Generated %s", path)
+		count++
+	}
+
+	a.log.Success("Generated %d man page(s) in %s", count, dir)
+	return nil
 }

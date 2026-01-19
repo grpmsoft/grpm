@@ -1,12 +1,13 @@
 # GRPM Roadmap
 
-> **Pre-Release Testing (v0.9.0)**
+> **Pre-Release Testing (v0.9.1)**
 >
 > Rapid development complete (v0.1.0 → v0.5.0).
 > Infrastructure release complete (v0.6.0).
 > Build quality and security fixes (v0.7.x).
 > Configuration management (v0.8.0-v0.8.4).
-> **Enterprise tool handling: Portage-compatible BDEPEND (v0.9.0).**
+> Enterprise tool handling (v0.9.0).
+> **Enterprise CLI & Mirror Fallback (v0.9.1).**
 > **98.2% tree coverage verified on real Gentoo WSL2!**
 
 ---
@@ -68,7 +69,18 @@ Key insight: **Eclasses don't need Go implementations.** They are loaded dynamic
 
 ## Release History
 
-### v0.9.0 — Enterprise Tool Check (Current)
+### v0.9.1 — Enterprise CLI & Mirror Fallback (Current)
+
+**Major CLI improvements and distfile fetching enhancements:**
+
+- **Enterprise CLI Help Formatter** — Professional help output comparable to Cobra
+- **Shell Completion** — Full bash, zsh, fish support via `grpm completion`
+- **Man Page Generation** — Unix manual pages via `grpm doc man`
+- **"Did You Mean?" Suggestions** — Typo correction using Levenshtein distance
+- **Mirror Fallback** — Portage-compatible GENTOO_MIRRORS → SRC_URI fallback
+- **Type-safe CommandName constants** — Compile-time safety for CLI routing
+
+### v0.9.0 — Enterprise Tool Check
 
 **Portage-compatible tool handling following enterprise patterns:**
 

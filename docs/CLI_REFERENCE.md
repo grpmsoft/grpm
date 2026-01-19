@@ -19,6 +19,9 @@ Complete command-line reference for GRPM. See [CHANGELOG](../CHANGELOG.md) for v
   - [update](#update)
   - [analyze](#analyze)
   - [tools](#tools)
+  - [completion](#completion)
+  - [doc](#doc)
+  - [help](#help)
   - [status](#status)
   - [daemon](#daemon)
 - [Exit Codes](#exit-codes)
@@ -67,6 +70,17 @@ grpm resolve [options] <package|@set>...
 | `--mock` | Use mock repository for testing | `false` |
 | `--pretend`, `-p` | Show what would be resolved (dry-run) | `false` |
 | `--dry-run` | Alias for `--pretend` | `false` |
+| `--deep`, `-D` | Traverse dependencies of already-installed packages | `false` |
+| `--with-bdeps` | Include build-time dependencies (BDEPEND/DEPEND) for installed packages | `false` |
+| `--emptytree`, `-e` | Assume no packages are installed (full dependency tree) | `false` |
+| `--vardb <path>` | Path to installed packages database | `/var/db/pkg` |
+
+**Dependency Filtering (Portage-compatible):**
+
+By default, `grpm resolve` filters the dependency tree like Portage:
+- Already-installed packages are skipped (unless `--deep`)
+- Build-time dependencies (BDEPEND/DEPEND) for installed packages are skipped (unless `--with-bdeps`)
+- Use `--emptytree` to see the full dependency tree as if nothing was installed
 
 **Package Sets:**
 
@@ -96,6 +110,15 @@ grpm resolve --repo /var/db/repos/custom dev-lang/go
 
 # Use mock repository (testing)
 grpm resolve --mock app-misc/hello
+
+# Show full dependency tree (ignore installed packages)
+grpm resolve --emptytree app-misc/mc
+
+# Include installed packages and their dependencies
+grpm resolve --deep @world
+
+# Include build-time dependencies for installed packages
+grpm resolve --with-bdeps app-misc/hello
 ```
 
 **Output (normal):**
@@ -696,6 +719,140 @@ Missing tools (install suggestions):
 - Tools are checked in PATH automatically
 - Tool dependencies are handled via BDEPEND (like Portage)
 - Use `grpm emerge --check-tools` for optional pre-build validation
+
+---
+
+### completion
+
+Generate shell completion scripts.
+
+```
+grpm completion <shell>
+```
+
+**Supported Shells:**
+
+| Shell | Installation |
+|-------|--------------|
+| `bash` | `/etc/bash_completion.d/grpm` |
+| `zsh` | `~/.zsh/completions/_grpm` |
+| `fish` | `~/.config/fish/completions/grpm.fish` |
+
+**Examples:**
+
+```bash
+# Generate bash completion
+grpm completion bash > /etc/bash_completion.d/grpm
+
+# Generate zsh completion
+grpm completion zsh > ~/.zsh/completions/_grpm
+
+# Generate fish completion
+grpm completion fish > ~/.config/fish/completions/grpm.fish
+
+# Test without installing (bash)
+source <(grpm completion bash)
+```
+
+**Notes:**
+- Completions include all commands, options, and package names
+- Reload shell or source the file after installation
+- For zsh, ensure `compinit` is initialized
+
+---
+
+### doc
+
+Generate documentation in various formats.
+
+```
+grpm doc <subcommand> [options]
+```
+
+**Subcommands:**
+
+| Subcommand | Description |
+|------------|-------------|
+| `man` | Generate Unix man pages |
+
+#### doc man
+
+Generate man pages in troff format.
+
+```
+grpm doc man [command] [options]
+```
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--all` | Generate man pages for all commands | `false` |
+| `--dir <path>` | Output directory for generated pages | stdout |
+
+**Examples:**
+
+```bash
+# View main man page
+grpm doc man | man -l -
+
+# View command-specific man page
+grpm doc man emerge | man -l -
+
+# Generate all man pages to directory
+grpm doc man --all --dir /usr/share/man/man1
+
+# Generate specific command man page to file
+grpm doc man sync > grpm-sync.1
+```
+
+**Output Format:**
+- Main page: `grpm.1`
+- Command pages: `grpm-<command>.1`
+- Format: troff/roff (standard Unix man page format)
+
+---
+
+### help
+
+Display help information.
+
+```
+grpm help [command]
+grpm --help
+grpm <command> --help
+```
+
+**Examples:**
+
+```bash
+# Show main help
+grpm help
+grpm --help
+
+# Show command-specific help
+grpm help emerge
+grpm emerge --help
+```
+
+**Features:**
+- Combined short/long flag display (`-p, --pretend`)
+- Command descriptions with examples
+- "See also" cross-references
+- "Did you mean?" suggestions for typos
+
+**Typo Correction:**
+
+```bash
+# Mistyped command
+$ grpm emrge app-misc/hello
+unknown command: emrge
+
+Did you mean?
+    emerge
+
+Run 'grpm help' for usage.
+```
 
 ---
 

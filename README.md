@@ -46,6 +46,9 @@ GRPM (Go Resource Package Manager) is a modern source-based package manager writ
 | **Virtual Packages** | Provider selection with configuration support |
 | **Metadata Caching** | SQLite-backed cache for fast package lookups |
 | **Configuration Management** | Dynamic make.conf, repos.conf, package.use with full Portage compatibility |
+| **Shell Completion** | Bash, Zsh, Fish completion with `grpm completion` |
+| **Man Pages** | Unix manual pages with `grpm doc man` |
+| **Smart Suggestions** | "Did you mean?" typo correction for commands |
 
 ---
 
@@ -121,6 +124,32 @@ grpm tools --missing
 ```
 
 See [docs/CLI_REFERENCE.md](docs/CLI_REFERENCE.md) for complete command reference.
+
+### Shell Completion
+
+```bash
+# Bash
+grpm completion bash > /etc/bash_completion.d/grpm
+
+# Zsh
+grpm completion zsh > ~/.zsh/completions/_grpm
+
+# Fish
+grpm completion fish > ~/.config/fish/completions/grpm.fish
+```
+
+### Man Pages
+
+```bash
+# View main man page
+grpm doc man | man -l -
+
+# View command-specific page
+grpm doc man emerge | man -l -
+
+# Generate all pages to directory
+grpm doc man --all --dir /usr/share/man/man1
+```
 
 ---
 
@@ -198,11 +227,11 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidelines and [AGENTS.md
 
 ## Roadmap
 
-> **v0.9.0 Pre-Release Testing**
+> **Pre-Release Testing**
 >
 > Rapid development complete. Infrastructure, build quality, and security hardening done.
 > **98.2% tree coverage verified on real Gentoo WSL2!**
-> Now entering pre-release testing phase with enterprise-grade features.
+> See [CHANGELOG.md](CHANGELOG.md) for latest features.
 
 **Completed Features:**
 - ✅ SAT-based dependency resolution
@@ -220,6 +249,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidelines and [AGENTS.md
 - ✅ KEYWORDS filtering in solver (unkeyworded packages excluded)
 - ✅ Package sets (@world, @system, @selected) in all commands
 - ✅ Enterprise tool handling (Portage-compatible BDEPEND)
+- ✅ Portage-compatible dependency filtering (installed packages, BDEPEND/DEPEND)
 
 **v1.0.0** — Production ready after community validation (no fixed date).
 

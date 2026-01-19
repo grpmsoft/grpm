@@ -13,6 +13,31 @@ const (
 	ConstraintTypeUseFlag
 )
 
+// DepType defines the type of dependency (RDEPEND, DEPEND, BDEPEND, etc.)
+type DepType int
+
+const (
+	// DepTypeRuntime is RDEPEND - runtime dependencies.
+	// Required for the package to run at runtime.
+	DepTypeRuntime DepType = iota
+
+	// DepTypeBuild is DEPEND - build dependencies.
+	// Required for building when target root differs from build root.
+	DepTypeBuild
+
+	// DepTypeBuildHost is BDEPEND - build host dependencies (EAPI 7+).
+	// Required on the build host for cross-compilation.
+	DepTypeBuildHost
+
+	// DepTypeInstall is IDEPEND - install dependencies (EAPI 8).
+	// Required at install time on the target system.
+	DepTypeInstall
+
+	// DepTypePostMerge is PDEPEND - post-merge dependencies.
+	// Installed after the package is merged, used to break circular deps.
+	DepTypePostMerge
+)
+
 // Status represents the status of dependency resolution
 type Status int
 
@@ -60,6 +85,7 @@ type Constraint struct {
 	Required  bool               // Mandatory requirement
 	Condition string             // USE flag condition
 	OrGroupID int                // OR-group ID (0 = required, >0 = alternative)
+	DepType   DepType            // Dependency type (RDEPEND, BDEPEND, etc.)
 }
 
 func (c Constraint) String() string {

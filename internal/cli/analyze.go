@@ -46,6 +46,9 @@ func (a *App) runAnalyze(args []string) error {
 	verbose := fs.Bool("verbose", a.verbose, "Show details for each package")
 	fs.BoolVar(verbose, "v", a.verbose, "Alias for --verbose")
 
+	// Set custom help handler
+	fs.Usage = func() { fmt.Print(GetCommandHelp("analyze")) }
+
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
