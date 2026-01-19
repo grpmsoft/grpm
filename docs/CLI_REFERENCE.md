@@ -216,6 +216,7 @@ grpm emerge [options] <package|@set>...
 | `--distdir <path>` | Directory for source tarballs | `/var/cache/distfiles` |
 | `--tmpdir <path>` | Temporary build directory | `/var/tmp/portage` |
 | `--root <path>` | Install to alternative root (chroot, stage tarball) | `/` |
+| `--vardb <path>` | Path to installed packages database | `/var/db/pkg` |
 | `--mock` | Use mock repository for testing | `false` |
 | `--pretend`, `-p` | Show build plan without building | `false` |
 | `--ask`, `-a` | Ask for confirmation before building | `false` |
@@ -224,6 +225,9 @@ grpm emerge [options] <package|@set>...
 | `--test` | Run test phase (make check/test) | `false` |
 | `--onlydeps`, `-o` | Build dependencies only, skip target | `false` |
 | `--check-tools` | Perform optional pre-build tool availability check | `false` |
+| `--deep`, `-D` | Traverse dependencies of already-installed packages | `false` |
+| `--with-bdeps` | Include build-time dependencies for installed packages | `false` |
+| `--emptytree`, `-e` | Assume no packages installed (full dependency tree) | `false` |
 
 **Build Phases:**
 
@@ -264,6 +268,12 @@ sudo grpm emerge --root /mnt/gentoo app-misc/hello
 
 # Build dependencies only (Docker layer caching)
 sudo grpm emerge --onlydeps app-misc/hello
+
+# Show full dependency tree (emptytree mode)
+grpm emerge -e -p app-misc/mc
+
+# Deep update - traverse installed package dependencies
+sudo grpm emerge -D @world
 ```
 
 **Work Directory Structure:**
