@@ -677,6 +677,9 @@ func (e *Executor) ParseEbuild() error {
 		logging.Debug("[ebuild] warning: failed to parse S variable: %v", err)
 	}
 
+	// Debug: Log final S value
+	logging.Debug("[ebuild] final S value: %s", e.Env.S)
+
 	return nil
 }
 
@@ -929,6 +932,7 @@ func (e *Executor) RunPhaseFunction(phase Phase) (string, error) {
 	ctx := context.Background()
 
 	// Create interpreter with output capture
+	logging.Debug("[ebuild] RunPhaseFunction: creating interpreter with S=%s", e.Env.S)
 	interp := NewInterpreter(e.Env, &output, &output)
 
 	// Execute the combined script
