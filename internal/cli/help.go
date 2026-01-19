@@ -443,6 +443,10 @@ func (r *CommandRegistry) registerAllCommands() {
 			{Long: "test", Type: "bool", Description: "Run test phase"},
 			{Long: "check-tools", Type: "bool", Description: "Check external tool availability before build"},
 			{Long: "info", Type: "bool", Description: "Show system environment information"},
+			{Short: "D", Long: "deep", Type: "bool", Description: "Traverse dependencies of already-installed packages"},
+			{Long: "with-bdeps", Type: "bool", Description: "Include build-time dependencies for installed packages"},
+			{Short: "e", Long: "emptytree", Type: "bool", Description: "Assume no packages installed (full dependency tree)"},
+			{Long: "vardb", Type: "string", Default: "/var/db/pkg", Description: "Path to installed packages database"},
 			{Long: "mock", Type: "bool", Description: "Use mock repository for testing"},
 		},
 		Examples: []string{
@@ -452,6 +456,8 @@ func (r *CommandRegistry) registerAllCommands() {
 			"grpm emerge --root /mnt/gentoo gcc   # Build to alternate root",
 			"grpm emerge -o sys-devel/gcc         # Build gcc dependencies only",
 			"grpm emerge --info                   # Show system info",
+			"grpm emerge -e app-misc/mc           # Show full dependency tree",
+			"grpm emerge -D @world                # Deep update (include installed)",
 		},
 		SeeAlso: []string{"install", "resolve", "fetch"},
 	}

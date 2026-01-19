@@ -16,6 +16,7 @@ import (
 	"github.com/grpmsoft/grpm/internal/install"
 	"github.com/grpmsoft/grpm/internal/logging"
 	"github.com/grpmsoft/grpm/internal/pkg"
+	"github.com/grpmsoft/grpm/internal/solver"
 	"github.com/grpmsoft/grpm/internal/tools"
 )
 
@@ -64,6 +65,14 @@ func (a *App) runEmerge(args []string) error {
 	fs.BoolVar(onlyDeps, "o", false, "Alias for --onlydeps")
 	showInfo := fs.Bool("info", false, "Show system environment information")
 
+	// Dependency resolution options (Portage-compatible)
+	deep := fs.Bool("deep", false, "Traverse dependencies of already-installed packages")
+	fs.BoolVar(deep, "D", false, "Alias for --deep")
+	withBdeps := fs.Bool("with-bdeps", false, "Include build-time dependencies for installed packages")
+	emptyTree := fs.Bool("emptytree", false, "Assume no packages are installed (full dependency tree)")
+	fs.BoolVar(emptyTree, "e", false, "Alias for --emptytree")
+	varDbPath := fs.String("vardb", "/var/db/pkg", "Path to installed packages database")
+
 	// Set custom help handler
 	fs.Usage = func() { fmt.Print(GetCommandHelp("emerge")) }
 
@@ -109,9 +118,13 @@ func (a *App) runEmerge(args []string) error {
 		return err
 	}
 
-	// Resolve dependencies
+	// Resolve dependencies with Portage-compatible filtering
 	logging.Action("Calculating dependencies...")
-	solution, err := a.resolvePackageDependencies(r, packages)
+	solution, err := a.resolvePackageDependenciesWithOptions(r, packages, solver.ResolveOptions{
+		Deep:      *deep,
+		WithBdeps: *withBdeps,
+		EmptyTree: *emptyTree || *useMock, // Mock mode implies emptytree
+	}, *varDbPath, *useMock)
 	if err != nil {
 		return err
 	}

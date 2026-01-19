@@ -537,9 +537,51 @@ func (a *App) initRepository(useMock bool, repoPath string) (repo.Repository, er
 
 // resolvePackageDependencies resolves package dependencies using SAT solver.
 // For real Portage repositories, masked packages are automatically filtered.
+// NOTE: This method does NOT filter installed packages. Use resolvePackageDependenciesWithOptions
+// for Portage-compatible behavior.
 func (a *App) resolvePackageDependencies(r repo.Repository, packages []string) (map[string]*pkg.Package, error) {
 	// Create resolver with mask support if using real Portage repository
 	resolver := a.createResolverWithMasks(r)
+
+	solution, err := resolver.Resolve(packages)
+	if err != nil {
+		return nil, fmt.Errorf("dependency resolution failed: %w", err)
+	}
+
+	if len(solution) == 0 {
+		a.log.Info("No packages to install")
+		return nil, nil
+	}
+
+	return solution, nil
+}
+
+// resolvePackageDependenciesWithOptions resolves dependencies with Portage-compatible filtering.
+//
+// This method applies installed package filtering based on ResolveOptions:
+//   - By default, already-installed packages are skipped
+//   - Build-time deps (BDEPEND/DEPEND) for installed packages are skipped
+//   - Use EmptyTree=true to see full dependency tree
+//   - Use Deep=true to traverse installed package dependencies
+//   - Use WithBdeps=true to include build-time deps for installed packages
+func (a *App) resolvePackageDependenciesWithOptions(r repo.Repository, packages []string, opts solver.ResolveOptions, varDbPath string, isMock bool) (map[string]*pkg.Package, error) {
+	// Create resolver with mask support
+	resolver := a.createResolverWithMasks(r)
+
+	// Set resolver options
+	resolver.SetOptions(opts)
+
+	// Load installed packages database (skip for mock or emptytree mode)
+	if !isMock && !opts.EmptyTree {
+		installedDB := state.NewPackageDatabase(varDbPath)
+		loader := state.NewVarDBLoader(varDbPath)
+		if err := loader.LoadInto(installedDB); err != nil {
+			a.log.Verbose("Could not load installed packages: %v (treating as empty)", err)
+		} else {
+			resolver.SetInstalledDB(installedDB)
+			a.log.Verbose("Loaded %d installed packages from %s", installedDB.Count(), varDbPath)
+		}
+	}
 
 	solution, err := resolver.Resolve(packages)
 	if err != nil {
