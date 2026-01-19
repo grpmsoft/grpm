@@ -81,6 +81,16 @@ func (a *App) runEmerge(args []string) error {
 		return fmt.Errorf("no packages specified")
 	}
 
+	// Expand set references (@world, @selected, @system)
+	packages, err := a.expandPackageArgs(packages)
+	if err != nil {
+		return err
+	}
+	if len(packages) == 0 {
+		a.log.Info("No packages in specified set(s)")
+		return nil
+	}
+
 	// Validate parallel builds count
 	if *parallelBuilds < 1 {
 		*parallelBuilds = 1

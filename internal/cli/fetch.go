@@ -63,6 +63,16 @@ func (a *App) runFetch(args []string) error {
 		return fmt.Errorf("no packages specified")
 	}
 
+	// Expand set references (@world, @selected, @system)
+	packages, err := a.expandPackageArgs(packages)
+	if err != nil {
+		return err
+	}
+	if len(packages) == 0 {
+		a.log.Info("No packages in specified set(s)")
+		return nil
+	}
+
 	// Process each package
 	for _, atom := range packages {
 		if err := a.fetchPackageDistfiles(atom, *repoPath, *distDir, *pretend, *verifyOnly, cfg); err != nil {

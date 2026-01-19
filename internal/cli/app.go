@@ -16,6 +16,7 @@ import (
 	"github.com/grpmsoft/grpm/internal/mask"
 	"github.com/grpmsoft/grpm/internal/pkg"
 	"github.com/grpmsoft/grpm/internal/repo"
+	"github.com/grpmsoft/grpm/internal/sets"
 	"github.com/grpmsoft/grpm/internal/solver"
 	"github.com/grpmsoft/grpm/internal/state"
 	"github.com/grpmsoft/grpm/internal/sync"
@@ -244,6 +245,16 @@ func (a *App) runResolve(args []string) error {
 		return fmt.Errorf("no packages specified")
 	}
 
+	// Expand set references (@world, @selected, @system)
+	packages, err := a.expandPackageArgs(packages)
+	if err != nil {
+		return err
+	}
+	if len(packages) == 0 {
+		a.log.Info("No packages in specified set(s)")
+		return nil
+	}
+
 	// Initialize repository
 	r, err := a.initRepository(*useMock, *repoPath)
 	if err != nil {
@@ -384,6 +395,16 @@ func (a *App) runInstall(args []string) error {
 	packages := fs.Args()
 	if len(packages) == 0 {
 		return fmt.Errorf("no packages specified")
+	}
+
+	// Expand set references (@world, @selected, @system)
+	packages, err := a.expandPackageArgs(packages)
+	if err != nil {
+		return err
+	}
+	if len(packages) == 0 {
+		a.log.Info("No packages in specified set(s)")
+		return nil
 	}
 
 	// Create initial snapshot (unless pretend, ask, or no-snapshot mode)
@@ -807,4 +828,51 @@ func (a *App) findBinaryPackage(p *pkg.Package, binpkgDir string) string {
 	a.log.Verbose("Binary package not found for %s-%s in %s", p.Name, p.Version, binpkgDir)
 
 	return ""
+}
+
+// expandPackageArgs expands package set references (@world, @selected, @system)
+// to their constituent package atoms.
+//
+// This provides unified set expansion for all CLI commands. Set references like
+// "@world" are expanded to the list of package atoms they represent.
+//
+// Arguments can be:
+//   - Package atoms (e.g., "app-misc/hello", ">=sys-libs/zlib-1.2")
+//   - Set references (e.g., "@world", "@selected", "@system")
+//
+// Example:
+//
+//	packages := []string{"@world", "app-misc/hello"}
+//	expanded, err := a.expandPackageArgs(packages)
+//	// Returns: ["sys-apps/portage", "dev-lang/go", ..., "app-misc/hello"]
+func (a *App) expandPackageArgs(args []string) ([]string, error) {
+	// Check if any argument is a set reference
+	hasSet := false
+	for _, arg := range args {
+		if sets.IsSetReference(arg) {
+			hasSet = true
+			break
+		}
+	}
+
+	// Fast path: no sets to expand
+	if !hasSet {
+		return args, nil
+	}
+
+	// Create set expander
+	expander := sets.NewExpander("/", nil, nil)
+
+	// Expand sets
+	expanded, err := expander.Expand(args)
+	if err != nil {
+		return nil, fmt.Errorf("set expansion failed: %w", err)
+	}
+
+	// Log expansion if verbose
+	if a.verbose && len(expanded) != len(args) {
+		a.log.Verbose("Expanded %d set reference(s) to %d package(s)", len(args), len(expanded))
+	}
+
+	return expanded, nil
 }
