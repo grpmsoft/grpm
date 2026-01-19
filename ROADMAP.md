@@ -1,13 +1,13 @@
 # GRPM Roadmap
 
-> **Package Set Hotfix (v0.8.4)**
+> **Pre-Release Testing (v0.9.0)**
 >
 > Rapid development complete (v0.1.0 → v0.5.0).
 > Infrastructure release complete (v0.6.0).
 > Build quality and security fixes (v0.7.x).
-> Configuration management (v0.8.0-v0.8.3).
-> **Package set hotfix: @world, @system, @selected now work in ALL commands (v0.8.4).**
-> **98.2% tree coverage verified on real Gentoo!**
+> Configuration management (v0.8.0-v0.8.4).
+> **Enterprise tool handling: Portage-compatible BDEPEND (v0.9.0).**
+> **98.2% tree coverage verified on real Gentoo WSL2!**
 
 ---
 
@@ -68,7 +68,26 @@ Key insight: **Eclasses don't need Go implementations.** They are loaded dynamic
 
 ## Release History
 
-### v0.8.4 — Package Set Hotfix (Current)
+### v0.9.0 — Enterprise Tool Check (Current)
+
+**Portage-compatible tool handling following enterprise patterns:**
+
+- **Tool check is now opt-in** — Replaced `--skip-tool-check` (opt-out) with `--check-tools` (opt-in)
+- **BDEPEND handling** — Tool dependencies handled via BDEPEND like Portage, not pre-flight checks
+- **Default behavior** — `grpm emerge @world` works without tool check (2000+ packages resolved instantly)
+- **Breaking change** — `--skip-tool-check` flag removed, use `--check-tools` for optional pre-validation
+
+**Migration:**
+```bash
+# Before (v0.8.x):
+grpm emerge --skip-tool-check @world
+
+# After (v0.9.0):
+grpm emerge @world                    # No flag needed
+grpm emerge --check-tools @world      # Optional pre-validation
+```
+
+### v0.8.4 — Package Set Hotfix
 
 **Fix for package sets not working in resolve/install/emerge/fetch commands:**
 
@@ -246,7 +265,7 @@ Key insight: **Eclasses don't need Go implementations.** They are loaded dynamic
 ## Roadmap to v1.0.0
 
 ```
-v0.8.4 ← CURRENT (Package Set Hotfix)
+v0.9.0 ← CURRENT (Pre-Release Testing)
     │   ✅ v0.6.0: Distfile fetching, debug helpers, coverage analyzer
     │   ✅ v0.7.x: Portage compatibility, security fixes
     │   ✅ v0.8.0: Configuration management (make.conf, repos.conf, package.use)
@@ -254,11 +273,13 @@ v0.8.4 ← CURRENT (Package Set Hotfix)
     │   ✅ v0.8.2: UX improvements (emerge --info, errors)
     │   ✅ v0.8.3: SRC_URI evaluation hotfix
     │   ✅ v0.8.4: Package set hotfix (@world, @system, @selected)
-    │   ✅ 98.2% tree coverage on real Gentoo!
+    │   ✅ v0.9.0: Enterprise tool check (Portage-compatible BDEPEND)
+    │   ✅ 98.2% tree coverage on real Gentoo WSL2!
     ↓
-v0.9.0 — Pre-Release
+v0.9.x — Pre-Release Testing
     │   • Community testing program
     │   • Documentation finalization
+    │   • Bug fixes from testing
     ↓
 v1.0.0 — Production Release
          90%+ coverage verified, community sign-off
@@ -320,7 +341,25 @@ Key deliverables:
 
 ---
 
-## v0.9.0 — Pre-Release
+## v0.9.0 — Pre-Release ✅ COMPLETE
+
+**Focus:** Enterprise-grade features and Portage compatibility
+
+| Task | Priority | Status |
+|------|----------|--------|
+| Enterprise Tool Check | P1 | ✅ Done |
+| Portage-compatible BDEPEND | P1 | ✅ Done |
+| Package Sets in All Commands | P0 | ✅ Done (v0.8.4) |
+
+Key deliverables:
+- `--check-tools` flag for optional pre-build validation
+- Tool dependencies via BDEPEND (like Portage)
+- `grpm emerge @world` works without tool errors
+- Breaking change: `--skip-tool-check` removed
+
+---
+
+## v0.9.x — Pre-Release Testing
 
 **Focus:** Community validation
 
@@ -328,6 +367,7 @@ Key deliverables:
 |------|----------|
 | Community Testing Program | P0 |
 | Documentation Finalization | P1 |
+| Bug Fixes from Testing | P1 |
 
 Key deliverables:
 - Alpha/beta testing with 50+ testers
@@ -380,4 +420,4 @@ Key deliverables:
 ---
 
 *This roadmap evolves based on community feedback and project needs.*
-*Last updated: 2026-01-19 (v0.8.4 package set hotfix)*
+*Last updated: 2026-01-19 (v0.9.0 enterprise tool check)*

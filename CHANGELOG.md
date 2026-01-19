@@ -5,7 +5,40 @@ All notable changes to GRPM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] - v0.8.4
+## [0.9.0] - 2026-01-19
+
+### Enterprise Tool Check Refactoring
+
+Portage-compatible tool handling following enterprise patterns.
+
+### Changed
+- **Tool check is now opt-in** — Replaced `--skip-tool-check` (opt-out) with `--check-tools` (opt-in)
+- **BDEPEND handling** — Tool dependencies are now handled via BDEPEND like Portage, not pre-flight checks
+- **Default behavior** — `grpm emerge @world` works without tool check by default
+- **Error messages** — Updated to suggest installing missing tools instead of skipping check
+
+### Removed
+- **`--skip-tool-check` flag** — Replaced with `--check-tools` (breaking change)
+
+### Technical Notes
+- Portage relies on BDEPEND as regular dependencies, not global tool validation
+- Pre-checking tools for ALL packages (2000+ for @world) was an anti-pattern causing false positives
+- One package with `cargo.eclass` was requiring Rust for entire @world
+- Now follows enterprise pattern: BDEPEND + natural build failures + rich error reporting
+
+### Migration
+```bash
+# Before (v0.8.x):
+grpm emerge --skip-tool-check @world
+
+# After (v0.9.0):
+grpm emerge @world                    # No flag needed (default)
+grpm emerge --check-tools @world      # Optional pre-validation
+```
+
+---
+
+## [0.8.4] - 2026-01-19
 
 ### Package Set Expansion Hotfix
 

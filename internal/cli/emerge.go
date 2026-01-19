@@ -54,7 +54,7 @@ func (a *App) runEmerge(args []string) error {
 	fs.BoolVar(keepGoing, "k", false, "Alias for --keep-going")
 	keepWork := fs.Bool("keep-work", false, "Keep work directory after build")
 	enableTests := fs.Bool("test", false, "Run test phase")
-	skipToolCheck := fs.Bool("skip-tool-check", false, "Skip external tool availability check")
+	checkTools := fs.Bool("check-tools", false, "Perform optional pre-build tool availability check")
 	replace := fs.Bool("replace", false, "Replace existing package (ignore collisions with same package)")
 	fs.BoolVar(replace, "R", false, "Alias for --replace")
 	force := fs.Bool("force", false, "Force installation (skip collision checks for untracked files)")
@@ -127,8 +127,10 @@ func (a *App) runEmerge(args []string) error {
 		return nil
 	}
 
-	// Check external tool availability (unless skipped)
-	if !*skipToolCheck {
+	// Check external tool availability (opt-in)
+	// NOTE: Tool dependencies are normally handled via BDEPEND like Portage.
+	// This optional check provides early validation before build starts.
+	if *checkTools {
 		if err := a.checkBuildTools(solution, *repoPath); err != nil {
 			return err
 		}
@@ -708,7 +710,8 @@ func (a *App) checkBuildTools(solution map[string]*pkg.Package, repoPath string)
 		fmt.Println()
 		fmt.Print(tools.FormatMissingTools(result.Missing))
 		fmt.Println()
-		fmt.Println("Use --skip-tool-check to bypass this check (not recommended)")
+		fmt.Println("Install missing tools via: grpm emerge <package>")
+		fmt.Println("Or install system packages as suggested above.")
 		return fmt.Errorf("missing %d required build tool(s)", len(result.Missing))
 	}
 

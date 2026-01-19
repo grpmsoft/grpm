@@ -200,7 +200,7 @@ grpm emerge [options] <package|@set>...
 | `--keep-work` | Keep work directory after build | `false` |
 | `--test` | Run test phase (make check/test) | `false` |
 | `--onlydeps`, `-o` | Build dependencies only, skip target | `false` |
-| `--skip-tool-check` | Skip external tool validation | `false` |
+| `--check-tools` | Perform optional pre-build tool availability check | `false` |
 
 **Build Phases:**
 
@@ -694,8 +694,8 @@ Missing tools (install suggestions):
 
 **Notes:**
 - Tools are checked in PATH automatically
-- `grpm emerge` validates required tools before building
-- Use `--skip-tool-check` with emerge to bypass validation
+- Tool dependencies are handled via BDEPEND (like Portage)
+- Use `grpm emerge --check-tools` for optional pre-build validation
 
 ---
 

@@ -2,7 +2,7 @@
 
 > **GRPM Implementation Status per [Package Manager Specification](https://projects.gentoo.org/pms/)**
 >
-> **Version:** v0.8.4
+> **Version:** v0.9.0
 > **Last Updated:** 2026-01-19
 > **License:** This document follows PMS under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/)
 
@@ -590,7 +590,13 @@ EAPI 7+ cross-compilation variables (SYSROOT, ESYSROOT, BROOT) are defined but n
 - [x] Profile symlink resolution for @system (v0.8.4)
 - [x] Multi-parent profile inheritance (v0.8.4)
 
-### v0.9.0 (Planned)
+### v0.9.0 (Complete)
+
+- [x] Enterprise tool check refactoring (Portage-compatible BDEPEND)
+- [x] `--check-tools` opt-in flag (replaces `--skip-tool-check`)
+- [x] Tool dependencies via BDEPEND like Portage
+
+### v0.9.x (Planned)
 
 - [ ] `package.provided` support
 - [ ] Improved cross-compilation support
