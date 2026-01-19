@@ -149,6 +149,12 @@ func (m *Merger) checkCollisions() error {
 			return err
 		}
 
+		// Skip directories - only check files for collisions
+		// Directories like /usr, /usr/bin are expected to exist
+		if info.IsDir() {
+			return nil
+		}
+
 		// Get relative path from image directory
 		relPath, err := filepath.Rel(m.imageDir, path)
 		if err != nil {
@@ -173,6 +179,10 @@ func (m *Merger) checkCollisions() error {
 	}
 
 	if len(collisions) > 0 {
+		// Log collision details
+		for _, c := range collisions {
+			m.installer.progress("!!! %s", c.String())
+		}
 		return fmt.Errorf("found %d file collision(s)", len(collisions))
 	}
 
@@ -417,10 +427,17 @@ func (m *Merger) updateDatabase() error {
 		},
 	}
 
-	// Add to database
+	// Add to in-memory database
 	atom := fmt.Sprintf("%s-%s", m.pkg.Name, m.pkg.Version)
 	if err := m.installer.DB.Add(installedPkg); err != nil {
 		return err
+	}
+
+	// Persist to VarDB on disk
+	vardbRoot := filepath.Join(m.installer.Root, "var", "db", "pkg")
+	writer := state.NewVarDBWriter(vardbRoot)
+	if err := writer.Write(installedPkg); err != nil {
+		return fmt.Errorf("failed to persist package to VarDB: %w", err)
 	}
 
 	m.installer.progress("Added %s to database (%d files)", atom, len(m.installedFiles))
