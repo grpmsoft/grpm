@@ -7,6 +7,46 @@ import (
 	"strings"
 )
 
+// CommandName is a type-safe command identifier for GRPM CLI commands.
+//
+// Using a typed constant instead of raw strings provides:
+//   - Compile-time safety (typos caught immediately)
+//   - IDE autocompletion support
+//   - Easy refactoring (rename symbol works across codebase)
+//   - Documentation (godoc shows all commands in one place)
+type CommandName string
+
+// Command name constants for all GRPM CLI commands.
+// These constants should be used instead of string literals throughout the codebase.
+const (
+	CmdAnalyze    CommandName = "analyze"
+	CmdBuild      CommandName = "build"
+	CmdCompletion CommandName = "completion"
+	CmdDepclean   CommandName = "depclean"
+	CmdDoc        CommandName = "doc"
+	CmdEmerge     CommandName = "emerge"
+	CmdFetch      CommandName = "fetch"
+	CmdInfo       CommandName = "info"
+	CmdInstall    CommandName = "install"
+	CmdRemove     CommandName = "remove"
+	CmdResolve    CommandName = "resolve"
+	CmdSearch     CommandName = "search"
+	CmdSync       CommandName = "sync"
+	CmdTools      CommandName = "tools"
+	CmdUpdate     CommandName = "update"
+)
+
+// Command alias constants (alternative names for existing commands).
+const (
+	CmdUninstall CommandName = "uninstall" // Alias for remove
+	CmdUnmerge   CommandName = "unmerge"   // Alias for remove
+)
+
+// String returns the string representation of a CommandName.
+func (c CommandName) String() string {
+	return string(c)
+}
+
 // CommandMeta holds metadata for generating professional help output.
 //
 // This structure provides all information needed to format help text
@@ -280,21 +320,22 @@ func (h *HelpFormatter) wrapText(text string, indent int) string {
 // This provides a central location for command metadata, allowing
 // consistent help generation across the CLI.
 type CommandRegistry struct {
-	commands map[string]CommandMeta
+	commands map[CommandName]CommandMeta
 }
 
 // NewCommandRegistry creates a new command registry with all GRPM commands.
 func NewCommandRegistry() *CommandRegistry {
 	r := &CommandRegistry{
-		commands: make(map[string]CommandMeta),
+		commands: make(map[CommandName]CommandMeta),
 	}
 	r.registerAllCommands()
 	return r
 }
 
 // Get returns the CommandMeta for a command name, or nil if not found.
+// Accepts a string for backward compatibility with external callers.
 func (r *CommandRegistry) Get(name string) *CommandMeta {
-	if meta, ok := r.commands[name]; ok {
+	if meta, ok := r.commands[CommandName(name)]; ok {
 		return &meta
 	}
 	return nil
@@ -315,8 +356,8 @@ func (r *CommandRegistry) All() []CommandMeta {
 // registerAllCommands registers all GRPM CLI commands.
 func (r *CommandRegistry) registerAllCommands() {
 	// resolve command
-	r.commands["resolve"] = CommandMeta{
-		Name:  "resolve",
+	r.commands[CmdResolve] = CommandMeta{
+		Name:  CmdResolve.String(),
 		Short: "Resolve package dependencies using SAT solver",
 		Long: "Resolves package dependencies using a Boolean Satisfiability (SAT) solver. " +
 			"This command calculates the complete dependency graph for the specified packages " +
@@ -340,8 +381,8 @@ func (r *CommandRegistry) registerAllCommands() {
 	}
 
 	// install command
-	r.commands["install"] = CommandMeta{
-		Name:  "install",
+	r.commands[CmdInstall] = CommandMeta{
+		Name:  CmdInstall.String(),
 		Short: "Install packages (binary or source)",
 		Long: "Installs packages to the system. Supports both binary packages (.gpkg.tar) " +
 			"and source builds. Creates filesystem snapshots for safe rollback.",
@@ -369,8 +410,8 @@ func (r *CommandRegistry) registerAllCommands() {
 	}
 
 	// emerge command
-	r.commands["emerge"] = CommandMeta{
-		Name:  "emerge",
+	r.commands[CmdEmerge] = CommandMeta{
+		Name:  CmdEmerge.String(),
 		Short: "Build packages from source (Portage-compatible)",
 		Long: "Builds packages from source using the Portage ebuild system. " +
 			"Downloads sources, executes ebuild phases (unpack, configure, compile, install), " +
@@ -407,12 +448,12 @@ func (r *CommandRegistry) registerAllCommands() {
 	}
 
 	// remove command
-	r.commands["remove"] = CommandMeta{
-		Name:    "remove",
+	r.commands[CmdRemove] = CommandMeta{
+		Name:    CmdRemove.String(),
 		Short:   "Remove installed packages",
 		Long:    "Removes packages from the system. Use --depclean to also remove orphaned dependencies.",
 		Usage:   "remove [flags] <package>...",
-		Aliases: []string{"uninstall", "unmerge"},
+		Aliases: []string{CmdUninstall.String(), CmdUnmerge.String()},
 		Flags: []FlagMeta{
 			{Short: "p", Long: "pretend", Type: "bool", Description: "Show what would be removed (dry-run)"},
 			{Short: "c", Long: "depclean", Type: "bool", Description: "Also remove unused dependencies"},
@@ -427,8 +468,8 @@ func (r *CommandRegistry) registerAllCommands() {
 	}
 
 	// search command
-	r.commands["search"] = CommandMeta{
-		Name:  "search",
+	r.commands[CmdSearch] = CommandMeta{
+		Name:  CmdSearch.String(),
 		Short: "Search for packages in repository",
 		Long:  "Searches for packages by name in the Portage repository. Optionally searches package descriptions.",
 		Usage: "search [flags] <pattern>",
@@ -446,8 +487,8 @@ func (r *CommandRegistry) registerAllCommands() {
 	}
 
 	// info command
-	r.commands["info"] = CommandMeta{
-		Name:  "info",
+	r.commands[CmdInfo] = CommandMeta{
+		Name:  CmdInfo.String(),
 		Short: "Show detailed package information",
 		Long:  "Displays detailed information about a package including version, slot, USE flags, and dependencies.",
 		Usage: "info [flags] <package>",
@@ -464,8 +505,8 @@ func (r *CommandRegistry) registerAllCommands() {
 	}
 
 	// sync command
-	r.commands["sync"] = CommandMeta{
-		Name:  "sync",
+	r.commands[CmdSync] = CommandMeta{
+		Name:  CmdSync.String(),
 		Short: "Synchronize Portage repository",
 		Long: "Synchronizes the local Portage repository with upstream. " +
 			"Supports rsync and git methods with automatic selection. " +
@@ -487,8 +528,8 @@ func (r *CommandRegistry) registerAllCommands() {
 	}
 
 	// update command
-	r.commands["update"] = CommandMeta{
-		Name:  "update",
+	r.commands[CmdUpdate] = CommandMeta{
+		Name:  CmdUpdate.String(),
 		Short: "Update installed packages",
 		Long: "Calculates and applies updates for installed packages. " +
 			"Supports package sets (@world, @selected, @system) and individual packages.",
@@ -514,8 +555,8 @@ func (r *CommandRegistry) registerAllCommands() {
 	}
 
 	// build command
-	r.commands["build"] = CommandMeta{
-		Name:  "build",
+	r.commands[CmdBuild] = CommandMeta{
+		Name:  CmdBuild.String(),
 		Short: "Create binary packages from installed packages",
 		Long:  "Creates binary packages (.gpkg.tar or .tbz2) from installed packages for redistribution or faster reinstallation.",
 		Usage: "build [flags] <package>...",
@@ -534,8 +575,8 @@ func (r *CommandRegistry) registerAllCommands() {
 	}
 
 	// depclean command
-	r.commands["depclean"] = CommandMeta{
-		Name:  "depclean",
+	r.commands[CmdDepclean] = CommandMeta{
+		Name:  CmdDepclean.String(),
 		Short: "Remove unused dependencies (orphan packages)",
 		Long: "Identifies and removes packages that are not in the @world set " +
 			"and are not required by any @world package as a dependency. " +
@@ -557,8 +598,8 @@ func (r *CommandRegistry) registerAllCommands() {
 	}
 
 	// fetch command
-	r.commands["fetch"] = CommandMeta{
-		Name:  "fetch",
+	r.commands[CmdFetch] = CommandMeta{
+		Name:  CmdFetch.String(),
 		Short: "Download source files (distfiles) without building",
 		Long: "Downloads source tarballs for specified packages without building them. " +
 			"Useful for pre-fetching sources before offline builds or verifying source availability.",
@@ -578,8 +619,8 @@ func (r *CommandRegistry) registerAllCommands() {
 	}
 
 	// analyze command
-	r.commands["analyze"] = CommandMeta{
-		Name:  "analyze",
+	r.commands[CmdAnalyze] = CommandMeta{
+		Name:  CmdAnalyze.String(),
 		Short: "Analyze Portage repository coverage",
 		Long: "Analyzes a Portage repository and reports coverage metrics: " +
 			"total packages, packages GRPM can build, and packages blocked by missing features. " +
@@ -601,8 +642,8 @@ func (r *CommandRegistry) registerAllCommands() {
 	}
 
 	// tools command
-	r.commands["tools"] = CommandMeta{
-		Name:  "tools",
+	r.commands[CmdTools] = CommandMeta{
+		Name:  CmdTools.String(),
 		Short: "Check external tool availability",
 		Long: "Checks which external build tools are available on the system. " +
 			"Provides actionable suggestions for installing missing tools " +
@@ -627,8 +668,8 @@ func (r *CommandRegistry) registerAllCommands() {
 	}
 
 	// completion command
-	r.commands["completion"] = CommandMeta{
-		Name:  "completion",
+	r.commands[CmdCompletion] = CommandMeta{
+		Name:  CmdCompletion.String(),
 		Short: "Generate shell completion scripts",
 		Long: "Generates shell completion scripts for bash, zsh, or fish. " +
 			"The generated scripts provide command and flag completion for GRPM. " +
@@ -646,8 +687,8 @@ func (r *CommandRegistry) registerAllCommands() {
 	}
 
 	// doc command
-	r.commands["doc"] = CommandMeta{
-		Name:  "doc",
+	r.commands[CmdDoc] = CommandMeta{
+		Name:  CmdDoc.String(),
 		Short: "Generate documentation (man pages)",
 		Long: "Generates documentation for GRPM in various formats. " +
 			"Currently supports man page generation in troff/roff format. " +

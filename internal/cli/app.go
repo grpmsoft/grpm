@@ -98,35 +98,35 @@ func (a *App) Run(args []string) error {
 	case "help", "--help", "-h":
 		a.PrintUsage()
 		return nil
-	case "resolve":
+	case string(CmdResolve):
 		return a.runResolve(cmdArgs)
-	case "install":
+	case string(CmdInstall):
 		return a.runInstall(cmdArgs)
-	case "sync":
+	case string(CmdSync):
 		return a.runSync(cmdArgs)
-	case "search":
+	case string(CmdSearch):
 		return a.runSearch(cmdArgs)
-	case "info":
+	case string(CmdInfo):
 		return a.runInfo(cmdArgs)
-	case "update":
+	case string(CmdUpdate):
 		return a.runUpdate(cmdArgs)
-	case "remove", "uninstall", "unmerge":
+	case string(CmdRemove), string(CmdUninstall), string(CmdUnmerge):
 		return a.runRemove(cmdArgs)
-	case "build":
+	case string(CmdBuild):
 		return a.runBuild(cmdArgs)
-	case "emerge":
+	case string(CmdEmerge):
 		return a.runEmerge(cmdArgs)
-	case "depclean":
+	case string(CmdDepclean):
 		return a.runDepclean(cmdArgs)
-	case "fetch":
+	case string(CmdFetch):
 		return a.runFetch(cmdArgs)
-	case "analyze":
+	case string(CmdAnalyze):
 		return a.runAnalyze(cmdArgs)
-	case "tools":
+	case string(CmdTools):
 		return a.runTools(cmdArgs)
-	case "completion":
+	case string(CmdCompletion):
 		return a.runCompletion(cmdArgs)
-	case "doc":
+	case string(CmdDoc):
 		return a.runDoc(cmdArgs)
 	default:
 		return a.handleUnknownCommand(command)
