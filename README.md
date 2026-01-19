@@ -46,6 +46,9 @@ GRPM (Go Resource Package Manager) is a modern source-based package manager writ
 | **Virtual Packages** | Provider selection with configuration support |
 | **Metadata Caching** | SQLite-backed cache for fast package lookups |
 | **Configuration Management** | Dynamic make.conf, repos.conf, package.use with full Portage compatibility |
+| **Shell Completion** | Bash, Zsh, Fish completion with `grpm completion` |
+| **Man Pages** | Unix manual pages with `grpm doc man` |
+| **Smart Suggestions** | "Did you mean?" typo correction for commands |
 
 ---
 
@@ -121,6 +124,32 @@ grpm tools --missing
 ```
 
 See [docs/CLI_REFERENCE.md](docs/CLI_REFERENCE.md) for complete command reference.
+
+### Shell Completion
+
+```bash
+# Bash
+grpm completion bash > /etc/bash_completion.d/grpm
+
+# Zsh
+grpm completion zsh > ~/.zsh/completions/_grpm
+
+# Fish
+grpm completion fish > ~/.config/fish/completions/grpm.fish
+```
+
+### Man Pages
+
+```bash
+# View main man page
+grpm doc man | man -l -
+
+# View command-specific page
+grpm doc man emerge | man -l -
+
+# Generate all pages to directory
+grpm doc man --all --dir /usr/share/man/man1
+```
 
 ---
 

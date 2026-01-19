@@ -5,6 +5,45 @@ All notable changes to GRPM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.1] - 2026-01-19
+
+### Enterprise CLI & Mirror Fallback
+
+Major CLI improvements bringing enterprise-grade user experience.
+
+### Added
+- **Enterprise CLI Help Formatter** — Professional help output comparable to Cobra
+  - Combined short/long flags display (`-p, --pretend`)
+  - Command descriptions with examples
+  - "See also" cross-references
+- **Shell Completion** — Full completion support for bash, zsh, and fish
+  - `grpm completion bash > /etc/bash_completion.d/grpm`
+  - `grpm completion zsh > ~/.zsh/completions/_grpm`
+  - `grpm completion fish > ~/.config/fish/completions/grpm.fish`
+- **Man Page Generation** — Unix-style manual pages
+  - `grpm doc man` — Main grpm.1 man page
+  - `grpm doc man emerge` — Per-command man pages
+  - `grpm doc man --all --dir ./man` — Generate all pages
+- **"Did You Mean?" Suggestions** — Typo correction using Levenshtein distance
+  - `grpm emrge` suggests `emerge`
+  - `grpm serach` suggests `search`
+- **Mirror Fallback** — Portage-compatible distfile fetching
+  - GENTOO_MIRRORS tried first (reduces upstream load)
+  - SRC_URI as fallback
+  - User-friendly error with download URLs on failure
+
+### Changed
+- **Type-safe CommandName constants** — Compile-time safety for command routing
+- **Dependencies updated** — golang.org/x/crypto, modernc.org/sqlite, etc.
+
+### Technical Notes
+- `help.go` (684 lines) — CommandMeta, FlagMeta, HelpFormatter
+- `completion.go` — Shell-specific completion generators
+- `manpage.go` — Troff/roff man page generator
+- `suggest.go` — Levenshtein distance algorithm
+
+---
+
 ## [0.9.0] - 2026-01-19
 
 ### Enterprise Tool Check Refactoring
