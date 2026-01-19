@@ -9,7 +9,30 @@ import (
 	"github.com/grpmsoft/grpm/internal/mask"
 	"github.com/grpmsoft/grpm/internal/pkg"
 	"github.com/grpmsoft/grpm/internal/repo"
+	"github.com/grpmsoft/grpm/internal/state"
 )
+
+// ResolveOptions configures dependency resolution behavior.
+type ResolveOptions struct {
+	// WithBdeps includes build-time dependencies (BDEPEND) even for installed packages.
+	// By default, BDEPEND is skipped for packages already installed.
+	// Equivalent to Portage's --with-bdeps=y
+	WithBdeps bool
+
+	// Deep traverses dependencies of installed packages.
+	// Without this, only dependencies of packages to be installed are followed.
+	// Equivalent to Portage's --deep
+	Deep bool
+
+	// NewUse reinstalls packages if USE flags have changed.
+	// Equivalent to Portage's --newuse
+	NewUse bool
+
+	// EmptyTree assumes no packages are installed.
+	// Resolves the complete dependency tree from scratch.
+	// Equivalent to Portage's --emptytree
+	EmptyTree bool
+}
 
 // PortageResolver resolves package dependencies using SAT solving.
 // It supports package masking and keyword filtering.
@@ -17,6 +40,13 @@ type PortageResolver struct {
 	repo           repo.Repository
 	maskManager    *mask.MaskManager
 	acceptKeywords []string // ACCEPT_KEYWORDS from make.conf (e.g., ["amd64", "~amd64"])
+
+	// installedDB is the database of installed packages.
+	// When set, resolver skips dependencies that are already satisfied.
+	installedDB *state.PackageDatabase
+
+	// options configures resolution behavior.
+	options ResolveOptions
 }
 
 // NewResolver creates a new resolver without mask/keyword support.
@@ -46,6 +76,31 @@ func NewResolverWithFilters(r repo.Repository, maskMgr *mask.MaskManager, accept
 	}
 }
 
+// SetInstalledDB sets the installed packages database.
+//
+// When set, the resolver will skip dependencies that are already satisfied
+// by installed packages. This matches Portage's behavior of only showing
+// packages that need to be installed.
+//
+// Without this, the resolver returns the complete transitive dependency tree.
+func (r *PortageResolver) SetInstalledDB(db *state.PackageDatabase) {
+	r.installedDB = db
+}
+
+// SetOptions sets the resolution options.
+func (r *PortageResolver) SetOptions(opts ResolveOptions) {
+	r.options = opts
+}
+
+// isInstalled checks if a package is already installed.
+// Returns false if no installed database is set or EmptyTree is enabled.
+func (r *PortageResolver) isInstalled(name string) bool {
+	if r.installedDB == nil || r.options.EmptyTree {
+		return false
+	}
+	return r.installedDB.IsInstalled(name)
+}
+
 // groupDependenciesByOrGroupID groups dependencies by their OrGroupID
 // Returns required dependencies (OrGroupID=0) and OR-groups (OrGroupID>0)
 func groupDependenciesByOrGroupID(deps []pkg.Constraint) (requiredDeps []pkg.Constraint, orGroups map[int][]pkg.Constraint) {
@@ -60,6 +115,13 @@ func groupDependenciesByOrGroupID(deps []pkg.Constraint) (requiredDeps []pkg.Con
 	return
 }
 
+// isBuildTimeDep returns true if the dependency is a build-time dependency.
+// Build-time deps: DEPEND (DepTypeBuild), BDEPEND (DepTypeBuildHost).
+func isBuildTimeDep(depType pkg.DepType) bool {
+	return depType == pkg.DepTypeBuild || depType == pkg.DepTypeBuildHost
+}
+
+//nolint:gocyclo // Complexity inherent to Portage-compatible dependency resolution algorithm
 func (r *PortageResolver) collectDependencies(p *pkg.Package, allPackages map[string]*pkg.Package) error {
 	if _, exists := allPackages[p.Name]; exists {
 		return nil // Already processed
@@ -68,6 +130,17 @@ func (r *PortageResolver) collectDependencies(p *pkg.Package, allPackages map[st
 	// Check if this package is masked
 	if r.isMasked(p) {
 		logging.Debug("Skipping masked package: %s-%s", p.Name, p.Version)
+		return nil
+	}
+
+	// Check if this package is already installed
+	pkgInstalled := r.isInstalled(p.Name)
+	if pkgInstalled && !r.options.Deep {
+		// Package is installed and we're not doing a deep traversal.
+		// Still add to allPackages for SAT solving, but skip dependency collection.
+		copyPkg := *p
+		allPackages[p.Name] = &copyPkg
+		logging.Debug("Package %s is installed, skipping dependency traversal (use --deep to include)", p.Name)
 		return nil
 	}
 
@@ -80,6 +153,20 @@ func (r *PortageResolver) collectDependencies(p *pkg.Package, allPackages map[st
 
 	// Process REQUIRED dependencies only
 	for _, dep := range requiredDeps {
+		// Filter build-time dependencies for installed packages
+		// Portage ignores BDEPEND/DEPEND for already-built packages unless --with-bdeps=y
+		if pkgInstalled && isBuildTimeDep(dep.DepType) && !r.options.WithBdeps {
+			logging.Debug("Skipping build-time dep %s for installed package %s (use --with-bdeps to include)",
+				dep.Name, p.Name)
+			continue
+		}
+
+		// Check if dependency is already installed
+		if r.isInstalled(dep.Name) && !r.options.Deep {
+			logging.Debug("Dependency %s is already installed, skipping", dep.Name)
+			continue
+		}
+
 		// Use loadUnmaskedPackage to get the best unmasked version
 		depPkg, err := r.loadUnmaskedPackage(dep.Name)
 		if err != nil {
@@ -98,6 +185,14 @@ func (r *PortageResolver) collectDependencies(p *pkg.Package, allPackages map[st
 	for groupID, alternatives := range orGroups {
 		logging.Debug("OR-group %d for %s: %d alternatives", groupID, p.Name, len(alternatives))
 		for _, alt := range alternatives {
+			// Skip build-time deps for installed packages
+			if pkgInstalled && isBuildTimeDep(alt.DepType) && !r.options.WithBdeps {
+				continue
+			}
+			// Skip installed alternatives unless doing deep resolution
+			if r.isInstalled(alt.Name) && !r.options.Deep {
+				continue
+			}
 			// Just ensure the alternative package exists in the repository
 			// Use loadUnmaskedPackage to filter masked alternatives
 			if _, err := r.loadUnmaskedPackage(alt.Name); err != nil {

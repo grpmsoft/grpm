@@ -227,11 +227,11 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidelines and [AGENTS.md
 
 ## Roadmap
 
-> **v0.9.0 Pre-Release Testing**
+> **Pre-Release Testing**
 >
 > Rapid development complete. Infrastructure, build quality, and security hardening done.
 > **98.2% tree coverage verified on real Gentoo WSL2!**
-> Now entering pre-release testing phase with enterprise-grade features.
+> See [CHANGELOG.md](CHANGELOG.md) for latest features.
 
 **Completed Features:**
 - ✅ SAT-based dependency resolution
@@ -249,6 +249,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidelines and [AGENTS.md
 - ✅ KEYWORDS filtering in solver (unkeyworded packages excluded)
 - ✅ Package sets (@world, @system, @selected) in all commands
 - ✅ Enterprise tool handling (Portage-compatible BDEPEND)
+- ✅ Portage-compatible dependency filtering (installed packages, BDEPEND/DEPEND)
 
 **v1.0.0** — Production ready after community validation (no fixed date).
 

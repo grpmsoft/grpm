@@ -361,13 +361,20 @@ func (r *CommandRegistry) registerAllCommands() {
 		Short: "Resolve package dependencies using SAT solver",
 		Long: "Resolves package dependencies using a Boolean Satisfiability (SAT) solver. " +
 			"This command calculates the complete dependency graph for the specified packages " +
-			"without installing them.",
+			"without installing them.\n\n" +
+			"By default, only shows packages that need to be installed (skips already-installed " +
+			"dependencies). Use --deep to traverse all dependencies, --with-bdeps to include " +
+			"build-time dependencies for installed packages, or --emptytree to show full tree.",
 		Usage: "resolve [flags] <package>...",
 		Flags: []FlagMeta{
 			{Short: "p", Long: "pretend", Type: "bool", Description: "Show what would be done (dry-run)"},
 			{Long: "dry-run", Type: "bool", Description: "Alias for --pretend", Hidden: true},
 			{Long: "repo", Type: "string", Default: "/var/db/repos/gentoo", Description: "Path to Portage repository"},
 			{Long: "mock", Type: "bool", Description: "Use mock repository for testing"},
+			{Long: "deep", Type: "bool", Description: "Traverse dependencies of already-installed packages"},
+			{Long: "with-bdeps", Type: "bool", Description: "Include build-time dependencies for installed packages"},
+			{Long: "emptytree", Type: "bool", Description: "Assume no packages installed (show full dependency tree)"},
+			{Long: "vardb", Type: "string", Default: "/var/db/pkg", Description: "Path to installed packages database"},
 			{Long: "autounmask", Type: "bool", Description: "Show USE/keyword changes to resolve conflicts"},
 			{Long: "autounmask-write", Type: "bool", Description: "Write autounmask changes to /etc/portage"},
 		},
@@ -375,6 +382,8 @@ func (r *CommandRegistry) registerAllCommands() {
 			"grpm resolve app-misc/hello          # Resolve single package",
 			"grpm resolve -p sys-libs/zlib        # Pretend mode (show dependencies)",
 			"grpm resolve @world                  # Resolve all world packages",
+			"grpm resolve --emptytree mc          # Show full dependency tree",
+			"grpm resolve --deep sys-libs/glib    # Include installed deps",
 			"grpm resolve --autounmask gcc        # Show USE changes needed",
 		},
 		SeeAlso: []string{"install", "emerge"},

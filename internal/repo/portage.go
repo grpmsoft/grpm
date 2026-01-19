@@ -37,6 +37,24 @@ var (
 	portageKeywordsRe = coregex.MustCompile(`(?m)^\s*KEYWORDS="([^"]*)"`)
 )
 
+// convertDepType converts ebuild_parser.DependencyType to pkg.DepType.
+func convertDepType(depType DependencyType) pkg.DepType {
+	switch depType {
+	case DepTypeRuntime:
+		return pkg.DepTypeRuntime
+	case DepTypeBuild:
+		return pkg.DepTypeBuild
+	case DepTypeBuildtime:
+		return pkg.DepTypeBuildHost
+	case DepTypeInstall:
+		return pkg.DepTypeInstall
+	case DepTypePostMerge:
+		return pkg.DepTypePostMerge
+	default:
+		return pkg.DepTypeRuntime
+	}
+}
+
 type PortageRepository struct {
 	Path    string
 	cache   sync.Map         // Cache for parsed ebuilds: path -> *pkg.Package
@@ -264,6 +282,7 @@ func (pr *PortageRepository) LoadPackageVersion(name, version string) (*pkg.Pack
 	return pr.parseEbuild(name, ebuildPath)
 }
 
+//nolint:gocyclo // Complexity inherent to ebuild format parsing (IUSE, SLOT, deps, USE filtering)
 func (pr *PortageRepository) parseEbuild(name, path string) (*pkg.Package, error) {
 	// Check cache first
 	if cached, ok := pr.cache.Load(path); ok {
@@ -365,7 +384,8 @@ func (pr *PortageRepository) parseEbuild(name, path string) (*pkg.Package, error
 			}
 
 			constraint := pd.Constraint
-			constraint.OrGroupID = pd.OrGroupID // Copy OrGroupID
+			constraint.OrGroupID = pd.OrGroupID             // Copy OrGroupID
+			constraint.DepType = convertDepType(pd.DepType) // Copy DepType
 			p.Deps = append(p.Deps, constraint)
 			realDepsCount++
 		}
@@ -670,6 +690,7 @@ func (pr *PortageRepository) loadDependenciesWithEclass(ebuildPath string, p *pk
 
 			constraint := pd.Constraint
 			constraint.OrGroupID = pd.OrGroupID
+			constraint.DepType = convertDepType(pd.DepType) // Copy DepType
 			allDeps = append(allDeps, constraint)
 		}
 	}

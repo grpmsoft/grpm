@@ -70,6 +70,17 @@ grpm resolve [options] <package|@set>...
 | `--mock` | Use mock repository for testing | `false` |
 | `--pretend`, `-p` | Show what would be resolved (dry-run) | `false` |
 | `--dry-run` | Alias for `--pretend` | `false` |
+| `--deep`, `-D` | Traverse dependencies of already-installed packages | `false` |
+| `--with-bdeps` | Include build-time dependencies (BDEPEND/DEPEND) for installed packages | `false` |
+| `--emptytree`, `-e` | Assume no packages are installed (full dependency tree) | `false` |
+| `--vardb <path>` | Path to installed packages database | `/var/db/pkg` |
+
+**Dependency Filtering (Portage-compatible):**
+
+By default, `grpm resolve` filters the dependency tree like Portage:
+- Already-installed packages are skipped (unless `--deep`)
+- Build-time dependencies (BDEPEND/DEPEND) for installed packages are skipped (unless `--with-bdeps`)
+- Use `--emptytree` to see the full dependency tree as if nothing was installed
 
 **Package Sets:**
 
@@ -99,6 +110,15 @@ grpm resolve --repo /var/db/repos/custom dev-lang/go
 
 # Use mock repository (testing)
 grpm resolve --mock app-misc/hello
+
+# Show full dependency tree (ignore installed packages)
+grpm resolve --emptytree app-misc/mc
+
+# Include installed packages and their dependencies
+grpm resolve --deep @world
+
+# Include build-time dependencies for installed packages
+grpm resolve --with-bdeps app-misc/hello
 ```
 
 **Output (normal):**

@@ -7,11 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.9.1] - 2026-01-19
 
-### Enterprise CLI & Mirror Fallback
+### Enterprise CLI, Dependency Filtering & Mirror Fallback
 
-Major CLI improvements bringing enterprise-grade user experience.
+Major release combining CLI improvements, Portage-compatible dependency filtering, and mirror fallback.
+
+### Fixed
+- **Critical: Dependency explosion** — `grpm resolve app-misc/mc` now shows 1 package instead of 2094
+  - Root cause: USE-conditional dependencies were included regardless of USE flag state
+  - Root cause: All dependencies were traversed even if already installed
+  - Root cause: BDEPEND was included for packages already built
 
 ### Added
+- **Portage-compatible resolution options**:
+  - `--deep` — Traverse dependencies of already-installed packages
+  - `--with-bdeps` — Include build-time dependencies for installed packages
+  - `--emptytree` — Show full dependency tree (assume nothing installed)
+  - `--vardb` — Custom path to installed packages database
+- **DepType tracking** — Constraints now carry dependency type (RDEPEND, BDEPEND, DEPEND, IDEPEND, PDEPEND)
+- **VarDB integration** — Resolver loads `/var/db/pkg` to check installed packages
 - **Enterprise CLI Help Formatter** — Professional help output comparable to Cobra
   - Combined short/long flags display (`-p, --pretend`)
   - Command descriptions with examples
@@ -25,22 +38,21 @@ Major CLI improvements bringing enterprise-grade user experience.
   - `grpm doc man emerge` — Per-command man pages
   - `grpm doc man --all --dir ./man` — Generate all pages
 - **"Did You Mean?" Suggestions** — Typo correction using Levenshtein distance
-  - `grpm emrge` suggests `emerge`
-  - `grpm serach` suggests `search`
-- **Mirror Fallback** — Portage-compatible distfile fetching
-  - GENTOO_MIRRORS tried first (reduces upstream load)
-  - SRC_URI as fallback
-  - User-friendly error with download URLs on failure
+- **Mirror Fallback** — Portage-compatible distfile fetching (GENTOO_MIRRORS → SRC_URI)
 
 ### Changed
+- **Default behavior** — Resolver now only shows packages that need to be installed
+- **Mock mode** — Automatically implies `--emptytree` (no installed packages)
 - **Type-safe CommandName constants** — Compile-time safety for command routing
-- **Dependencies updated** — golang.org/x/crypto, modernc.org/sqlite, etc.
 
-### Technical Notes
-- `help.go` (684 lines) — CommandMeta, FlagMeta, HelpFormatter
-- `completion.go` — Shell-specific completion generators
-- `manpage.go` — Troff/roff man page generator
-- `suggest.go` — Levenshtein distance algorithm
+### Example
+```bash
+# Show only packages to install (Portage-compatible default)
+grpm resolve app-misc/mc           # 1 package (mc)
+
+# Show full dependency tree (for analysis)
+grpm resolve --emptytree app-misc/mc  # 95 packages
+```
 
 ---
 

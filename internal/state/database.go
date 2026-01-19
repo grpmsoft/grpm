@@ -343,6 +343,49 @@ func (db *PackageDatabase) Has(atom string) bool {
 	return exists
 }
 
+// IsInstalled checks if any version of a package is installed.
+//
+// The name parameter should be "category/package" format (e.g., "sys-libs/glib").
+// This is different from Has() which requires the full atom with version.
+//
+// This operation is thread-safe.
+//
+// Example:
+//
+//	if db.IsInstalled("sys-libs/glib") {
+//	    fmt.Println("glib is installed")
+//	}
+func (db *PackageDatabase) IsInstalled(name string) bool {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	for _, pkg := range db.packages {
+		if pkg.Package != nil && pkg.Package.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// GetInstalledVersion returns the installed version of a package.
+//
+// The name parameter should be "category/package" format (e.g., "sys-libs/glib").
+// Returns the InstalledPackage if found, nil otherwise.
+// If multiple versions are installed (different slots), returns the first one found.
+//
+// This operation is thread-safe.
+func (db *PackageDatabase) GetInstalledVersion(name string) *InstalledPackage {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	for _, pkg := range db.packages {
+		if pkg.Package != nil && pkg.Package.Name == name {
+			return pkg
+		}
+	}
+	return nil
+}
+
 // Clear removes all packages from the database.
 //
 // This operation is thread-safe.

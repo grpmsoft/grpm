@@ -230,6 +230,11 @@ func (a *App) runResolve(args []string) error {
 	dryRun := fs.Bool("dry-run", false, "Alias for --pretend")
 	autounmask := fs.Bool("autounmask", false, "Show USE/keyword changes to resolve conflicts")
 	autounmaskWrite := fs.Bool("autounmask-write", false, "Write autounmask changes to /etc/portage")
+	// Portage-compatible dependency resolution options
+	deep := fs.Bool("deep", false, "Traverse dependencies of already-installed packages")
+	withBdeps := fs.Bool("with-bdeps", false, "Include build-time dependencies for installed packages")
+	emptyTree := fs.Bool("emptytree", false, "Assume no packages are installed (full tree)")
+	varDbPath := fs.String("vardb", "/var/db/pkg", "Path to installed packages database")
 
 	// Set custom help handler
 	fs.Usage = func() { fmt.Print(GetCommandHelp("resolve")) }
@@ -269,6 +274,27 @@ func (a *App) runResolve(args []string) error {
 
 	// Resolve dependencies (with mask filtering for real repositories)
 	pkgResolver := a.createResolverWithMasks(r)
+
+	// Set resolver options
+	opts := solver.ResolveOptions{
+		Deep:      *deep,
+		WithBdeps: *withBdeps,
+		EmptyTree: *emptyTree || *useMock, // Mock mode implies emptytree
+	}
+	pkgResolver.SetOptions(opts)
+
+	// Load installed packages database (skip for mock or emptytree mode)
+	if !*useMock && !*emptyTree {
+		installedDB := state.NewPackageDatabase(*varDbPath)
+		loader := state.NewVarDBLoader(*varDbPath)
+		if err := loader.LoadInto(installedDB); err != nil {
+			a.log.Verbose("Could not load installed packages: %v (treating as empty)", err)
+		} else {
+			pkgResolver.SetInstalledDB(installedDB)
+			a.log.Verbose("Loaded %d installed packages from %s", installedDB.Count(), *varDbPath)
+		}
+	}
+
 	solution, err := pkgResolver.Resolve(packages)
 	if err != nil {
 		// Wrap with user-friendly error
