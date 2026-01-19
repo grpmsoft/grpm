@@ -312,3 +312,23 @@ func TestExpandBashParameters_RealWorldCases(t *testing.T) {
 		})
 	}
 }
+
+func TestParseSVariable_TreePattern(t *testing.T) {
+	vars := map[string]string{
+		"P":       "tree-2.2.1",
+		"PN":      "tree",
+		"PV":      "2.2.1",
+		"WORKDIR": "/var/tmp/portage/app-text/tree-2.2.1/work",
+	}
+
+	content := `EAPI=8
+inherit toolchain-funcs
+S="${WORKDIR}/unix-${P}"
+`
+
+	expected := "/var/tmp/portage/app-text/tree-2.2.1/work/unix-tree-2.2.1"
+	result := ParseSVariable(content, vars)
+	if result != expected {
+		t.Errorf("ParseSVariable() = %q, want %q", result, expected)
+	}
+}

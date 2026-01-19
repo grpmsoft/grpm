@@ -7,15 +7,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
-	"strings"
 
 	"github.com/grpmsoft/grpm/internal/config"
+	"github.com/grpmsoft/grpm/internal/distfile"
 	"github.com/grpmsoft/grpm/internal/ebuild"
 	"github.com/grpmsoft/grpm/internal/fetch"
 	"github.com/grpmsoft/grpm/internal/logging"
 	"github.com/grpmsoft/grpm/internal/pkg"
-	"github.com/grpmsoft/grpm/internal/repo"
 )
 
 // runFetch handles the 'fetch' command - downloads source tarballs for packages.
@@ -88,42 +86,35 @@ func (a *App) runFetch(args []string) error {
 
 // fetchPackageDistfiles fetches distfiles for a single package.
 //
-// This function properly handles SRC_URI parsing to get explicit URLs
-// for distfiles that are not available on Gentoo mirrors (e.g., .asc signature files).
-//
-// For packages with dynamic SRC_URI generation (e.g., gcc via toolchain.eclass),
-// we use EvaluateSrcURI to execute the ebuild with eclasses and get the
-// actual version-specific distfile list.
+// Uses distfile.Service for unified SRC_URI resolution (single source of truth).
 func (a *App) fetchPackageDistfiles(atom, repoPath, distDir string, pretend, verifyOnly bool, cfg *config.Config) error {
 	logging.Action("Fetching distfiles for %s", atom)
 
-	// Parse atom to get category/package and optional version
-	parsedAtom, err := pkg.ParseAtom(atom)
-	if err != nil {
-		return fmt.Errorf("invalid package atom %q: %w", atom, err)
-	}
+	// Use unified distfile service
+	evaluator := ebuild.NewSrcURIEvaluator()
+	svc := distfile.NewService(repoPath, evaluator)
+	ctx := context.Background()
 
-	catPkg := parsedAtom.CP()
-
-	// Find and parse Manifest
-	manifestPath := fetch.ManifestPath(repoPath, catPkg)
-	manifest, err := fetch.ParseManifest(manifestPath)
+	distfiles, err := svc.ResolveDistfilesForAtom(ctx, atom)
 	if err != nil {
-		return fmt.Errorf("failed to parse Manifest for %s: %w", catPkg, err)
-	}
+		logging.Warn("could not resolve distfiles: %v", err)
+		logging.Info("  Falling back to manifest-only downloads")
 
-	// Parse SRC_URI from ebuild to get explicit URLs for distfiles
-	// If a specific version is requested, use that; otherwise find best version
-	distfiles, err := a.getDistfilesWithURIs(catPkg, repoPath, manifest, parsedAtom)
-	if err != nil {
-		// Fallback to manifest-only distfiles (without explicit URIs)
-		logging.Warn("could not parse SRC_URI: %v", err)
-		logging.Info("  Falling back to mirror-only downloads")
+		// Fallback: parse manifest directly
+		parsedAtom, parseErr := pkg.ParseAtom(atom)
+		if parseErr != nil {
+			return fmt.Errorf("invalid package atom %q: %w", atom, parseErr)
+		}
+		manifestPath := fetch.ManifestPath(repoPath, parsedAtom.CP())
+		manifest, manifestErr := fetch.ParseManifest(manifestPath)
+		if manifestErr != nil {
+			return fmt.Errorf("failed to parse Manifest: %w", manifestErr)
+		}
 		distfiles = manifest.GetDistfiles()
 	}
 
 	if len(distfiles) == 0 {
-		logging.Info("  No distfiles for %s", catPkg)
+		logging.Info("  No distfiles for %s", atom)
 		return nil
 	}
 
@@ -151,236 +142,6 @@ func (a *App) fetchPackageDistfiles(atom, repoPath, distDir string, pretend, ver
 
 	// Download mode
 	return a.downloadDistfiles(distfiles, distDir, cfg)
-}
-
-// getDistfilesWithURIs parses SRC_URI from the specified (or best) ebuild version
-// and returns distfiles with explicit URLs where available.
-//
-// This function handles two cases:
-//  1. Simple packages: SRC_URI is parsed directly from ebuild text
-//  2. Complex packages (e.g., gcc): SRC_URI is evaluated by sourcing the ebuild
-//     with eclasses to execute dynamic generation functions
-//
-// For versioned atoms (e.g., =sys-devel/gcc-13.4.1_p20250807), we use the
-// specific version's ebuild. Otherwise, we use the best (highest) version.
-//
-// This is essential for:
-//   - Files like .asc signatures that have explicit upstream URLs
-//   - Packages using eclasses that generate SRC_URI dynamically (toolchain.eclass)
-func (a *App) getDistfilesWithURIs(catPkg, repoPath string, manifest *fetch.Manifest, atom *pkg.Atom) ([]fetch.Distfile, error) {
-	// Split category/package
-	parts := strings.SplitN(catPkg, "/", 2)
-	if len(parts) != 2 {
-		return nil, fmt.Errorf("invalid package format: %s", catPkg)
-	}
-	category, pkgName := parts[0], parts[1]
-
-	// Determine which version to use
-	var ebuildPath, version string
-	var err error
-
-	if atom != nil && atom.HasVersion() {
-		// Use the specific version from the atom
-		version = atom.Version
-		ebuildPath = filepath.Join(repoPath, catPkg, fmt.Sprintf("%s-%s.ebuild", pkgName, version))
-
-		// Verify the ebuild exists
-		if _, err := os.Stat(ebuildPath); err != nil {
-			return nil, fmt.Errorf("ebuild not found for version %s: %w", version, err)
-		}
-		logging.Debug("  Using specified version: %s", version)
-	} else {
-		// Find best ebuild version
-		pkgDir := filepath.Join(repoPath, catPkg)
-		ebuildPath, version, err = a.findBestEbuild(pkgDir, pkgName)
-		if err != nil {
-			return nil, fmt.Errorf("finding ebuild: %w", err)
-		}
-	}
-
-	// First, try evaluating SRC_URI via the interpreter (handles dynamic generation)
-	srcURI, evalErr := a.evaluateSrcURIWithEclasses(ebuildPath, repoPath, category, pkgName, version)
-	if evalErr != nil {
-		logging.Debug("  SRC_URI evaluation failed: %v, falling back to regex parsing", evalErr)
-	}
-
-	// If evaluation failed or returned empty, fall back to regex parsing
-	if srcURI == "" {
-		srcURI, err = a.extractSrcURISimple(ebuildPath, category, pkgName, version)
-		if err != nil {
-			return nil, fmt.Errorf("extracting SRC_URI: %w", err)
-		}
-	}
-
-	if srcURI == "" {
-		// No SRC_URI - return manifest distfiles without URIs
-		return manifest.GetDistfiles(), nil
-	}
-
-	// Build variable map for SRC_URI parsing
-	meta := repo.NewPackageMetadata(category, pkgName, version)
-	vars := map[string]string{
-		"P":        meta.P,
-		"PN":       meta.PN,
-		"PV":       meta.PV,
-		"PR":       meta.PR,
-		"PVR":      meta.PVR,
-		"PF":       meta.PF,
-		"CATEGORY": meta.Category,
-	}
-
-	// Parse SRC_URI entries (no USE flag filtering for fetch - get all files)
-	entries, err := repo.ParseSrcURI(srcURI, nil, vars)
-	if err != nil {
-		return nil, fmt.Errorf("parsing SRC_URI: %w", err)
-	}
-
-	// Load third-party mirrors for mirror:// URL expansion
-	thirdPartyMirrors := fetch.ParseThirdPartyMirrors(repoPath)
-
-	// Build set of filenames from SRC_URI for filtering
-	srcURIFiles := make(map[string]bool)
-	// Build map of filename -> URIs from SRC_URI entries
-	uriMap := make(map[string][]string)
-	for _, entry := range entries {
-		srcURIFiles[entry.Filename] = true
-		if entry.URL != "" {
-			// Expand mirror:// URLs (e.g., mirror://gnu/... -> https://ftp.gnu.org/gnu/...)
-			expandedURIs := thirdPartyMirrors.ExpandMirrorURL(entry.URL)
-			uriMap[entry.Filename] = append(uriMap[entry.Filename], expandedURIs...)
-		}
-	}
-
-	// Create distfiles with checksums from manifest and URIs from SRC_URI
-	// IMPORTANT: Only include files that are in the evaluated SRC_URI
-	// This filters out files from other versions in the Manifest
-	var distfiles []fetch.Distfile
-	for _, entry := range manifest.DistFiles {
-		// Skip files not in this version's SRC_URI
-		if !srcURIFiles[entry.Filename] {
-			continue
-		}
-
-		df := fetch.NewDistfile(entry.Filename, entry.Size, entry.Checksums)
-
-		// Add explicit URIs if available
-		if uris, ok := uriMap[entry.Filename]; ok && len(uris) > 0 {
-			df = df.WithURIs(uris)
-		}
-
-		distfiles = append(distfiles, df)
-	}
-
-	return distfiles, nil
-}
-
-// evaluateSrcURIWithEclasses executes the ebuild with eclass support
-// to evaluate dynamically generated SRC_URI values.
-//
-// This is necessary for packages like gcc that use toolchain.eclass's
-// get_gcc_src_uri() function to generate SRC_URI based on version variables.
-func (a *App) evaluateSrcURIWithEclasses(ebuildPath, repoPath, category, pkgName, version string) (string, error) {
-	// Create a minimal package info for the evaluator
-	pkgInfo := &pkg.Package{
-		Name:    category + "/" + pkgName,
-		Version: version,
-		Slot:    pkg.NewSlot("0", ""),
-	}
-
-	// Use the metadata evaluator to source the ebuild with eclasses
-	ctx := context.Background()
-	srcURI, err := ebuild.EvaluateSrcURI(ctx, ebuildPath, repoPath, pkgInfo)
-	if err != nil {
-		return "", fmt.Errorf("evaluating SRC_URI: %w", err)
-	}
-
-	return srcURI, nil
-}
-
-// extractSrcURISimple extracts SRC_URI using simple regex parsing.
-// This is the fallback when eclass evaluation fails.
-func (a *App) extractSrcURISimple(ebuildPath, category, pkgName, version string) (string, error) {
-	// Read ebuild content
-	content, err := os.ReadFile(ebuildPath)
-	if err != nil {
-		return "", fmt.Errorf("reading ebuild: %w", err)
-	}
-
-	// Create parser with package metadata for variable expansion
-	meta := repo.NewPackageMetadata(category, pkgName, version)
-	parser := repo.NewEbuildParserWithMetadata(string(content), meta)
-
-	// Extract SRC_URI
-	return parser.ExtractVariable("SRC_URI"), nil
-}
-
-// findBestEbuild finds the best (highest version) ebuild in the package directory.
-//
-// Returns the ebuild path and extracted version string.
-func (a *App) findBestEbuild(pkgDir, pkgName string) (string, string, error) {
-	entries, err := os.ReadDir(pkgDir)
-	if err != nil {
-		return "", "", fmt.Errorf("reading package directory: %w", err)
-	}
-
-	// Collect all ebuild versions
-	type ebuildInfo struct {
-		path    string
-		version string
-	}
-	var ebuilds []ebuildInfo
-
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".ebuild") {
-			continue
-		}
-
-		// Extract version from filename: pkgName-version.ebuild
-		name := strings.TrimSuffix(entry.Name(), ".ebuild")
-		if !strings.HasPrefix(name, pkgName+"-") {
-			continue
-		}
-
-		version := strings.TrimPrefix(name, pkgName+"-")
-		ebuilds = append(ebuilds, ebuildInfo{
-			path:    filepath.Join(pkgDir, entry.Name()),
-			version: version,
-		})
-	}
-
-	if len(ebuilds) == 0 {
-		return "", "", fmt.Errorf("no ebuilds found in %s", pkgDir)
-	}
-
-	// Sort by version (highest first) using Portage version comparison
-	sort.Slice(ebuilds, func(i, j int) bool {
-		cmp := pkg.CompareVersions(ebuilds[i].version, ebuilds[j].version)
-		return cmp > 0 // Descending order
-	})
-
-	best := ebuilds[0]
-	logging.Debug("  Best ebuild: %s (version %s)", filepath.Base(best.path), best.version)
-
-	return best.path, best.version, nil
-}
-
-// parsePackageAtom parses a package atom and returns category/package.
-//
-// Accepts formats:
-//   - category/package (e.g., "app-misc/hello")
-//   - category/package-version (e.g., "app-misc/hello-2.10")
-//   - =category/package-version (e.g., "=app-misc/hello-2.10")
-func (a *App) parsePackageAtom(atom string) (string, error) {
-	// Use pkg.ParseAtom for proper PMS-compliant atom parsing
-	// This correctly handles versioned atoms like "=sys-devel/gcc-13.4.1_p20250807"
-	parsed, err := pkg.ParseAtom(atom)
-	if err != nil {
-		return "", fmt.Errorf("invalid atom %q: %w", atom, err)
-	}
-
-	// Return category/package without version (CP form)
-	// e.g., "=sys-devel/gcc-13.4.1_p20250807" -> "sys-devel/gcc"
-	return parsed.CP(), nil
 }
 
 // verifyDistfiles checks existing distfiles against their checksums.

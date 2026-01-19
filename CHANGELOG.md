@@ -5,6 +5,28 @@ All notable changes to GRPM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.3] - 2026-01-20
+
+### Install Helper Path Resolution & Unpack Phase Fix
+
+Hotfix for packages with non-standard archive names and relative paths in install helpers.
+
+### Fixed
+- **Install helpers path resolution** — All install helpers (dobin, dosbin, doins, etc.) now correctly resolve relative paths against `$S` (source directory)
+- **Unpack phase uses $A variable** — `phaseUnpack()` now uses the `$A` variable from Manifest instead of hardcoded `${PN}-${PV}.tar.*` pattern
+- **tree package fix** — `app-text/tree` now builds successfully (archive is `unix-tree-2.2.1.tar.bz2`, not `tree-2.2.1.tar.*`)
+
+### Changed
+- **Centralized path resolution** — Added `resolveSourcePath()` helper method following DRY principle
+- **Updated helpers**: `Dobin`, `Dosbin`, `Newbin`, `Newsbin`, `Doexe`, `Doins`, `Newins`, `Dolib`, `DolibSo`, `DolibA`, `Doheader`, `Doinitd`
+
+### Technical Details
+The fix addresses two issues:
+1. **Archive naming**: Some packages use non-standard archive names (e.g., `unix-tree-*.tar.bz2` instead of `tree-*.tar.*`)
+2. **Relative paths**: Install helpers like `dobin tree` expected files relative to `$S`, but Go's `os.Stat()` looked in current directory
+
+---
+
 ## [0.9.2] - 2026-01-19
 
 ### Emerge Installed Package Filtering

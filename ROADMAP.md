@@ -1,13 +1,14 @@
 # GRPM Roadmap
 
-> **Pre-Release Testing (v0.9.1)**
+> **Pre-Release Testing (v0.9.3)**
 >
 > Rapid development complete (v0.1.0 → v0.5.0).
 > Infrastructure release complete (v0.6.0).
 > Build quality and security fixes (v0.7.x).
 > Configuration management (v0.8.0-v0.8.4).
-> Enterprise tool handling (v0.9.0).
-> **Enterprise CLI & Mirror Fallback (v0.9.1).**
+> Enterprise tool handling (v0.9.0-v0.9.1).
+> Emerge filtering fix (v0.9.2).
+> **Install helper path resolution hotfix (v0.9.3).**
 > **98.2% tree coverage verified on real Gentoo WSL2!**
 
 ---
@@ -69,7 +70,23 @@ Key insight: **Eclasses don't need Go implementations.** They are loaded dynamic
 
 ## Release History
 
-### v0.9.1 — Enterprise CLI & Mirror Fallback (Current)
+### v0.9.3 — Install Helper Path Resolution Hotfix (Current)
+
+**Hotfix for packages with non-standard archive names and relative paths:**
+
+- **Install helpers path resolution** — All install helpers now resolve relative paths against `$S`
+- **Unpack phase uses $A** — Archive list from Manifest instead of hardcoded pattern
+- **tree package fix** — `app-text/tree` now builds successfully
+- **DRY refactoring** — Centralized `resolveSourcePath()` helper method
+
+### v0.9.2 — Emerge Filtering Fix
+
+**Fixes emerge ignoring installed packages:**
+
+- **Emerge respects VarDB** — `grpm emerge -p mc` shows 1 package instead of 93
+- **New flags**: `--deep`, `--with-bdeps`, `--emptytree`, `--vardb`
+
+### v0.9.1 — Enterprise CLI & Mirror Fallback
 
 **Major CLI improvements and distfile fetching enhancements:**
 

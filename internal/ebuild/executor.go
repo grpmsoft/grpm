@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"path/filepath"
 
+	"github.com/grpmsoft/grpm/internal/distfile"
 	"github.com/grpmsoft/grpm/internal/eclass"
 	"github.com/grpmsoft/grpm/internal/fetch"
 	"github.com/grpmsoft/grpm/internal/logging"
@@ -368,119 +369,30 @@ func (e *Executor) fetchDistfiles(ctx context.Context) error {
 	return nil
 }
 
-// getDistfilesWithURIs parses SRC_URI from ebuild and creates distfiles with
-// expanded mirror:// URLs.
+// getDistfilesWithURIs resolves distfiles using the unified distfile.Service.
 //
-// This is critical for packages using mirror://gnu/, mirror://sourceforge/, etc.
-// Without this expansion, downloads would fail as "mirror://" is not a valid protocol.
+// This is the single source of truth for SRC_URI resolution, handling:
+//   - Custom variables (MY_P, MY_PN, etc.)
+//   - Eclass-generated SRC_URI
+//   - Version-specific distfile filtering
+//   - mirror:// URL expansion
 func (e *Executor) getDistfilesWithURIs(manifest *fetch.Manifest) ([]fetch.Distfile, error) {
-	// If no ebuild path, return manifest distfiles
 	if e.EbuildPath == "" {
 		return manifest.GetDistfiles(), nil
 	}
 
-	// Read ebuild content
-	content, err := os.ReadFile(e.EbuildPath)
-	if err != nil {
-		return nil, fmt.Errorf("reading ebuild: %w", err)
-	}
+	// Use unified distfile service (single source of truth)
+	evaluator := NewSrcURIEvaluator()
+	svc := distfile.NewService(e.RepoPath, evaluator)
+	ctx := context.Background()
 
-	// Extract SRC_URI from ebuild
-	srcURI := extractEbuildVariable(string(content), "SRC_URI")
-	if srcURI == "" {
-		// No SRC_URI - return manifest distfiles without URIs
+	distfiles, err := svc.ResolveDistfiles(ctx, e.Package, e.EbuildPath, manifest)
+	if err != nil {
+		logging.Warn("distfile resolution failed: %v, using manifest", err)
 		return manifest.GetDistfiles(), nil
 	}
 
-	// Build variable map for SRC_URI expansion
-	vars := map[string]string{
-		"P":        e.Env.P,
-		"PN":       e.Env.PN,
-		"PV":       e.Env.PV,
-		"PR":       e.Env.PR,
-		"PVR":      e.Env.PVR,
-		"PF":       e.Env.PF,
-		"CATEGORY": e.Env.CATEGORY,
-	}
-
-	// Expand variables in SRC_URI
-	expandedSrcURI := expandVariables(srcURI, vars)
-
-	// Load third-party mirrors for mirror:// URL expansion
-	thirdPartyMirrors := fetch.ParseThirdPartyMirrors(e.RepoPath)
-
-	// Parse SRC_URI entries and build URI map
-	uriMap := e.parseSrcURIEntries(expandedSrcURI, thirdPartyMirrors)
-
-	// Create distfiles with checksums from manifest and URIs from SRC_URI
-	var distfiles []fetch.Distfile
-	for _, entry := range manifest.DistFiles {
-		df := fetch.NewDistfile(entry.Filename, entry.Size, entry.Checksums)
-
-		// Add explicit URIs if available
-		if uris, ok := uriMap[entry.Filename]; ok && len(uris) > 0 {
-			df = df.WithURIs(uris)
-		}
-
-		distfiles = append(distfiles, df)
-	}
-
 	return distfiles, nil
-}
-
-// parseSrcURIEntries parses SRC_URI string and returns a map of filename to URLs.
-//
-// Handles:
-//   - Simple URLs: https://example.com/file.tar.gz
-//   - Mirror URLs: mirror://gnu/hello/hello-2.12.tar.gz (expanded)
-//   - Rename syntax: URL -> filename
-//   - USE conditionals: flag? ( URL ) (included when flag is nil)
-func (e *Executor) parseSrcURIEntries(srcURI string, mirrors fetch.ThirdPartyMirrors) map[string][]string {
-	uriMap := make(map[string][]string)
-
-	// Simple tokenization of SRC_URI
-	// TODO: Use proper parser for complex USE conditionals
-	tokens := tokenizeSrcURI(srcURI)
-
-	var currentURL string
-	expectFilename := false
-
-	for _, token := range tokens {
-		// Skip USE conditional syntax
-		if token == "(" || token == ")" || token == "?" {
-			continue
-		}
-		if len(token) > 0 && (token[len(token)-1] == '?' || token == "!") {
-			continue
-		}
-
-		// Handle -> rename syntax
-		if token == "->" {
-			expectFilename = true
-			continue
-		}
-
-		if expectFilename {
-			// Token is the new filename
-			if currentURL != "" {
-				expandedURLs := mirrors.ExpandMirrorURL(currentURL)
-				uriMap[token] = append(uriMap[token], expandedURLs...)
-			}
-			currentURL = ""
-			expectFilename = false
-			continue
-		}
-
-		// Token is a URL
-		if isURL(token) {
-			currentURL = token
-			filename := extractFilename(token)
-			expandedURLs := mirrors.ExpandMirrorURL(token)
-			uriMap[filename] = append(uriMap[filename], expandedURLs...)
-		}
-	}
-
-	return uriMap
 }
 
 // extractEbuildVariable extracts a variable value from ebuild content.
@@ -565,67 +477,6 @@ func expandVariables(s string, vars map[string]string) string {
 	}
 
 	return result
-}
-
-// tokenizeSrcURI splits SRC_URI into tokens.
-func tokenizeSrcURI(srcURI string) []string {
-	var tokens []string
-	var current []byte
-	inQuote := byte(0)
-
-	for i := 0; i < len(srcURI); i++ {
-		c := srcURI[i]
-
-		if inQuote != 0 {
-			if c == inQuote {
-				inQuote = 0
-			} else {
-				current = append(current, c)
-			}
-			continue
-		}
-
-		switch c {
-		case '"', '\'':
-			inQuote = c
-		case ' ', '\t', '\n', '\r':
-			if len(current) > 0 {
-				tokens = append(tokens, string(current))
-				current = nil
-			}
-		default:
-			current = append(current, c)
-		}
-	}
-
-	if len(current) > 0 {
-		tokens = append(tokens, string(current))
-	}
-
-	return tokens
-}
-
-// isURL checks if a string looks like a URL.
-func isURL(s string) bool {
-	return len(s) > 8 && (s[:7] == "http://" || s[:8] == "https://" ||
-		s[:6] == "ftp://" || s[:9] == "mirror://")
-}
-
-// extractFilename extracts filename from URL.
-func extractFilename(url string) string {
-	// Find last / in URL
-	lastSlash := -1
-	for i := len(url) - 1; i >= 0; i-- {
-		if url[i] == '/' {
-			lastSlash = i
-			break
-		}
-	}
-
-	if lastSlash >= 0 && lastSlash < len(url)-1 {
-		return url[lastSlash+1:]
-	}
-	return url
 }
 
 // findVariableAssignment finds a variable assignment pattern at word boundary.
@@ -825,6 +676,9 @@ func (e *Executor) ParseEbuild() error {
 	if err := e.parseSVariable(); err != nil {
 		logging.Debug("[ebuild] warning: failed to parse S variable: %v", err)
 	}
+
+	// Debug: Log final S value
+	logging.Debug("[ebuild] final S value: %s", e.Env.S)
 
 	return nil
 }
@@ -1064,11 +918,21 @@ func (e *Executor) RunPhaseFunction(phase Phase) (string, error) {
 	// Call the phase function
 	combinedScript.WriteString(fmt.Sprintf("%s\n", targetFunc))
 
+	// Ensure exit status 0 if function completed successfully.
+	// This is needed because mvdan.cc/sh may propagate the exit status
+	// from the last command in the function (e.g., `if use flag; then...; fi`
+	// where `use flag` returns 1). In standard bash, an if statement with
+	// a false condition and no else clause returns 0, but mvdan.cc/sh
+	// may return the condition's exit status when using ExecHandlers.
+	// Adding `true` ensures the script returns 0 unless there's a real error.
+	combinedScript.WriteString("true\n")
+
 	// Execute through interpreter with output capture
 	var output bytes.Buffer
 	ctx := context.Background()
 
 	// Create interpreter with output capture
+	logging.Debug("[ebuild] RunPhaseFunction: creating interpreter with S=%s", e.Env.S)
 	interp := NewInterpreter(e.Env, &output, &output)
 
 	// Execute the combined script

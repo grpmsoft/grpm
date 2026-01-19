@@ -52,8 +52,17 @@ func (h *Helpers) Dodoc(args []string) error {
 		files = args[1:]
 	}
 
+	// Get source directory for resolving relative paths
+	sourceDir := h.getSourceDir()
+
 	for _, file := range files {
-		info, err := os.Stat(file)
+		// Resolve relative paths against $S (source directory)
+		fullPath := file
+		if !filepath.IsAbs(file) && sourceDir != "" {
+			fullPath = filepath.Join(sourceDir, file)
+		}
+
+		info, err := os.Stat(fullPath)
 		if err != nil {
 			return &DieError{Message: fmt.Sprintf("dodoc: %s: %v", file, err)}
 		}
@@ -63,12 +72,12 @@ func (h *Helpers) Dodoc(args []string) error {
 				return &DieError{Message: fmt.Sprintf("dodoc: %s is a directory (use -r)", file)}
 			}
 			dst := filepath.Join(docDir, filepath.Base(file))
-			if err := h.installDir(file, dst, mode); err != nil {
+			if err := h.installDir(fullPath, dst, mode); err != nil {
 				return &DieError{Message: fmt.Sprintf("dodoc: %v", err)}
 			}
 		} else {
 			dst := filepath.Join(docDir, filepath.Base(file))
-			if err := h.installFile(file, dst, mode); err != nil {
+			if err := h.installFile(fullPath, dst, mode); err != nil {
 				return &DieError{Message: fmt.Sprintf("dodoc: %v", err)}
 			}
 		}
@@ -90,7 +99,14 @@ func (h *Helpers) Newdoc(args []string) error {
 	src := args[0]
 	destName := args[1]
 
-	info, err := os.Stat(src)
+	// Resolve relative paths against $S (source directory)
+	fullPath := src
+	sourceDir := h.getSourceDir()
+	if !filepath.IsAbs(src) && sourceDir != "" {
+		fullPath = filepath.Join(sourceDir, src)
+	}
+
+	info, err := os.Stat(fullPath)
 	if err != nil {
 		return &DieError{Message: fmt.Sprintf("newdoc: %s: %v", src, err)}
 	}
@@ -104,7 +120,7 @@ func (h *Helpers) Newdoc(args []string) error {
 	}
 
 	dst := filepath.Join(docDir, destName)
-	if err := h.installFile(src, dst, 0644); err != nil {
+	if err := h.installFile(fullPath, dst, 0644); err != nil {
 		return &DieError{Message: fmt.Sprintf("newdoc: %v", err)}
 	}
 
@@ -126,8 +142,17 @@ func (h *Helpers) Doman(args []string) error {
 		return &DieError{Message: "doman: D not set"}
 	}
 
+	// Get source directory for resolving relative paths
+	sourceDir := h.getSourceDir()
+
 	for _, file := range args {
-		info, err := os.Stat(file)
+		// Resolve relative paths against $S (source directory)
+		fullPath := file
+		if !filepath.IsAbs(file) && sourceDir != "" {
+			fullPath = filepath.Join(sourceDir, file)
+		}
+
+		info, err := os.Stat(fullPath)
 		if err != nil {
 			return &DieError{Message: fmt.Sprintf("doman: %s: %v", file, err)}
 		}
@@ -148,7 +173,7 @@ func (h *Helpers) Doman(args []string) error {
 		}
 
 		dst := filepath.Join(destDir, filepath.Base(file))
-		if err := h.installFile(file, dst, 0644); err != nil {
+		if err := h.installFile(fullPath, dst, 0644); err != nil {
 			return &DieError{Message: fmt.Sprintf("doman: %v", err)}
 		}
 	}
@@ -174,7 +199,14 @@ func (h *Helpers) Newman(args []string) error {
 	src := args[0]
 	destName := args[1]
 
-	info, err := os.Stat(src)
+	// Resolve relative paths against $S (source directory)
+	fullPath := src
+	sourceDir := h.getSourceDir()
+	if !filepath.IsAbs(src) && sourceDir != "" {
+		fullPath = filepath.Join(sourceDir, src)
+	}
+
+	info, err := os.Stat(fullPath)
 	if err != nil {
 		return &DieError{Message: fmt.Sprintf("newman: %s: %v", src, err)}
 	}
@@ -195,7 +227,7 @@ func (h *Helpers) Newman(args []string) error {
 	}
 
 	dst := filepath.Join(destDir, destName)
-	if err := h.installFile(src, dst, 0644); err != nil {
+	if err := h.installFile(fullPath, dst, 0644); err != nil {
 		return &DieError{Message: fmt.Sprintf("newman: %v", err)}
 	}
 
@@ -230,8 +262,17 @@ func (h *Helpers) Doinfo(args []string) error {
 		return &DieError{Message: fmt.Sprintf("doinfo: mkdir %s: %v", destDir, err)}
 	}
 
+	// Get source directory for resolving relative paths
+	sourceDir := h.getSourceDir()
+
 	for _, file := range args {
-		info, err := os.Stat(file)
+		// Resolve relative paths against $S (source directory)
+		fullPath := file
+		if !filepath.IsAbs(file) && sourceDir != "" {
+			fullPath = filepath.Join(sourceDir, file)
+		}
+
+		info, err := os.Stat(fullPath)
 		if err != nil {
 			return &DieError{Message: fmt.Sprintf("doinfo: %s: %v", file, err)}
 		}
@@ -240,7 +281,7 @@ func (h *Helpers) Doinfo(args []string) error {
 		}
 
 		dst := filepath.Join(destDir, filepath.Base(file))
-		if err := h.installFile(file, dst, 0644); err != nil {
+		if err := h.installFile(fullPath, dst, 0644); err != nil {
 			return &DieError{Message: fmt.Sprintf("doinfo: %v", err)}
 		}
 	}
@@ -455,8 +496,17 @@ func (h *Helpers) Domo(args []string) error {
 	// - EAPI 7+: /usr/share/locale
 	localeBase := h.getLocaleBaseDir()
 
+	// Get source directory for resolving relative paths
+	sourceDir := h.getSourceDir()
+
 	for _, file := range args {
-		info, err := os.Stat(file)
+		// Resolve relative paths against $S (source directory)
+		fullPath := file
+		if !filepath.IsAbs(file) && sourceDir != "" {
+			fullPath = filepath.Join(sourceDir, file)
+		}
+
+		info, err := os.Stat(fullPath)
 		if err != nil {
 			return &DieError{Message: fmt.Sprintf("domo: %s: %v", file, err)}
 		}
@@ -481,7 +531,7 @@ func (h *Helpers) Domo(args []string) error {
 
 		// Install as ${PN}.mo (not original filename)
 		destFile := filepath.Join(destDir, pn+".mo")
-		if err := h.installFile(file, destFile, 0644); err != nil {
+		if err := h.installFile(fullPath, destFile, 0644); err != nil {
 			return &DieError{Message: fmt.Sprintf("domo: %v", err)}
 		}
 	}

@@ -185,6 +185,24 @@ func (h *Helpers) getPF() string {
 	return "unknown"
 }
 
+// resolveSourcePath resolves a file path against the source directory.
+//
+// If the path is absolute, returns it unchanged.
+// If the path is relative, joins it with $S (source directory).
+// This is needed because ebuild install helpers like dobin, doins, etc.
+// operate on files relative to the source directory, but Go's os.Stat
+// would otherwise look in the current working directory.
+func (h *Helpers) resolveSourcePath(file string) string {
+	if filepath.IsAbs(file) {
+		return file
+	}
+	sourceDir := h.getSourceDir()
+	if sourceDir != "" {
+		return filepath.Join(sourceDir, file)
+	}
+	return file
+}
+
 // installFile copies a file with specified permissions.
 func (h *Helpers) installFile(src, dst string, mode fs.FileMode) error {
 	// Handle symlinks - preserve them
@@ -278,7 +296,9 @@ func (h *Helpers) Dobin(args []string) error {
 	}
 
 	for _, file := range args {
-		info, err := os.Stat(file)
+		fullPath := h.resolveSourcePath(file)
+
+		info, err := os.Stat(fullPath)
 		if err != nil {
 			return &DieError{Message: fmt.Sprintf("dobin: %s: %v", file, err)}
 		}
@@ -287,7 +307,7 @@ func (h *Helpers) Dobin(args []string) error {
 		}
 
 		dst := filepath.Join(destDir, filepath.Base(file))
-		if err := h.installFile(file, dst, mode); err != nil {
+		if err := h.installFile(fullPath, dst, mode); err != nil {
 			return &DieError{Message: fmt.Sprintf("dobin: %v", err)}
 		}
 	}
@@ -321,7 +341,9 @@ func (h *Helpers) Dosbin(args []string) error {
 	}
 
 	for _, file := range args {
-		info, err := os.Stat(file)
+		fullPath := h.resolveSourcePath(file)
+
+		info, err := os.Stat(fullPath)
 		if err != nil {
 			return &DieError{Message: fmt.Sprintf("dosbin: %s: %v", file, err)}
 		}
@@ -330,7 +352,7 @@ func (h *Helpers) Dosbin(args []string) error {
 		}
 
 		dst := filepath.Join(destDir, filepath.Base(file))
-		if err := h.installFile(file, dst, mode); err != nil {
+		if err := h.installFile(fullPath, dst, mode); err != nil {
 			return &DieError{Message: fmt.Sprintf("dosbin: %v", err)}
 		}
 	}
@@ -360,8 +382,9 @@ func (h *Helpers) Newbin(args []string) error {
 
 	src := args[0]
 	destName := args[1]
+	fullPath := h.resolveSourcePath(src)
 
-	info, err := os.Stat(src)
+	info, err := os.Stat(fullPath)
 	if err != nil {
 		return &DieError{Message: fmt.Sprintf("newbin: %s: %v", src, err)}
 	}
@@ -375,7 +398,7 @@ func (h *Helpers) Newbin(args []string) error {
 	}
 
 	dst := filepath.Join(destDir, destName)
-	if err := h.installFile(src, dst, mode); err != nil {
+	if err := h.installFile(fullPath, dst, mode); err != nil {
 		return &DieError{Message: fmt.Sprintf("newbin: %v", err)}
 	}
 
@@ -404,8 +427,9 @@ func (h *Helpers) Newsbin(args []string) error {
 
 	src := args[0]
 	destName := args[1]
+	fullPath := h.resolveSourcePath(src)
 
-	info, err := os.Stat(src)
+	info, err := os.Stat(fullPath)
 	if err != nil {
 		return &DieError{Message: fmt.Sprintf("newsbin: %s: %v", src, err)}
 	}
@@ -419,7 +443,7 @@ func (h *Helpers) Newsbin(args []string) error {
 	}
 
 	dst := filepath.Join(destDir, destName)
-	if err := h.installFile(src, dst, mode); err != nil {
+	if err := h.installFile(fullPath, dst, mode); err != nil {
 		return &DieError{Message: fmt.Sprintf("newsbin: %v", err)}
 	}
 
@@ -456,7 +480,9 @@ func (h *Helpers) Doexe(args []string) error {
 	}
 
 	for _, file := range args {
-		info, err := os.Stat(file)
+		fullPath := h.resolveSourcePath(file)
+
+		info, err := os.Stat(fullPath)
 		if err != nil {
 			return &DieError{Message: fmt.Sprintf("doexe: %s: %v", file, err)}
 		}
@@ -465,7 +491,7 @@ func (h *Helpers) Doexe(args []string) error {
 		}
 
 		dst := filepath.Join(destDir, filepath.Base(file))
-		if err := h.installFile(file, dst, mode); err != nil {
+		if err := h.installFile(fullPath, dst, mode); err != nil {
 			return &DieError{Message: fmt.Sprintf("doexe: %v", err)}
 		}
 	}
@@ -513,7 +539,9 @@ func (h *Helpers) Doins(args []string) error {
 	}
 
 	for _, file := range files {
-		info, err := os.Stat(file)
+		fullPath := h.resolveSourcePath(file)
+
+		info, err := os.Stat(fullPath)
 		if err != nil {
 			return &DieError{Message: fmt.Sprintf("doins: %s: %v", file, err)}
 		}
@@ -523,12 +551,12 @@ func (h *Helpers) Doins(args []string) error {
 				return &DieError{Message: fmt.Sprintf("doins: %s is a directory (use -r)", file)}
 			}
 			dst := filepath.Join(destDir, filepath.Base(file))
-			if err := h.installDir(file, dst, mode); err != nil {
+			if err := h.installDir(fullPath, dst, mode); err != nil {
 				return &DieError{Message: fmt.Sprintf("doins: %v", err)}
 			}
 		} else {
 			dst := filepath.Join(destDir, filepath.Base(file))
-			if err := h.installFile(file, dst, mode); err != nil {
+			if err := h.installFile(fullPath, dst, mode); err != nil {
 				return &DieError{Message: fmt.Sprintf("doins: %v", err)}
 			}
 		}
@@ -559,8 +587,9 @@ func (h *Helpers) Newins(args []string) error {
 
 	src := args[0]
 	destName := args[1]
+	fullPath := h.resolveSourcePath(src)
 
-	info, err := os.Stat(src)
+	info, err := os.Stat(fullPath)
 	if err != nil {
 		return &DieError{Message: fmt.Sprintf("newins: %s: %v", src, err)}
 	}
@@ -574,7 +603,7 @@ func (h *Helpers) Newins(args []string) error {
 	}
 
 	dst := filepath.Join(destDir, destName)
-	if err := h.installFile(src, dst, mode); err != nil {
+	if err := h.installFile(fullPath, dst, mode); err != nil {
 		return &DieError{Message: fmt.Sprintf("newins: %v", err)}
 	}
 
@@ -606,7 +635,9 @@ func (h *Helpers) Dolib(args []string) error {
 	}
 
 	for _, file := range args {
-		info, err := os.Stat(file)
+		fullPath := h.resolveSourcePath(file)
+
+		info, err := os.Stat(fullPath)
 		if err != nil {
 			return &DieError{Message: fmt.Sprintf("dolib: %s: %v", file, err)}
 		}
@@ -621,7 +652,7 @@ func (h *Helpers) Dolib(args []string) error {
 		}
 
 		dst := filepath.Join(destDir, filepath.Base(file))
-		if err := h.installFile(file, dst, mode); err != nil {
+		if err := h.installFile(fullPath, dst, mode); err != nil {
 			return &DieError{Message: fmt.Sprintf("dolib: %v", err)}
 		}
 	}
@@ -650,7 +681,9 @@ func (h *Helpers) DolibSo(args []string) error {
 	}
 
 	for _, file := range args {
-		info, err := os.Lstat(file)
+		fullPath := h.resolveSourcePath(file)
+
+		info, err := os.Lstat(fullPath)
 		if err != nil {
 			return &DieError{Message: fmt.Sprintf("dolib.so: %s: %v", file, err)}
 		}
@@ -659,7 +692,7 @@ func (h *Helpers) DolibSo(args []string) error {
 		}
 
 		dst := filepath.Join(destDir, filepath.Base(file))
-		if err := h.installFile(file, dst, 0755); err != nil {
+		if err := h.installFile(fullPath, dst, 0755); err != nil {
 			return &DieError{Message: fmt.Sprintf("dolib.so: %v", err)}
 		}
 	}
@@ -688,7 +721,9 @@ func (h *Helpers) DolibA(args []string) error {
 	}
 
 	for _, file := range args {
-		info, err := os.Stat(file)
+		fullPath := h.resolveSourcePath(file)
+
+		info, err := os.Stat(fullPath)
 		if err != nil {
 			return &DieError{Message: fmt.Sprintf("dolib.a: %s: %v", file, err)}
 		}
@@ -697,7 +732,7 @@ func (h *Helpers) DolibA(args []string) error {
 		}
 
 		dst := filepath.Join(destDir, filepath.Base(file))
-		if err := h.installFile(file, dst, 0644); err != nil {
+		if err := h.installFile(fullPath, dst, 0644); err != nil {
 			return &DieError{Message: fmt.Sprintf("dolib.a: %v", err)}
 		}
 	}
@@ -751,7 +786,9 @@ func (h *Helpers) Doheader(args []string) error {
 	}
 
 	for _, file := range files {
-		info, err := os.Stat(file)
+		fullPath := h.resolveSourcePath(file)
+
+		info, err := os.Stat(fullPath)
 		if err != nil {
 			return &DieError{Message: fmt.Sprintf("doheader: %s: %v", file, err)}
 		}
@@ -761,12 +798,12 @@ func (h *Helpers) Doheader(args []string) error {
 				return &DieError{Message: fmt.Sprintf("doheader: %s is a directory (use -r)", file)}
 			}
 			dst := filepath.Join(destDir, filepath.Base(file))
-			if err := h.installDir(file, dst, 0644); err != nil {
+			if err := h.installDir(fullPath, dst, 0644); err != nil {
 				return &DieError{Message: fmt.Sprintf("doheader: %v", err)}
 			}
 		} else {
 			dst := filepath.Join(destDir, filepath.Base(file))
-			if err := h.installFile(file, dst, 0644); err != nil {
+			if err := h.installFile(fullPath, dst, 0644); err != nil {
 				return &DieError{Message: fmt.Sprintf("doheader: %v", err)}
 			}
 		}
@@ -897,7 +934,9 @@ func (h *Helpers) Doinitd(args []string) error {
 	}
 
 	for _, file := range args {
-		info, err := os.Stat(file)
+		fullPath := h.resolveSourcePath(file)
+
+		info, err := os.Stat(fullPath)
 		if err != nil {
 			return &DieError{Message: fmt.Sprintf("doinitd: %s: %v", file, err)}
 		}
@@ -906,7 +945,7 @@ func (h *Helpers) Doinitd(args []string) error {
 		}
 
 		dst := filepath.Join(destDir, filepath.Base(file))
-		if err := h.installFile(file, dst, 0755); err != nil {
+		if err := h.installFile(fullPath, dst, 0755); err != nil {
 			return &DieError{Message: fmt.Sprintf("doinitd: %v", err)}
 		}
 	}

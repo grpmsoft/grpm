@@ -45,7 +45,7 @@ This guide covers installation of GRPM on Gentoo Linux and compatible distributi
 
 ```bash
 # Set version and architecture
-VERSION="0.1.0"
+VERSION="0.9.3"
 ARCH="amd64"  # Options: amd64, arm64, arm_7, arm_6, 386
 
 # Download binary

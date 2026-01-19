@@ -129,34 +129,58 @@ func (e *Executor) phaseSetup() (string, error) {
 
 // phaseUnpack performs src_unpack phase - extracts source archives.
 //
-// Looks for tarballs in DISTDIR and extracts to WORKDIR.
+// Uses the $A variable (populated from Manifest) to determine which
+// archives to extract. Falls back to pattern matching if $A is empty.
 // Supports: .tar.gz, .tar.bz2, .tar.xz
 func (e *Executor) phaseUnpack() (string, error) {
-	// For now, we'll look for common source archive naming patterns
-	// Real implementation would parse SRC_URI from ebuild
+	var archives []string
 
-	// Try to find source tarball in DISTDIR
-	tarballPattern := fmt.Sprintf("%s-%s.tar.*", e.Env.PN, e.Env.PV)
-	matches, err := filepath.Glob(filepath.Join(e.Env.DISTDIR, tarballPattern))
-
-	if err != nil {
-		return "", fmt.Errorf("failed to search for source tarball: %w", err)
+	// Primary: Use $A variable which contains the list of archives
+	if e.Env.A != "" {
+		archives = strings.Fields(e.Env.A)
+		logging.Debug("[ebuild] Using $A variable for unpack: %v", archives)
 	}
 
-	if len(matches) == 0 {
+	// Fallback: Search by pattern if $A is empty
+	if len(archives) == 0 {
+		tarballPattern := fmt.Sprintf("%s-%s.tar.*", e.Env.PN, e.Env.PV)
+		matches, err := filepath.Glob(filepath.Join(e.Env.DISTDIR, tarballPattern))
+		if err != nil {
+			return "", fmt.Errorf("failed to search for source tarball: %w", err)
+		}
+		for _, m := range matches {
+			archives = append(archives, filepath.Base(m))
+		}
+		logging.Debug("[ebuild] Using pattern fallback for unpack: %s -> %v", tarballPattern, archives)
+	}
+
+	if len(archives) == 0 {
 		// No tarball found - this might be a binary package or ebuild-only
-		logging.Debug("[ebuild] No source tarball found for %s, skipping unpack", tarballPattern)
+		logging.Debug("[ebuild] No source archives found, skipping unpack")
 		return "No source tarball found (ebuild-only package or binary)", nil
 	}
 
-	tarball := matches[0]
-	logging.Debug("[ebuild] Extracting %s to %s", filepath.Base(tarball), e.Env.WORKDIR)
+	// Extract each archive
+	var extracted []string
+	for _, archive := range archives {
+		tarball := filepath.Join(e.Env.DISTDIR, archive)
+		if _, err := os.Stat(tarball); err != nil {
+			logging.Debug("[ebuild] Archive %s not found in DISTDIR, skipping", archive)
+			continue
+		}
 
-	if err := extractTarball(tarball, e.Env.WORKDIR); err != nil {
-		return "", fmt.Errorf("failed to extract tarball: %w", err)
+		logging.Debug("[ebuild] Extracting %s to %s", archive, e.Env.WORKDIR)
+		if err := extractTarball(tarball, e.Env.WORKDIR); err != nil {
+			return "", fmt.Errorf("failed to extract %s: %w", archive, err)
+		}
+		extracted = append(extracted, archive)
 	}
 
-	return fmt.Sprintf("Extracted %s", filepath.Base(tarball)), nil
+	if len(extracted) == 0 {
+		return "No archives extracted", nil
+	}
+
+	return fmt.Sprintf("Extracted %d archive(s): %s", len(extracted), strings.Join(extracted, ", ")), nil
 }
 
 // phasePrepare performs src_prepare phase - applies patches.

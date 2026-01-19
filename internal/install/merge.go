@@ -136,6 +136,11 @@ func (m *Merger) reportProtectedFiles() {
 }
 
 // checkCollisions checks for file collisions.
+//
+// This implements Portage's "protect-owned" behavior (default):
+//   - Orphan files (exist but not tracked): warning only, allow overwrite
+//   - Files owned by another package: FATAL, block installation
+//   - Protected system files: FATAL, block installation
 func (m *Merger) checkCollisions() error {
 	m.installer.progress("Checking for file collisions")
 
@@ -178,12 +183,35 @@ func (m *Merger) checkCollisions() error {
 		return err
 	}
 
-	if len(collisions) > 0 {
-		// Log collision details
-		for _, c := range collisions {
+	// Separate fatal collisions from warnings (Portage "protect-owned" behavior)
+	var fatalCollisions []Collision
+	var warningCollisions []Collision
+
+	for _, c := range collisions {
+		switch c.Type {
+		case CollisionOwnedByOther, CollisionProtected:
+			// These are fatal - file belongs to another package or is protected
+			fatalCollisions = append(fatalCollisions, c)
+		case CollisionFileExists:
+			// Orphan files - just warn, allow overwrite (Portage default)
+			warningCollisions = append(warningCollisions, c)
+		}
+	}
+
+	// Log warnings for orphan files
+	if len(warningCollisions) > 0 {
+		m.installer.progress(">>> %d orphan file(s) will be overwritten:", len(warningCollisions))
+		for _, c := range warningCollisions {
+			m.installer.progress("    %s", c.Path)
+		}
+	}
+
+	// Report and fail on fatal collisions
+	if len(fatalCollisions) > 0 {
+		for _, c := range fatalCollisions {
 			m.installer.progress("!!! %s", c.String())
 		}
-		return fmt.Errorf("found %d file collision(s)", len(collisions))
+		return fmt.Errorf("found %d file collision(s)", len(fatalCollisions))
 	}
 
 	return nil

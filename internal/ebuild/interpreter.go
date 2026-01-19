@@ -110,12 +110,24 @@ func (i *Interpreter) createRunner(ctx context.Context) (*interp.Runner, error) 
 	// Build environment variables from Environment struct
 	envPairs := i.buildEnvPairs()
 
-	// Create runner with options
-	runner, err := interp.New(
+	// Build runner options
+	opts := []interp.RunnerOption{
 		interp.StdIO(nil, i.stdout, i.stderr),
 		interp.Env(expand.ListEnviron(envPairs...)),
 		interp.ExecHandlers(i.execHandler),
-	)
+	}
+
+	// Set working directory to $S (source directory) if available and exists.
+	// This is critical for commands like dodoc that reference files
+	// relative to the source directory.
+	if i.env != nil && i.env.S != "" {
+		if info, err := os.Stat(i.env.S); err == nil && info.IsDir() {
+			opts = append(opts, interp.Dir(i.env.S))
+		}
+	}
+
+	// Create runner with options
+	runner, err := interp.New(opts...)
 	if err != nil {
 		return nil, fmt.Errorf("creating interpreter: %w", err)
 	}
