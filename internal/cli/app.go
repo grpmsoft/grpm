@@ -129,8 +129,30 @@ func (a *App) Run(args []string) error {
 	case "doc":
 		return a.runDoc(cmdArgs)
 	default:
-		return fmt.Errorf("unknown command: %s\nRun 'grpm help' for usage", command)
+		return a.handleUnknownCommand(command)
 	}
+}
+
+// handleUnknownCommand handles unknown commands with "Did you mean?" suggestions.
+//
+// This provides a user-friendly experience when users make typos in command names
+// by suggesting similar valid commands using Levenshtein distance.
+func (a *App) handleUnknownCommand(command string) error {
+	// Get suggestions within edit distance of 2
+	suggestions := SuggestCommand(command, GetKnownCommands(), 2)
+
+	var errMsg string
+	if len(suggestions) > 0 {
+		errMsg = fmt.Sprintf("unknown command: %s\n\nDid you mean?\n", command)
+		for _, s := range suggestions {
+			errMsg += fmt.Sprintf("    %s\n", s)
+		}
+		errMsg += "\nRun 'grpm help' for usage."
+	} else {
+		errMsg = fmt.Sprintf("unknown command: %s\nRun 'grpm help' for usage", command)
+	}
+
+	return fmt.Errorf("%s", errMsg)
 }
 
 // Close cleans up application resources
