@@ -11,9 +11,11 @@ import (
 	"time"
 
 	"github.com/coregx/coregex"
+	"github.com/grpmsoft/grpm/internal/config"
 	"github.com/grpmsoft/grpm/internal/logging"
 	"github.com/grpmsoft/grpm/internal/metadata"
 	"github.com/grpmsoft/grpm/internal/pkg"
+	"github.com/grpmsoft/grpm/internal/profile"
 )
 
 // Precompiled regex patterns for ebuild metadata parsing (compiled once at package init).
@@ -36,8 +38,10 @@ var (
 )
 
 type PortageRepository struct {
-	Path  string
-	cache sync.Map // Cache for parsed ebuilds: path -> *pkg.Package
+	Path    string
+	cache   sync.Map         // Cache for parsed ebuilds: path -> *pkg.Package
+	config  *config.Config   // Portage configuration (optional, for USE filtering)
+	profile *profile.Profile // System profile (optional, for USE filtering)
 }
 
 func NewPortageRepository(path string) (*PortageRepository, error) {
@@ -53,6 +57,124 @@ func NewPortageRepository(path string) (*PortageRepository, error) {
 	return &PortageRepository{
 		Path: absPath,
 	}, nil
+}
+
+// NewPortageRepositoryWithConfig creates a PortageRepository with configuration.
+// The config and profile are used for USE flag filtering during dependency parsing.
+// If config or profile loading fails, the repository will still work but without
+// USE flag filtering (all USE-conditional deps will be included).
+func NewPortageRepositoryWithConfig(path string, cfg *config.Config, prof *profile.Profile) (*PortageRepository, error) {
+	repo, err := NewPortageRepository(path)
+	if err != nil {
+		return nil, err
+	}
+	repo.config = cfg
+	repo.profile = prof
+	return repo, nil
+}
+
+// SetConfig sets the Portage configuration for USE flag filtering.
+// This allows configuration to be added after repository creation.
+func (pr *PortageRepository) SetConfig(cfg *config.Config) {
+	pr.config = cfg
+}
+
+// SetProfile sets the system profile for USE flag filtering.
+// This allows profile to be added after repository creation.
+func (pr *PortageRepository) SetProfile(prof *profile.Profile) {
+	pr.profile = prof
+}
+
+// getEffectiveUSE computes the effective USE flags for a package.
+// The computation follows Portage priority (lowest to highest):
+//  1. IUSE defaults (+flag means enabled, -flag means disabled)
+//  2. Profile USE flags (from make.defaults)
+//  3. make.conf global USE flags
+//  4. package.use per-package USE flags
+//
+// Parameters:
+//   - category: package category (e.g., "app-misc")
+//   - pkgName: package name without category (e.g., "mc")
+//   - version: package version (e.g., "4.8.33")
+//   - slot: package slot (e.g., "0")
+//   - iuseMap: map of IUSE flags with their default state (true = +flag default)
+//
+// Returns a set of enabled USE flags.
+func (pr *PortageRepository) getEffectiveUSE(category, pkgName, version, slot string, iuseMap map[string]bool) map[string]bool {
+	effectiveUSE := make(map[string]bool)
+
+	// 1. Apply IUSE defaults
+	// In IUSE: "+flag" means enabled by default, "-flag" means disabled by default
+	// The iuseMap values: true = has + prefix, false = no prefix or - prefix
+	for flag, defaultEnabled := range iuseMap {
+		if defaultEnabled {
+			effectiveUSE[flag] = true
+		}
+	}
+
+	// 2. Apply profile USE flags
+	if pr.profile != nil {
+		for _, flag := range pr.profile.GetUSEFlags() {
+			if strings.HasPrefix(flag, "-") {
+				delete(effectiveUSE, flag[1:])
+			} else {
+				effectiveUSE[flag] = true
+			}
+		}
+	}
+
+	// 3. Apply make.conf global USE flags
+	if pr.config != nil {
+		for _, flag := range pr.config.GetGlobalUSE() {
+			if strings.HasPrefix(flag, "-") {
+				delete(effectiveUSE, flag[1:])
+			} else {
+				effectiveUSE[flag] = true
+			}
+		}
+	}
+
+	// 4. Apply package.use per-package USE flags
+	if pr.config != nil {
+		packageUSE := pr.config.GetPackageUSEForPackage(category, pkgName, version, slot)
+		for _, flag := range packageUSE {
+			if strings.HasPrefix(flag, "-") {
+				delete(effectiveUSE, flag[1:])
+			} else {
+				effectiveUSE[flag] = true
+			}
+		}
+	}
+
+	return effectiveUSE
+}
+
+// isUSEConditionalActive checks if a USE conditional is active given effective USE flags.
+// Follows PMS (Package Manager Specification) USE conditional semantics:
+//   - "flag?" = active if flag is enabled
+//   - "!flag?" = active if flag is disabled
+//
+// Parameters:
+//   - useConditional: the USE flag condition (e.g., "ssl", "!ssl")
+//   - effectiveUSE: set of enabled USE flags
+//
+// Returns true if the conditional's dependencies should be included.
+func (pr *PortageRepository) isUSEConditionalActive(useConditional string, effectiveUSE map[string]bool) bool {
+	if useConditional == "" {
+		// No USE conditional - always active
+		return true
+	}
+
+	// Handle negated conditionals: !flag
+	if strings.HasPrefix(useConditional, "!") {
+		flag := useConditional[1:]
+		// !flag? means include if flag is NOT enabled
+		return !effectiveUSE[flag]
+	}
+
+	// Regular conditional: flag
+	// flag? means include if flag IS enabled
+	return effectiveUSE[useConditional]
 }
 
 func (pr *PortageRepository) LoadPackages(names []string) ([]*pkg.Package, error) {
@@ -187,6 +309,38 @@ func (pr *PortageRepository) parseEbuild(name, path string) (*pkg.Package, error
 		p.Version = matches[1]
 	}
 
+	// Parse IUSE FIRST - needed for USE flag filtering of dependencies
+	// Track which flags have + prefix (default enabled) vs no prefix (default disabled)
+	iuseDefaults := make(map[string]bool) // flag -> true if default enabled (+flag)
+	if matches := portageIuseRe.FindStringSubmatch(string(content)); len(matches) > 1 {
+		flags := strings.Fields(matches[1])
+		for _, flag := range flags {
+			if strings.HasPrefix(flag, "+") {
+				// Default enabled
+				cleanFlag := strings.TrimPrefix(flag, "+")
+				iuseDefaults[cleanFlag] = true
+				p.UseFlags[cleanFlag] = true
+			} else if strings.HasPrefix(flag, "-") {
+				// Default disabled (explicit)
+				cleanFlag := strings.TrimPrefix(flag, "-")
+				iuseDefaults[cleanFlag] = false
+				p.UseFlags[cleanFlag] = true
+			} else {
+				// No prefix = default disabled
+				iuseDefaults[flag] = false
+				p.UseFlags[flag] = true
+			}
+		}
+	}
+
+	// Parse SLOT - needed for per-package USE from package.use
+	if matches := portageSlotRe.FindStringSubmatch(string(content)); len(matches) > 1 {
+		p.Slot = pkg.ParseSlot(matches[1])
+	}
+
+	// Compute effective USE flags for this package (profile + make.conf + package.use + IUSE defaults)
+	effectiveUSE := pr.getEffectiveUSE(category, pkgName, p.Version, p.Slot.String(), iuseDefaults)
+
 	// Parse dependencies using EbuildParser with package metadata
 	// This enables ${P}, ${PN}, ${PV} expansion in DEPEND, SRC_URI, etc.
 	meta := NewPackageMetadata(category, pkgName, p.Version)
@@ -194,22 +348,30 @@ func (pr *PortageRepository) parseEbuild(name, path string) (*pkg.Package, error
 	parsedDeps, err := parser.ParseDependencies()
 	if err == nil {
 		// Convert ParsedDependency to Constraint, preserving OrGroupID
-		// Skip blockers - they are conflicts, not dependencies
+		// Skip blockers and filter by USE conditionals
 		realDepsCount := 0
+		skippedByUSE := 0
 		for _, pd := range parsedDeps {
 			if pd.IsBlocker {
 				// TODO: Add to p.Conflicts instead of p.Deps
 				logging.Debug("Skipping blocker: %s for %s", pd.Constraint.Name, name)
 				continue
 			}
+
+			// Filter by USE conditional
+			if !pr.isUSEConditionalActive(pd.UseFlag, effectiveUSE) {
+				skippedByUSE++
+				continue
+			}
+
 			constraint := pd.Constraint
 			constraint.OrGroupID = pd.OrGroupID // Copy OrGroupID
 			p.Deps = append(p.Deps, constraint)
 			realDepsCount++
 		}
-		if realDepsCount > 0 {
-			logging.Debug("Parsed %d dependencies for %s (%d blockers skipped)",
-				realDepsCount, name, len(parsedDeps)-realDepsCount)
+		if realDepsCount > 0 || skippedByUSE > 0 {
+			logging.Debug("Parsed %d dependencies for %s (%d blockers skipped, %d filtered by USE)",
+				realDepsCount, name, len(parsedDeps)-realDepsCount-skippedByUSE, skippedByUSE)
 		}
 	}
 
@@ -231,7 +393,7 @@ func (pr *PortageRepository) parseEbuild(name, path string) (*pkg.Package, error
 				}
 			}()
 
-			eclassDeps, err := pr.loadDependenciesWithEclass(path, p)
+			eclassDeps, err := pr.loadDependenciesWithEclass(path, p, effectiveUSE)
 			if err == nil && len(eclassDeps) > 0 {
 				p.Deps = eclassDeps
 				logging.Debug("Loaded %d dependencies via eclass evaluation for %s", len(eclassDeps), name)
@@ -242,18 +404,7 @@ func (pr *PortageRepository) parseEbuild(name, path string) (*pkg.Package, error
 		}()
 	}
 
-	if matches := portageSlotRe.FindStringSubmatch(string(content)); len(matches) > 1 {
-		p.Slot = pkg.ParseSlot(matches[1])
-	}
-
-	if matches := portageIuseRe.FindStringSubmatch(string(content)); len(matches) > 1 {
-		flags := strings.Fields(matches[1])
-		for _, flag := range flags {
-			flag = strings.TrimPrefix(flag, "+")
-			flag = strings.TrimPrefix(flag, "-")
-			p.UseFlags[flag] = true
-		}
-	}
+	// Note: SLOT and IUSE are already parsed above (before dependency filtering)
 
 	// Parse KEYWORDS - critical for keyword masking
 	if matches := portageKeywordsRe.FindStringSubmatch(string(content)); len(matches) > 1 {
@@ -453,9 +604,10 @@ func (pr *PortageRepository) FindByAtom(atom *pkg.Atom) ([]*pkg.Package, error) 
 // Parameters:
 //   - ebuildPath: Path to the ebuild file
 //   - p: Package to populate with dependencies (must have Name and Version set)
+//   - effectiveUSE: Map of enabled USE flags for filtering (nil = no filtering)
 //
 // Returns the list of parsed dependencies, or error if extraction fails.
-func (pr *PortageRepository) loadDependenciesWithEclass(ebuildPath string, p *pkg.Package) ([]pkg.Constraint, error) {
+func (pr *PortageRepository) loadDependenciesWithEclass(ebuildPath string, p *pkg.Package, effectiveUSE map[string]bool) ([]pkg.Constraint, error) {
 	// Create metadata evaluator for this repository
 	evaluator, err := metadata.NewEvaluator(pr.Path)
 	if err != nil {
@@ -505,11 +657,17 @@ func (pr *PortageRepository) loadDependenciesWithEclass(ebuildPath string, p *pk
 			continue
 		}
 
-		// Convert ParsedDependency to Constraint, skip blockers
+		// Convert ParsedDependency to Constraint, skip blockers and filter by USE
 		for _, pd := range deps {
 			if pd.IsBlocker {
 				continue
 			}
+
+			// Filter by USE conditional if effectiveUSE is provided
+			if effectiveUSE != nil && !pr.isUSEConditionalActive(pd.UseFlag, effectiveUSE) {
+				continue
+			}
+
 			constraint := pd.Constraint
 			constraint.OrGroupID = pd.OrGroupID
 			allDeps = append(allDeps, constraint)

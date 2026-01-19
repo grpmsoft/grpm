@@ -15,6 +15,7 @@ import (
 	"github.com/grpmsoft/grpm/internal/logging"
 	"github.com/grpmsoft/grpm/internal/mask"
 	"github.com/grpmsoft/grpm/internal/pkg"
+	"github.com/grpmsoft/grpm/internal/profile"
 	"github.com/grpmsoft/grpm/internal/repo"
 	"github.com/grpmsoft/grpm/internal/sets"
 	"github.com/grpmsoft/grpm/internal/solver"
@@ -529,6 +530,7 @@ func (a *App) resolvePackageDependencies(r repo.Repository, packages []string) (
 
 // createResolverWithMasks creates a resolver with package.mask and KEYWORDS filtering.
 // For mock repositories, returns a resolver without filtering.
+// Also configures the repository with config/profile for USE flag filtering.
 func (a *App) createResolverWithMasks(r repo.Repository) *solver.PortageResolver {
 	// Check if this is a real Portage repository
 	portageRepo, isPortage := r.(*repo.PortageRepository)
@@ -545,8 +547,25 @@ func (a *App) createResolverWithMasks(r repo.Repository) *solver.PortageResolver
 		return solver.NewResolver(r)
 	}
 
-	// Determine profile path
+	// Set config on repository for USE flag filtering
+	portageRepo.SetConfig(cfg)
+
+	// Determine profile path and load profile
 	profilePath := a.detectProfilePath()
+	if profilePath != "" {
+		prof, err := profile.LoadProfile(profilePath)
+		if err != nil {
+			a.log.Verbose("Could not load profile: %v", err)
+		} else {
+			// Resolve profile inheritance chain
+			if err := prof.Resolve(); err != nil {
+				a.log.Verbose("Could not resolve profile inheritance: %v", err)
+			} else {
+				portageRepo.SetProfile(prof)
+				a.log.Verbose("Loaded profile: %s (USE filtering enabled)", prof.Name)
+			}
+		}
+	}
 
 	// Create mask manager
 	maskMgr, err := mask.NewMaskManager(cfg, portageRepo.Path, profilePath)

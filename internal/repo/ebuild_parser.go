@@ -352,22 +352,41 @@ func (ep *EbuildParser) parseDependencyString(depStr string, depType DependencyT
 	return deps, nil
 }
 
-// tokenizeDependencies splits dependency string into tokens
+// tokenizeDependencies splits dependency string into tokens.
+// Handles USE dependency brackets [flag(+)] correctly - parentheses inside
+// brackets are NOT treated as group delimiters.
+//
+// Example: "sys-fs/e2fsprogs[tools(+)]" stays as single token,
+// while "gpm? ( sys-libs/gpm )" splits into ["gpm?", "(", "sys-libs/gpm", ")"]
 func tokenizeDependencies(depStr string) []string {
 	var tokens []string
 	var current strings.Builder
+	inBracket := false // Track if we're inside [...] USE dependency brackets
 
 	for _, ch := range depStr {
 		switch ch {
+		case '[':
+			inBracket = true
+			current.WriteRune(ch)
+		case ']':
+			inBracket = false
+			current.WriteRune(ch)
 		case '(', ')':
-			if current.Len() > 0 {
-				tokens = append(tokens, strings.TrimSpace(current.String()))
-				current.Reset()
+			// Only treat as group delimiter if NOT inside [...]
+			if inBracket {
+				current.WriteRune(ch)
+			} else {
+				if current.Len() > 0 {
+					tokens = append(tokens, strings.TrimSpace(current.String()))
+					current.Reset()
+				}
+				tokens = append(tokens, string(ch))
 			}
-			tokens = append(tokens, string(ch))
 		case ' ', '\t', '\n':
-			// Always tokenize on whitespace, even inside parentheses
-			if current.Len() > 0 {
+			// Only tokenize on whitespace if NOT inside [...]
+			if inBracket {
+				current.WriteRune(ch)
+			} else if current.Len() > 0 {
 				tokens = append(tokens, strings.TrimSpace(current.String()))
 				current.Reset()
 			}
@@ -456,9 +475,40 @@ func (ep *EbuildParser) parseGroup(tokens []string, i int, depType DependencyTyp
 	return ep.parseTokens(tokens, i+1, depType, useFlag, orGroupID)
 }
 
-// isPackageAtom checks if token is a package atom (not operator or parenthesis)
+// isPackageAtom checks if token is a valid package atom (not operator, parenthesis,
+// or bash syntax fragment).
+//
+// Valid atoms must contain category/package format with "/".
+// Filters out common bash syntax fragments that appear in complex ebuilds:
+// - $(cmd) command substitution fragments: $, ), cmd_name
+// - '...' string fragments: ', string_content
+// - ${VAR} unexpanded variables: ${, VAR}, MULTILIB_USEDEP, etc.
+// - Operators and keywords: ||, ^^, ??, if, then, etc.
 func (ep *EbuildParser) isPackageAtom(token string) bool {
-	return token != "" && token != "(" && token != ")"
+	if token == "" || token == "(" || token == ")" {
+		return false
+	}
+
+	// Must contain "/" for category/package format
+	// This filters out most bash fragments
+	if !strings.Contains(token, "/") {
+		return false
+	}
+
+	// Filter out tokens starting with bash syntax characters
+	if strings.HasPrefix(token, "$") ||
+		strings.HasPrefix(token, "'") ||
+		strings.HasPrefix(token, "\"") ||
+		strings.HasPrefix(token, "`") {
+		return false
+	}
+
+	// Filter out tokens containing unexpanded ${VAR} patterns
+	if strings.Contains(token, "${") {
+		return false
+	}
+
+	return true
 }
 
 // parsePackageAtom parses a single package atom using pkg.ParseAtom (PMS Section 8.3).
