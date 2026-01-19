@@ -17,6 +17,12 @@ Portage-compatible tool handling following enterprise patterns.
 - **Default behavior** — `grpm emerge @world` works without tool check by default
 - **Error messages** — Updated to suggest installing missing tools instead of skipping check
 
+### Fixed
+- **Collision detection** — Only files are now checked for collisions, directories are skipped (was counting 147 collisions for 49 files)
+- **VarDB persistence** — Packages are now properly tracked in `/var/db/pkg` after installation
+- **Shared file collision** — `/usr/share/info/dir` excluded from collision check (GNU Info directory file shared across packages)
+- **Collision logging** — Added detailed collision reporting for better diagnostics
+
 ### Removed
 - **`--skip-tool-check` flag** — Replaced with `--check-tools` (breaking change)
 

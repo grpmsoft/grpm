@@ -77,6 +77,13 @@ Key insight: **Eclasses don't need Go implementations.** They are loaded dynamic
 - **Default behavior** — `grpm emerge @world` works without tool check (2000+ packages resolved instantly)
 - **Breaking change** — `--skip-tool-check` flag removed, use `--check-tools` for optional pre-validation
 
+**Bug fixes:**
+- **Collision detection** — Only files checked, directories skipped
+- **VarDB persistence** — Packages properly tracked in `/var/db/pkg`
+- **Shared file collision** — `/usr/share/info/dir` excluded from collision check
+
+**Tested on real Gentoo WSL2:** `app-misc/hello` builds and installs successfully with full VarDB tracking.
+
 **Migration:**
 ```bash
 # Before (v0.8.x):
