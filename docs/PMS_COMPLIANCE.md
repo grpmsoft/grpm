@@ -2,8 +2,8 @@
 
 > **GRPM Implementation Status per [Package Manager Specification](https://projects.gentoo.org/pms/)**
 >
-> **Version:** v0.9.1
-> **Last Updated:** 2026-01-19
+> **Version:** v0.9.3
+> **Last Updated:** 2026-01-20
 > **License:** This document follows PMS under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/)
 
 ---
@@ -604,6 +604,18 @@ EAPI 7+ cross-compilation variables (SYSROOT, ESYSROOT, BROOT) are defined but n
 - [x] Man page generation (`grpm doc man`)
 - [x] "Did you mean?" command suggestions
 - [x] Type-safe CommandName constants
+
+### v0.9.2 (Complete)
+
+- [x] Emerge respects installed packages (VarDB filtering)
+- [x] `--deep`, `--with-bdeps`, `--emptytree`, `--vardb` flags for emerge
+
+### v0.9.3 (Complete)
+
+- [x] Install helpers path resolution — All helpers resolve relative paths against `$S`
+- [x] Unpack phase uses `$A` variable — Archive list from Manifest instead of hardcoded pattern
+- [x] tree package fix — Packages with non-standard archive names now build correctly
+- [x] DRY refactoring — Centralized `resolveSourcePath()` helper method
 
 ### v0.9.x (Planned)
 
