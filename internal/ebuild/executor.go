@@ -915,6 +915,15 @@ func (e *Executor) RunPhaseFunction(phase Phase) (string, error) {
 	// Call the phase function
 	combinedScript.WriteString(fmt.Sprintf("%s\n", targetFunc))
 
+	// Ensure exit status 0 if function completed successfully.
+	// This is needed because mvdan.cc/sh may propagate the exit status
+	// from the last command in the function (e.g., `if use flag; then...; fi`
+	// where `use flag` returns 1). In standard bash, an if statement with
+	// a false condition and no else clause returns 0, but mvdan.cc/sh
+	// may return the condition's exit status when using ExecHandlers.
+	// Adding `true` ensures the script returns 0 unless there's a real error.
+	combinedScript.WriteString("true\n")
+
 	// Execute through interpreter with output capture
 	var output bytes.Buffer
 	ctx := context.Background()
