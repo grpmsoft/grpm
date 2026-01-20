@@ -6,31 +6,30 @@ name: Release
 # and cannot be changed. All tests MUST pass BEFORE creating the tag.
 #
 # Architecture:
-# 1. Trigger: Manual dispatch OR push to release/* branch
-# 2. Run ALL tests (unit + smoke + integration)
-# 3. Only after ALL tests pass → create tag
+# 1. Trigger: Manual dispatch via GitHub Actions UI (or `gh workflow run`)
+# 2. Run ALL tests (unit + smoke + integration) on main branch
+# 3. Only after ALL tests pass → create and push tag
 # 4. Tag created → GoReleaser publishes release
 #
 # This ensures:
 # - No broken versions in Go module proxy
 # - Full test coverage before release
-# - Professional, enterprise-grade release process
+# - No release branches needed
+# - No merge-back issues with protected branches
 #
 # Usage:
-#   Option A: Manual trigger via GitHub Actions UI
-#   Option B: Push to release/v0.5.3 branch → auto-tag after tests
+#   GitHub UI: Actions → Release → Run workflow → Enter version
+#   CLI:       gh workflow run release.yml -f version=0.9.4
 #
 # References:
-# - https://docs.github.com/en/actions/sharing-automations/creating-actions/releasing-and-maintaining-actions
+# - https://carlosbecker.com/posts/goreleaser-create-tag-action/
 # - https://goreleaser.com/ci/actions/
-# - https://blog.nimblepros.com/blogs/using-workflow-run-in-github-actions/
 
 on:
-  # Manual trigger with version input
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to release (e.g., 0.5.3, 0.6.0-beta.1)'
+        description: 'Version to release (e.g., 0.9.4, 1.0.0-beta.1)'
         required: true
         type: string
       skip_integration:
@@ -44,16 +43,12 @@ on:
         default: false
         type: boolean
 
-  # Auto-trigger on release branches
-  push:
-    branches:
-      - 'release/v*'
-
 permissions:
   contents: write
 
 env:
   GO_VERSION: '1.25'
+  GOTOOLCHAIN: local
 
 jobs:
   # ============================================================
@@ -73,28 +68,20 @@ jobs:
       - name: Determine version
         id: version
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            VERSION="${{ github.event.inputs.version }}"
-            SKIP_INT="${{ github.event.inputs.skip_integration }}"
-            DRY_RUN="${{ github.event.inputs.dry_run }}"
-          else
-            # Extract version from branch name: release/v0.5.3 -> 0.5.3
-            BRANCH="${{ github.ref_name }}"
-            VERSION="${BRANCH#release/v}"
-            SKIP_INT="false"
-            DRY_RUN="false"
-          fi
+          VERSION="${{ github.event.inputs.version }}"
+          SKIP_INT="${{ github.event.inputs.skip_integration }}"
+          DRY_RUN="${{ github.event.inputs.dry_run }}"
 
-          # Validate version format
+          # Validate version format (X.Y.Z or X.Y.Z-suffix)
           if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
-            echo "ERROR: Invalid version format: $VERSION"
-            echo "Expected: X.Y.Z or X.Y.Z-suffix (e.g., 0.5.3, 1.0.0-beta.1)"
+            echo "::error::Invalid version format: $VERSION"
+            echo "Expected: X.Y.Z or X.Y.Z-suffix (e.g., 0.9.4, 1.0.0-beta.1)"
             exit 1
           fi
 
           TAG="v${VERSION}"
 
-          # Check if pre-release
+          # Check if pre-release (has suffix like -beta.1, -rc.1, -alpha)
           if [[ "$VERSION" == *"-"* ]]; then
             IS_PRERELEASE="true"
           else
@@ -342,15 +329,6 @@ jobs:
             dist/checksums.txt
           retention-days: 30
 
-      - name: Merge release branch to main
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/release/')
-        run: |
-          git fetch origin main
-          git checkout main
-          git merge --ff-only ${{ github.ref_name }} -m "chore: merge ${{ github.ref_name }} to main"
-          git push origin main
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # ============================================================
   # Dry Run Summary (when dry_run is true)
