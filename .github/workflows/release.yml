@@ -8,8 +8,9 @@ name: Release
 # Architecture:
 # 1. Trigger: Manual dispatch via GitHub Actions UI (or `gh workflow run`)
 # 2. Run ALL tests (unit + smoke + integration) on main branch
-# 3. Only after ALL tests pass → create and push tag
-# 4. Tag created → GoReleaser publishes release
+# 3. Only after ALL tests pass → create LOCAL tag (NOT pushed yet!)
+# 4. Run GoReleaser → creates GitHub release → tag auto-pushed
+# 5. If GoReleaser fails → tag NOT pushed → version NOT burned!
 #
 # This ensures:
 # - No broken versions in Go module proxy
@@ -263,14 +264,16 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Create and push tag
+      - name: Create local tag (NOT pushed yet)
         run: |
           TAG="${{ needs.prepare.outputs.tag }}"
           VERSION="${{ needs.prepare.outputs.version }}"
 
-          echo "Creating tag $TAG..."
+          echo "Creating LOCAL tag $TAG (will be pushed by GoReleaser)..."
 
-          # Create annotated tag
+          # Create annotated tag LOCALLY
+          # GoReleaser will push it when creating the GitHub release
+          # If GoReleaser fails, tag is NOT pushed = version NOT burned!
           git tag -a "$TAG" -m "Release $TAG
 
           Version: $VERSION
@@ -284,13 +287,7 @@ jobs:
 
           Full changelog: https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md"
 
-          # Push tag
-          git push origin "$TAG"
-
-          echo "Tag $TAG created and pushed successfully"
-
-      - name: Fetch all tags
-        run: git fetch --force --tags
+          echo "Local tag $TAG created. Will be pushed after successful release."
 
       - name: Set up Go
         uses: actions/setup-go@v6
@@ -318,6 +315,25 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # GoReleaser creates GitHub release which auto-pushes the tag
+      # This step verifies the tag exists remotely (safety check)
+      - name: Verify tag was pushed
+        run: |
+          TAG="${{ needs.prepare.outputs.tag }}"
+          echo "Verifying tag $TAG exists on remote..."
+
+          # Fetch tags from remote
+          git fetch --tags
+
+          # Check if tag exists remotely
+          if git ls-remote --tags origin | grep -q "refs/tags/$TAG$"; then
+            echo "✅ Tag $TAG successfully published!"
+          else
+            echo "⚠️ Tag not found on remote, pushing explicitly..."
+            git push origin "$TAG"
+            echo "✅ Tag $TAG pushed successfully!"
+          fi
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
