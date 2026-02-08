@@ -282,25 +282,44 @@ func SetupDynamicEclassLoading(interp *Interpreter, cache *eclass.Cache) (*Dynam
 			return nil
 		}
 
-		// Version functions need to write to context stdout for command substitution
+		// Version functions need to write to context stdout for command substitution.
+		// Per Portage, ver_cut/ver_rs default to $PV when version arg is omitted.
 		switch cmd {
 		case "ver_cut":
+			if len(cmdArgs) < 1 {
+				return &DieError{Message: "ver_cut: requires range argument"}
+			}
+			version := ""
 			if len(cmdArgs) >= 2 {
-				result, err := interp.helpers.verCutImpl(cmdArgs[0], cmdArgs[1])
-				if err != nil {
-					return &DieError{Message: fmt.Sprintf("ver_cut: %v", err)}
-				}
-				_, _ = io.WriteString(hc.Stdout, result)
-				return nil
+				version = cmdArgs[1]
+			} else {
+				version = hc.Env.Get("PV").String()
 			}
-			return &DieError{Message: "ver_cut: requires range and version arguments"}
+			if version == "" {
+				return &DieError{Message: "ver_cut: no version (PV not set)"}
+			}
+			result, err := interp.helpers.verCutImpl(cmdArgs[0], version)
+			if err != nil {
+				return &DieError{Message: fmt.Sprintf("ver_cut: %v", err)}
+			}
+			_, _ = io.WriteString(hc.Stdout, result)
+			return nil
 		case "ver_rs":
-			if len(cmdArgs) >= 3 {
-				result := interp.helpers.verRsImpl(cmdArgs[0], cmdArgs[1], cmdArgs[2])
-				_, _ = io.WriteString(hc.Stdout, result)
-				return nil
+			if len(cmdArgs) < 2 {
+				return &DieError{Message: "ver_rs: requires range and separator arguments"}
 			}
-			return &DieError{Message: "ver_rs: requires range, separator, and version arguments"}
+			version := ""
+			if len(cmdArgs) >= 3 {
+				version = cmdArgs[2]
+			} else {
+				version = hc.Env.Get("PV").String()
+			}
+			if version == "" {
+				return &DieError{Message: "ver_rs: no version (PV not set)"}
+			}
+			result := interp.helpers.verRsImpl(cmdArgs[0], cmdArgs[1], version)
+			_, _ = io.WriteString(hc.Stdout, result)
+			return nil
 		}
 
 		// Dispatch to interpreter's command map
