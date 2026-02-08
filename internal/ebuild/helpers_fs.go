@@ -21,6 +21,19 @@ import (
 // EAPI 8 Filesystem Utilities
 // ============================================================================
 
+// resolvePath resolves a relative path against $S (source directory).
+// If the path is already absolute, it is returned as-is.
+// This ensures filesystem helpers work correctly regardless of Go's cwd.
+func (h *Helpers) resolvePath(path string) string {
+	if filepath.IsAbs(path) {
+		return path
+	}
+	if workDir := h.getWorkDir(); workDir != "" {
+		return filepath.Join(workDir, path)
+	}
+	return path
+}
+
 // Sed runs sed on files in place.
 //
 // Usage: sed -i 's/old/new/g' file.txt
@@ -98,8 +111,8 @@ func (h *Helpers) Sed(args []string) error {
 // sedExternal delegates sed to the system's sed command.
 func (h *Helpers) sedExternal(args []string) error {
 	cmd := exec.Command("sed", args...)
-	if h.env != nil && h.env.S != "" {
-		cmd.Dir = h.env.S
+	if workDir := h.getWorkDir(); workDir != "" {
+		cmd.Dir = workDir
 	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -120,12 +133,7 @@ func (h *Helpers) sedExternal(args []string) error {
 
 // sedFile performs sed substitution on a single file.
 func (h *Helpers) sedFile(file, old, newStr string, global, inPlace bool) error {
-	// Resolve relative paths against source directory
-	if !filepath.IsAbs(file) {
-		if h.env != nil && h.env.S != "" {
-			file = filepath.Join(h.env.S, file)
-		}
-	}
+	file = h.resolvePath(file)
 	content, err := os.ReadFile(file)
 	if err != nil {
 		return &DieError{Message: fmt.Sprintf("sed: read %s: %v", file, err)}
@@ -156,8 +164,8 @@ func (h *Helpers) sedFile(file, old, newStr string, global, inPlace bool) error 
 // Wrapper for pkg-config command.
 func (h *Helpers) PkgConfig(args []string) error {
 	cmd := exec.Command("pkg-config", args...)
-	if h.env != nil && h.env.S != "" {
-		cmd.Dir = h.env.S
+	if workDir := h.getWorkDir(); workDir != "" {
+		cmd.Dir = workDir
 	}
 
 	// Set PKG_CONFIG_PATH if needed
@@ -306,11 +314,12 @@ func (h *Helpers) Rm(args []string) error {
 	}
 
 	for _, target := range targets {
+		resolved := h.resolvePath(target)
 		var err error
 		if recursive {
-			err = os.RemoveAll(target)
+			err = os.RemoveAll(resolved)
 		} else {
-			err = os.Remove(target)
+			err = os.Remove(resolved)
 		}
 		if err != nil && !force {
 			return &DieError{Message: fmt.Sprintf("rm: %s: %v", target, err)}
@@ -347,13 +356,14 @@ func (h *Helpers) Cp(args []string) error {
 		return &DieError{Message: "cp: requires source and destination"}
 	}
 
-	dest := sources[len(sources)-1]
+	dest := h.resolvePath(sources[len(sources)-1])
 	sources = sources[:len(sources)-1]
 
 	// Unused - would be used for preserving timestamps
 	_ = preserve
 
 	for _, src := range sources {
+		src = h.resolvePath(src)
 		info, err := os.Stat(src)
 		if err != nil {
 			return &DieError{Message: fmt.Sprintf("cp: %s: %v", src, err)}
@@ -463,10 +473,11 @@ func (h *Helpers) Mv(args []string) error {
 		return &DieError{Message: "mv: requires source and destination"}
 	}
 
-	dst := targets[len(targets)-1]
+	dst := h.resolvePath(targets[len(targets)-1])
 	sources := targets[:len(targets)-1]
 
 	for _, src := range sources {
+		src = h.resolvePath(src)
 		dest := dst
 		// If destination is a directory, move into it
 		if info, err := os.Stat(dest); err == nil && info.IsDir() {
@@ -601,18 +612,18 @@ func (h *Helpers) Ln(args []string) error {
 	// Single target: ln -s /path/to/file → creates ./basename -> target
 	if len(targets) == 1 {
 		target := targets[0]
-		linkName := filepath.Base(target)
+		linkName := h.resolvePath(filepath.Base(target))
 		if force {
 			_ = os.Remove(linkName)
 		}
 		if symbolic {
 			return os.Symlink(target, linkName)
 		}
-		return os.Link(target, linkName)
+		return os.Link(h.resolvePath(target), linkName)
 	}
 
 	// Multiple targets with directory: ln -s file1 file2 dir/
-	last := targets[len(targets)-1]
+	last := h.resolvePath(targets[len(targets)-1])
 	if info, err := os.Stat(last); err == nil && info.IsDir() && len(targets) > 2 {
 		for _, target := range targets[:len(targets)-1] {
 			linkName := filepath.Join(last, filepath.Base(target))
@@ -624,7 +635,8 @@ func (h *Helpers) Ln(args []string) error {
 					return &DieError{Message: fmt.Sprintf("ln: %v", err)}
 				}
 			} else {
-				if err := os.Link(target, linkName); err != nil {
+				resolvedTarget := h.resolvePath(target)
+				if err := os.Link(resolvedTarget, linkName); err != nil {
 					return &DieError{Message: fmt.Sprintf("ln: %v", err)}
 				}
 			}
@@ -634,7 +646,7 @@ func (h *Helpers) Ln(args []string) error {
 
 	// Two targets: ln -s target linkname
 	target := targets[0]
-	linkName := targets[1]
+	linkName := h.resolvePath(targets[1])
 
 	if force {
 		_ = os.Remove(linkName)
@@ -1091,8 +1103,8 @@ func (h *Helpers) xargsRunCommand(cmd string, initialArgs, inputArgs []string, v
 
 	// Execute command
 	execCmd := exec.Command(cmd, fullArgs...)
-	if h.env != nil && h.env.S != "" {
-		execCmd.Dir = h.env.S
+	if workDir := h.getWorkDir(); workDir != "" {
+		execCmd.Dir = workDir
 	}
 
 	// Set environment if available
@@ -1135,12 +1147,7 @@ func (h *Helpers) Touch(args []string) error {
 		if strings.HasPrefix(file, "-") {
 			continue // Skip flags like -r, -t
 		}
-		// Resolve relative paths against $S
-		if !filepath.IsAbs(file) {
-			if h.env != nil && h.env.S != "" {
-				file = filepath.Join(h.env.S, file)
-			}
-		}
+		file = h.resolvePath(file)
 		// Ensure parent directory exists
 		dir := filepath.Dir(file)
 		if err := os.MkdirAll(dir, 0755); err != nil {

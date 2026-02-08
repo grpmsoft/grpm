@@ -45,7 +45,19 @@ func (h *Helpers) getMakeOpts() []string {
 }
 
 // getWorkDir returns the working directory (S or WORKDIR).
+// Checks the bash runtime environment first (runtimeEnv) for the latest $S,
+// then falls back to the Go Environment struct.
 func (h *Helpers) getWorkDir() string {
+	// Check bash runtime env first — this has the authoritative $S value
+	// set by the ebuild (e.g., S="${WORKDIR}/${MY_P}").
+	if h.runtimeEnv != nil {
+		if s := h.runtimeEnv.Get("S").String(); s != "" {
+			return s
+		}
+		if w := h.runtimeEnv.Get("WORKDIR").String(); w != "" {
+			return w
+		}
+	}
 	if h.env != nil {
 		if h.env.S != "" {
 			return h.env.S
