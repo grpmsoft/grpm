@@ -101,9 +101,26 @@ func (e *Executor) ExecutePhaseReal(phase Phase) PhaseResult {
 //   - If ebuild defines the phase function (src_configure, etc.) -> call it
 //   - If eclass exports the function via EXPORT_FUNCTIONS -> call eclass version
 //   - Otherwise -> call the default implementation
-func (e *Executor) dispatchPhase(phase Phase, defaultImpl func() (string, error)) (string, error) {
+//
+// Panics from the interpreter are caught and converted to descriptive errors.
+func (e *Executor) dispatchPhase(phase Phase, defaultImpl func() (string, error)) (output string, phaseErr error) {
 	funcName := phaseFunctionName(phase)
 	logging.Debug("[ebuild] dispatching phase %s (function: %s)", phase, funcName)
+
+	// Recover from panics during phase execution.
+	// This catches panics from both custom phase functions (via interpreter)
+	// and default implementations that may invoke external tools.
+	defer func() {
+		if r := recover(); r != nil {
+			pkgName := ""
+			if e.Package != nil {
+				pkgName = e.Package.Name
+			}
+			logging.Debug("[ebuild] panic recovered in phase %s for %s: %v", phase, pkgName, r)
+			output = ""
+			phaseErr = fmt.Errorf("phase %s panicked for %s: %v (unsupported bash construct)", phase, pkgName, r)
+		}
+	}()
 
 	// Check if custom phase function exists
 	if e.HasPhaseFunction(phase) {

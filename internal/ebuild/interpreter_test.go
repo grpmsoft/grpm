@@ -694,3 +694,150 @@ func TestInterpreter_ContextCancellation(t *testing.T) {
 		t.Log("Context cancellation not enforced by mvdan.cc/sh")
 	}
 }
+
+// ============================================================================
+// Bash Interpreter Hardening Tests (v0.10.0-002)
+// ============================================================================
+
+func TestInterpreter_PanicRecovery_ReturnsError(t *testing.T) {
+	// Test that a panic inside the interpreter is caught and converted to an error.
+	// We simulate this by using a script that would trigger a panic in mvdan.cc/sh.
+	// Since we can't reliably trigger a real panic, we verify the error type exists
+	// and the mechanism works.
+	env := createTestEnvironment(t)
+	var stdout, stderr bytes.Buffer
+
+	interp := NewInterpreter(env, &stdout, &stderr)
+
+	// This script should execute without panic
+	err := interp.Run(context.Background(), `echo "safe script"`)
+	if err != nil {
+		t.Fatalf("safe script should not fail: %v", err)
+	}
+
+	// Verify the InterpreterPanicError type works correctly
+	panicErr := &InterpreterPanicError{
+		PanicValue: "test panic",
+		Context:    "test context",
+	}
+	if panicErr.Error() != "interpreter panic in test context: test panic (unsupported bash construct)" {
+		t.Errorf("unexpected error message: %s", panicErr.Error())
+	}
+}
+
+func TestInterpreter_PanicContext_IncludesPackageName(t *testing.T) {
+	env := createTestEnvironment(t)
+	var stdout, stderr bytes.Buffer
+
+	interp := NewInterpreter(env, &stdout, &stderr)
+
+	// Test panicContext includes package name
+	ctx := interp.panicContext("script")
+	if !strings.Contains(ctx, "sys-libs/zlib") {
+		t.Errorf("panic context should include package name, got: %s", ctx)
+	}
+	if !strings.Contains(ctx, "script") {
+		t.Errorf("panic context should include base context, got: %s", ctx)
+	}
+}
+
+func TestInterpreter_PanicContext_IncludesEclassName(t *testing.T) {
+	env := createTestEnvironment(t)
+	var stdout, stderr bytes.Buffer
+
+	interp := NewInterpreter(env, &stdout, &stderr)
+
+	// Set current eclass context
+	interp.GetHelpers().eclassRegistry.SetCurrentEclass("toolchain-funcs")
+
+	ctx := interp.panicContext("script")
+	if !strings.Contains(ctx, "toolchain-funcs") {
+		t.Errorf("panic context should include eclass name, got: %s", ctx)
+	}
+
+	// Reset
+	interp.GetHelpers().eclassRegistry.SetCurrentEclass("")
+}
+
+func TestInterpreter_PanicContext_NilEnvironment(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+
+	interp := NewInterpreter(nil, &stdout, &stderr)
+
+	// Should not panic with nil environment
+	ctx := interp.panicContext("script")
+	if ctx != "script" {
+		t.Errorf("panic context with nil env should just be base, got: %s", ctx)
+	}
+}
+
+func TestInterpreter_Run_UnsupportedBashConstruct_DoesNotCrash(t *testing.T) {
+	// Test that scripts with potentially problematic constructs don't crash.
+	// These may return errors but should NEVER panic.
+	env := createTestEnvironment(t)
+	var stdout, stderr bytes.Buffer
+
+	interp := NewInterpreter(env, &stdout, &stderr)
+
+	// Test various bash constructs that might cause issues.
+	// We don't check for specific errors, just that we don't crash.
+	problematicScripts := []struct {
+		name   string
+		script string
+	}{
+		{
+			name:   "indirect variable expansion",
+			script: `var=HOME; echo "${!var}"`,
+		},
+		{
+			name:   "empty variable expansion",
+			script: `echo "${UNDEFINED_VAR:-default}"`,
+		},
+		{
+			name:   "nested parameter expansion",
+			script: `foo="hello world"; echo "${foo//hello/goodbye}"`,
+		},
+		{
+			name:   "array assignment and access",
+			script: `arr=(one two three); echo "${arr[0]}"`,
+		},
+		{
+			name:   "declare command",
+			script: `declare -a myarr=(a b c); echo "${myarr[@]}"`,
+		},
+	}
+
+	for _, tc := range problematicScripts {
+		t.Run(tc.name, func(t *testing.T) {
+			stdout.Reset()
+			stderr.Reset()
+
+			// Must not panic - may return error for unsupported constructs
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						t.Errorf("script %q caused uncaught panic: %v", tc.name, r)
+					}
+				}()
+
+				_ = interp.Run(context.Background(), tc.script)
+			}()
+		})
+	}
+}
+
+func TestInterpreter_Eval_PanicRecovery(t *testing.T) {
+	env := createTestEnvironment(t)
+	var stdout, stderr bytes.Buffer
+
+	interp := NewInterpreter(env, &stdout, &stderr)
+
+	// Eval should not panic
+	result, err := interp.Eval(context.Background(), `"hello"`)
+	if err != nil {
+		t.Logf("Eval returned error (acceptable): %v", err)
+	}
+	if result != "" {
+		t.Logf("Eval result: %s", result)
+	}
+}

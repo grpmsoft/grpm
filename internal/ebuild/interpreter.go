@@ -2,6 +2,11 @@
 //
 // This file provides the Interpreter type which uses mvdan.cc/sh as a pure-Go
 // bash interpreter for executing ebuild scripts without external bash dependency.
+//
+// Panic recovery: All interpreter entry points (Run, RunFile, Eval) use
+// defer/recover to catch panics from unsupported bash constructs in mvdan.cc/sh
+// (e.g., ${!var@a}, complex array operations). Panics are converted to
+// descriptive errors instead of crashing the emerge process.
 package ebuild
 
 import (
@@ -12,11 +17,27 @@ import (
 	"os"
 	"strings"
 
+	"github.com/grpmsoft/grpm/internal/logging"
 	"github.com/grpmsoft/grpm/internal/state"
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/syntax"
 )
+
+// InterpreterPanicError is returned when the bash interpreter panics on an
+// unsupported construct. It wraps the panic value with context about what
+// was being executed when the panic occurred.
+type InterpreterPanicError struct {
+	// PanicValue is the recovered panic value.
+	PanicValue interface{}
+	// Context describes what was being executed (e.g., "script", "eclass toolchain-funcs").
+	Context string
+}
+
+// Error returns a descriptive error message for the panic.
+func (e *InterpreterPanicError) Error() string {
+	return fmt.Sprintf("interpreter panic in %s: %v (unsupported bash construct)", e.Context, e.PanicValue)
+}
 
 // Interpreter executes bash scripts with Portage helper functions.
 // Uses mvdan.cc/sh as embedded pure-Go bash interpreter.
@@ -71,7 +92,22 @@ func (i *Interpreter) SetPackageDatabase(db *state.PackageDatabase) {
 //
 // The script is parsed and executed with the ebuild environment variables
 // available and Portage helper commands intercepted by the exec handler.
-func (i *Interpreter) Run(ctx context.Context, script string) error {
+//
+// Panics from unsupported bash constructs (e.g., ${!var@a}, ${var@Q}) in
+// mvdan.cc/sh are caught and converted to descriptive errors.
+func (i *Interpreter) Run(ctx context.Context, script string) (runErr error) {
+	// Recover from panics caused by unsupported bash constructs in mvdan.cc/sh.
+	// Common triggers: ${!var@a} (variable attributes), complex array operations.
+	defer func() {
+		if r := recover(); r != nil {
+			logging.Debug("[ebuild] interpreter panic recovered: %v", r)
+			runErr = &InterpreterPanicError{
+				PanicValue: r,
+				Context:    i.panicContext("script"),
+			}
+		}
+	}()
+
 	// Parse the script with bash variant for full ebuild compatibility
 	parser := syntax.NewParser(syntax.Variant(syntax.LangBash))
 	prog, err := parser.Parse(strings.NewReader(script), "script")
@@ -96,7 +132,18 @@ func (i *Interpreter) Run(ctx context.Context, script string) error {
 // RunFile executes a bash script file.
 //
 // The file is read, parsed, and executed with the ebuild environment.
-func (i *Interpreter) RunFile(ctx context.Context, path string) error {
+// Panics from unsupported bash constructs are caught and converted to errors.
+func (i *Interpreter) RunFile(ctx context.Context, path string) (runErr error) {
+	defer func() {
+		if r := recover(); r != nil {
+			logging.Debug("[ebuild] interpreter panic recovered in file %s: %v", path, r)
+			runErr = &InterpreterPanicError{
+				PanicValue: r,
+				Context:    i.panicContext(fmt.Sprintf("file %s", path)),
+			}
+		}
+	}()
+
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("reading script file %s: %w", path, err)
@@ -384,6 +431,79 @@ func (i *Interpreter) buildCommandMap() map[string]helperFunc {
 		"meson_feature":       i.helpers.MesonFeature,
 		"meson_use_bool":      i.helpers.MesonUseBool,
 
+		// python-utils-r1.eclass functions
+		"python_export":        i.helpers.PythonExport,
+		"python_get_sitedir":   i.helpers.PythonGetSitedir,
+		"python_get_includedir": i.helpers.PythonGetIncludedir,
+		"python_get_library":   i.helpers.PythonGetLibrary,
+		"python_get_scriptdir": i.helpers.PythonGetScriptdir,
+		"python_is_installed":  i.helpers.PythonIsInstalled,
+		"python_is_compatible": i.helpers.PythonIsCompatible,
+		"python_wrapper":       i.helpers.PythonWrapper,
+		"python_doexe":         i.helpers.PythonDoexe,
+		"python_newexe":        i.helpers.PythonNewexe,
+		"python_domodule":      i.helpers.PythonDomodule,
+
+		// python-r1.eclass functions
+		"python-r1_pkg_setup":       i.helpers.PythonR1PkgSetup,
+		"python_foreach_impl":       i.helpers.PythonForeachImpl,
+		"python_copy_sources":       i.helpers.PythonCopySources,
+		"python_optimize":           i.helpers.PythonOptimize,
+		"python_gen_any_dep":        i.helpers.PythonGenAnyDep,
+		"python_set_active_version": i.helpers.PythonSetActiveVersion,
+
+		// python-single-r1.eclass functions
+		"python-single-r1_pkg_setup": i.helpers.PythonSingleR1PkgSetup,
+		"python_setup":               i.helpers.PythonSetup,
+		"python_gen_cond_dep":        i.helpers.PythonGenCondDep,
+		"python_gen_usedep":          i.helpers.PythonGenUseDep,
+		"python_gen_impl_dep":        i.helpers.PythonGenImplDep,
+
+		// python-any-r1.eclass functions
+		"python-any-r1_pkg_setup": i.helpers.PythonAnyR1PkgSetup,
+		"python_check_deps":       i.helpers.PythonCheckDeps,
+
+		// distutils-r1.eclass functions
+		"distutils-r1_src_prepare":   i.helpers.DistutilsR1SrcPrepare,
+		"distutils-r1_src_configure": i.helpers.DistutilsR1SrcConfigure,
+		"distutils-r1_src_compile":   i.helpers.DistutilsR1SrcCompile,
+		"distutils-r1_src_test":      i.helpers.DistutilsR1SrcTest,
+		"distutils-r1_src_install":   i.helpers.DistutilsR1SrcInstall,
+		"python_compile":             i.helpers.PythonCompile,
+		"python_test":                i.helpers.PythonTest,
+		"python_install":             i.helpers.PythonInstall,
+		"python_install_all":         i.helpers.PythonInstallAll,
+
+		// cargo.eclass functions
+		"cargo_crate_uris":    i.helpers.CargoCrateUris,
+		"cargo_src_unpack":    i.helpers.CargoSrcUnpack,
+		"cargo_src_configure": i.helpers.CargoSrcConfigure,
+		"cargo_src_compile":   i.helpers.CargoSrcCompile,
+		"cargo_src_test":      i.helpers.CargoSrcTest,
+		"cargo_src_install":   i.helpers.CargoSrcInstall,
+		"cargo_env":           i.helpers.CargoEnv,
+
+		// go-module.eclass functions
+		"go-module_set_globals": i.helpers.GoModuleSetGlobals,
+		"go-module_src_unpack":  i.helpers.GoModuleSrcUnpack,
+		"go-module_src_compile": i.helpers.GoModuleSrcCompile,
+		"go-module_src_install": i.helpers.GoModuleSrcInstall,
+		"ego":                   i.helpers.Ego,
+
+		// multilib-build.eclass functions (multilib-minimal)
+		"multilib-minimal_src_configure": i.helpers.MultilibBuildSrcConfigure,
+		"multilib-minimal_src_compile":   i.helpers.MultilibBuildSrcCompile,
+		"multilib-minimal_src_test":      i.helpers.MultilibBuildSrcTest,
+		"multilib-minimal_src_install":   i.helpers.MultilibBuildSrcInstall,
+		"multilib_foreach_abi":           i.helpers.MultilibForeachABI,
+		"multilib_native_usedep":         i.helpers.MultilibUsedep,
+		"multilib_is_native_abi":         i.helpers.MultilibIsNativeABI,
+		"get_all_abis":                   i.helpers.GetAllABIs,
+		"get_abi_LIBDIR":                 i.helpers.GetABILibdir,
+		"get_abi_CHOST":                  i.helpers.GetABIChost,
+		"get_abi_CFLAGS":                 i.helpers.GetABICflags,
+		"get_abi_LDFLAGS":                i.helpers.GetABILdflags,
+
 		// Banned commands (PMS Section 12.3.2 / Table 12.3)
 		// These stubs check EAPI and return appropriate errors.
 		"dohard":   i.helpers.Dohard,   // Banned in EAPI 4+
@@ -489,6 +609,27 @@ func (i *Interpreter) GetHelpers() *Helpers {
 	return i.helpers
 }
 
+// panicContext builds a descriptive context string for panic error messages.
+//
+// Includes the current eclass name (if any) and package name for debugging.
+func (i *Interpreter) panicContext(base string) string {
+	parts := []string{base}
+
+	// Add current eclass context if available
+	if i.helpers != nil && i.helpers.eclassRegistry != nil {
+		if ec := i.helpers.eclassRegistry.GetCurrentEclass(); ec != "" {
+			parts = append(parts, fmt.Sprintf("eclass=%s", ec))
+		}
+	}
+
+	// Add package name if available
+	if i.env != nil && i.env.Package != nil {
+		parts = append(parts, fmt.Sprintf("pkg=%s", i.env.Package.Name))
+	}
+
+	return strings.Join(parts, ", ")
+}
+
 // dispatchCommand executes a helper command by name.
 //
 // This is used by the nonfatal helper to execute commands through the
@@ -517,7 +658,19 @@ func (i *Interpreter) dispatchCommand(cmd string, args []string) error {
 // Eval evaluates a bash expression and returns its output.
 //
 // This is useful for evaluating variable expansions or command substitutions.
-func (i *Interpreter) Eval(ctx context.Context, expr string) (string, error) {
+// Panics from unsupported bash constructs are caught and converted to errors.
+func (i *Interpreter) Eval(ctx context.Context, expr string) (result string, evalErr error) {
+	defer func() {
+		if r := recover(); r != nil {
+			logging.Debug("[ebuild] interpreter panic recovered in eval: %v", r)
+			result = ""
+			evalErr = &InterpreterPanicError{
+				PanicValue: r,
+				Context:    i.panicContext("eval"),
+			}
+		}
+	}()
+
 	var buf bytes.Buffer
 
 	// Create a temporary interpreter with captured output
