@@ -119,6 +119,12 @@ func (h *Helpers) sedExternal(args []string) error {
 
 // sedFile performs sed substitution on a single file.
 func (h *Helpers) sedFile(file, old, newStr string, global, inPlace bool) error {
+	// Resolve relative paths against source directory
+	if !filepath.IsAbs(file) {
+		if h.env != nil && h.env.S != "" {
+			file = filepath.Join(h.env.S, file)
+		}
+	}
 	content, err := os.ReadFile(file)
 	if err != nil {
 		return &DieError{Message: fmt.Sprintf("sed: read %s: %v", file, err)}
@@ -424,26 +430,102 @@ func (h *Helpers) copyDir(src, dst string) error {
 
 // Mv moves/renames files.
 func (h *Helpers) Mv(args []string) error {
-	if len(args) < 2 {
+	force := false
+	var targets []string
+	endOfFlags := false
+
+	for _, arg := range args {
+		if endOfFlags {
+			targets = append(targets, arg)
+			continue
+		}
+		if arg == "--" {
+			endOfFlags = true
+			continue
+		}
+		if strings.HasPrefix(arg, "-") && len(arg) > 1 {
+			for _, ch := range arg[1:] {
+				switch ch {
+				case 'f':
+					force = true
+				case 'v', 'n', 'T':
+					// ignore
+				}
+			}
+			continue
+		}
+		targets = append(targets, arg)
+	}
+	_ = force
+
+	if len(targets) < 2 {
 		return &DieError{Message: "mv: requires source and destination"}
 	}
 
-	src := args[len(args)-2]
-	dst := args[len(args)-1]
+	dst := targets[len(targets)-1]
+	sources := targets[:len(targets)-1]
 
-	// If destination is a directory, move into it
-	if info, err := os.Stat(dst); err == nil && info.IsDir() {
-		dst = filepath.Join(dst, filepath.Base(src))
-	}
+	for _, src := range sources {
+		dest := dst
+		// If destination is a directory, move into it
+		if info, err := os.Stat(dest); err == nil && info.IsDir() {
+			dest = filepath.Join(dest, filepath.Base(src))
+		}
 
-	if err := os.Rename(src, dst); err != nil {
-		return &DieError{Message: fmt.Sprintf("mv: %v", err)}
+		if err := os.Rename(src, dest); err != nil {
+			// Handle cross-device link: fall back to copy + remove
+			if strings.Contains(err.Error(), "cross-device link") ||
+				strings.Contains(err.Error(), "invalid cross-device link") {
+				if cpErr := h.copyRecursive(src, dest); cpErr != nil {
+					return &DieError{Message: fmt.Sprintf("mv: %v", cpErr)}
+				}
+				if rmErr := os.RemoveAll(src); rmErr != nil {
+					return &DieError{Message: fmt.Sprintf("mv: remove source: %v", rmErr)}
+				}
+			} else {
+				return &DieError{Message: fmt.Sprintf("mv: rename %s: %v", src, err)}
+			}
+		}
 	}
 
 	return nil
 }
 
-// Chmod changes file permissions.
+// copyRecursive copies a file or directory recursively.
+func (h *Helpers) copyRecursive(src, dst string) error {
+	info, err := os.Lstat(src)
+	if err != nil {
+		return err
+	}
+
+	if info.IsDir() {
+		if err := os.MkdirAll(dst, info.Mode()); err != nil {
+			return err
+		}
+		entries, err := os.ReadDir(src)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			if err := h.copyRecursive(
+				filepath.Join(src, entry.Name()),
+				filepath.Join(dst, entry.Name()),
+			); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	// Copy regular file
+	content, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(dst, content, info.Mode())
+}
+
+// Chmod changes file permissions. Supports both octal and symbolic modes.
 func (h *Helpers) Chmod(args []string) error {
 	if len(args) < 2 {
 		return &DieError{Message: "chmod: requires mode and file"}
@@ -462,26 +544,10 @@ func (h *Helpers) Chmod(args []string) error {
 	}
 
 	modeStr := args[modeIdx]
-	mode, err := strconv.ParseInt(modeStr, 8, 32)
-	if err != nil {
-		return &DieError{Message: fmt.Sprintf("chmod: invalid mode: %s", modeStr)}
-	}
 
 	for _, file := range args[modeIdx+1:] {
-		if recursive {
-			err := filepath.WalkDir(file, func(p string, d fs.DirEntry, err error) error {
-				if err != nil {
-					return err
-				}
-				return os.Chmod(p, os.FileMode(mode))
-			})
-			if err != nil {
-				return &DieError{Message: fmt.Sprintf("chmod: %v", err)}
-			}
-		} else {
-			if err := os.Chmod(file, os.FileMode(mode)); err != nil {
-				return &DieError{Message: fmt.Sprintf("chmod: %s: %v", file, err)}
-			}
+		if err := applyMode(file, modeStr, recursive); err != nil {
+			return &DieError{Message: fmt.Sprintf("chmod: %s: %v", file, err)}
 		}
 	}
 
