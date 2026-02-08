@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 
 	"github.com/grpmsoft/grpm/internal/config"
 	"github.com/grpmsoft/grpm/internal/daemon"
@@ -16,6 +17,7 @@ import (
 	"github.com/grpmsoft/grpm/internal/install"
 	"github.com/grpmsoft/grpm/internal/logging"
 	"github.com/grpmsoft/grpm/internal/pkg"
+	"github.com/grpmsoft/grpm/internal/repo"
 	"github.com/grpmsoft/grpm/internal/solver"
 	"github.com/grpmsoft/grpm/internal/tools"
 )
@@ -63,6 +65,8 @@ func (a *App) runEmerge(args []string) error {
 	rootPath := fs.String("root", "/", "Installation root directory (like $ROOT in Portage)")
 	onlyDeps := fs.Bool("onlydeps", false, "Build dependencies only, not the target package(s)")
 	fs.BoolVar(onlyDeps, "o", false, "Alias for --onlydeps")
+	noDeps := fs.Bool("nodeps", false, "Skip dependency resolution, build only specified packages")
+	fs.BoolVar(noDeps, "O", false, "Alias for --nodeps")
 	showInfo := fs.Bool("info", false, "Show system environment information")
 
 	// Dependency resolution options (Portage-compatible)
@@ -123,23 +127,45 @@ func (a *App) runEmerge(args []string) error {
 		return err
 	}
 
-	// Resolve dependencies with Portage-compatible filtering
-	logging.Action("Calculating dependencies...")
-	solution, err := a.resolvePackageDependenciesWithOptions(r, packages, solver.ResolveOptions{
-		Deep:      *deep,
-		WithBdeps: *withBdeps,
-		EmptyTree: *emptyTree || *useMock, // Mock mode implies emptytree
-	}, *varDbPath, *useMock)
-	if err != nil {
-		return err
-	}
+	var solution map[string]*pkg.Package
 
-	// Filter out target packages if --onlydeps is specified
-	if *onlyDeps {
-		solution = a.filterTargetPackages(solution, packages)
-		if len(solution) == 0 {
-			logging.Info("No dependencies to build (--onlydeps specified)")
-			return nil
+	if *noDeps {
+		// --nodeps: skip resolution, just find the best acceptable version
+		logging.Action("Skipping dependency resolution (--nodeps)...")
+		acceptKeywords := []string{"amd64", "~amd64"}
+		if cfg != nil && len(cfg.MakeConf.ACCEPT_KEYWORDS) > 0 {
+			acceptKeywords = cfg.MakeConf.ACCEPT_KEYWORDS
+		}
+		solution = make(map[string]*pkg.Package)
+		for _, name := range packages {
+			found, loadErr := a.loadBestAcceptableVersion(r, name, acceptKeywords)
+			if loadErr != nil || found == nil {
+				logging.Warn("Package %s not found: %v", name, loadErr)
+				continue
+			}
+			key := fmt.Sprintf("%s-%s", found.Name, found.Version)
+			solution[key] = found
+		}
+	} else {
+		// Resolve dependencies with Portage-compatible filtering
+		logging.Action("Calculating dependencies...")
+		var resolveErr error
+		solution, resolveErr = a.resolvePackageDependenciesWithOptions(r, packages, solver.ResolveOptions{
+			Deep:      *deep,
+			WithBdeps: *withBdeps,
+			EmptyTree: *emptyTree || *useMock, // Mock mode implies emptytree
+		}, *varDbPath, *useMock)
+		if resolveErr != nil {
+			return resolveErr
+		}
+
+		// Filter out target packages if --onlydeps is specified
+		if *onlyDeps {
+			solution = a.filterTargetPackages(solution, packages)
+			if len(solution) == 0 {
+				logging.Info("No dependencies to build (--onlydeps specified)")
+				return nil
+			}
 		}
 	}
 
@@ -164,9 +190,9 @@ func (a *App) runEmerge(args []string) error {
 		fmt.Printf("*** Parallel builds: %d packages at a time\n", *parallelBuilds)
 	}
 	fmt.Println()
-	for name, p := range solution {
+	for _, p := range solution {
 		useStr := FormatUSEFlags(p, cfg)
-		fmt.Printf("[ebuild  N    ] %s-%s %s\n", name, p.Version, useStr)
+		fmt.Printf("[ebuild  N    ] %s-%s %s\n", p.Name, p.Version, useStr)
 	}
 	fmt.Printf("\nTotal: %d package(s)\n", len(solution))
 
@@ -496,7 +522,7 @@ func (a *App) buildAndInstallPackages(solution map[string]*pkg.Package, repoPath
 	pkgNum := 0
 	for name, p := range solution {
 		pkgNum++
-		logging.Action("(%d/%d) Emerging %s-%s", pkgNum, totalPackages, name, p.Version)
+		logging.Action("(%d/%d) Emerging %s-%s", pkgNum, totalPackages, p.Name, p.Version)
 
 		buildErr := a.buildAndInstallSingle(name, p, installer, repoPath, distDir, tmpDir, jobs, keepWork, enableTests, replace, force, fetcher, useExpandVars, cfg)
 		if buildErr != nil {
@@ -510,7 +536,7 @@ func (a *App) buildAndInstallPackages(solution map[string]*pkg.Package, repoPath
 		}
 
 		builtCount++
-		logging.Action("%s-%s merged successfully (%d/%d)", name, p.Version, builtCount, totalPackages)
+		logging.Action("%s-%s merged successfully (%d/%d)", p.Name, p.Version, builtCount, totalPackages)
 	}
 
 	if failedCount > 0 {
@@ -768,6 +794,53 @@ func (a *App) filterTargetPackages(solution map[string]*pkg.Package, packages []
 	}
 
 	return filtered
+}
+
+// loadBestAcceptableVersion loads the best non-masked, keyword-accepted version of a package.
+// If the highest version is a live ebuild (9999) or has no acceptable KEYWORDS,
+// it falls back to GetAllVersions and picks the best acceptable one.
+func (a *App) loadBestAcceptableVersion(r repo.Repository, name string, acceptKeywords []string) (*pkg.Package, error) {
+	p, err := r.LoadPackage(name)
+	if err != nil {
+		return nil, err
+	}
+
+	// Check if highest version is acceptable
+	if p.IsKeywordAccepted(acceptKeywords) {
+		return p, nil
+	}
+
+	// Highest version is masked/unkeyworded — try all versions
+	versions, err := r.GetAllVersions(name)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get versions for %s: %w", name, err)
+	}
+
+	// Filter to acceptable versions
+	var acceptable []*pkg.Package
+	for _, v := range versions {
+		if v.IsKeywordAccepted(acceptKeywords) {
+			acceptable = append(acceptable, v)
+		}
+	}
+
+	if len(acceptable) == 0 {
+		// No acceptable versions; fall back to highest (user may have reasons)
+		logging.Warn("No keyword-accepted version found for %s, using %s", name, p.Version)
+		return p, nil
+	}
+
+	// Sort by version (highest first)
+	sort.Slice(acceptable, func(i, j int) bool {
+		return pkg.CompareVersions(acceptable[i].Version, acceptable[j].Version) > 0
+	})
+
+	if acceptable[0].Version != p.Version {
+		logging.Debug("Package %s-%s is unkeyworded, using %s instead",
+			name, p.Version, acceptable[0].Version)
+	}
+
+	return acceptable[0], nil
 }
 
 // checkBuildTools verifies that all required external tools are available.

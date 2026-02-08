@@ -31,14 +31,15 @@ func (h *Helpers) Unpack(args []string) error {
 		return &DieError{Message: "unpack: no files specified"}
 	}
 
-	workDir := h.getWorkDir()
+	// Per Portage: unpack ALWAYS extracts into WORKDIR, never S.
+	// The tarball typically creates its own subdirectory (e.g., diffutils-3.12/)
+	// inside WORKDIR, and S = WORKDIR/P points to that subdirectory.
+	workDir := h.getEnvVar("WORKDIR")
+	if workDir == "" && h.env != nil {
+		workDir = h.env.WORKDIR
+	}
 	if workDir == "" {
-		if h.env != nil {
-			workDir = h.env.WORKDIR
-		}
-		if workDir == "" {
-			return &DieError{Message: "unpack: WORKDIR not set"}
-		}
+		return &DieError{Message: "unpack: WORKDIR not set"}
 	}
 
 	distDir := ""

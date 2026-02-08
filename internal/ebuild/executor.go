@@ -672,13 +672,13 @@ func (e *Executor) ParseEbuild() error {
 		logging.Debug("[ebuild] inherits: %v", parsed.InheritedEclasses)
 	}
 
-	// Parse and evaluate S variable if defined in ebuild
-	if err := e.parseSVariable(); err != nil {
-		logging.Debug("[ebuild] warning: failed to parse S variable: %v", err)
-	}
-
-	// Debug: Log final S value
-	logging.Debug("[ebuild] final S value: %s", e.Env.S)
+	// S variable handling: Do NOT parse S from ebuild with regex.
+	// Ebuilds often define S conditionally (if [[ ${PV} == *_p* ]]; then S=...),
+	// which regex-based extraction cannot handle correctly. Instead, we rely on:
+	// 1. Default S = WORKDIR/P (set by NewEnvironment)
+	// 2. __grpm_sync_env in the combined script reads $S from bash AFTER
+	//    the ebuild's conditionals have been properly evaluated.
+	logging.Debug("[ebuild] S value (default): %s", e.Env.S)
 
 	return nil
 }
