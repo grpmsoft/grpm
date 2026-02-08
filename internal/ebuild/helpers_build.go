@@ -132,22 +132,42 @@ func newExecCmd(name string, args ...string) *execCmd {
 // Usage: econf
 // Usage: econf --enable-feature
 //
-// Automatically adds standard configure options like --prefix, --host, etc.
+// Per Portage phase-helpers.sh:514, uses ECONF_SOURCE (default ".")
+// to locate the configure script. Automatically adds standard configure
+// options like --prefix, --host, etc.
 func (h *Helpers) Econf(args []string) error {
-	sourceDir := h.getWorkDir()
-	configurePath := filepath.Join(sourceDir, "configure")
+	// Per Portage: : ${ECONF_SOURCE:=.}
+	econfSource := h.getEnvVar("ECONF_SOURCE")
+	if econfSource == "" {
+		econfSource = h.getRuntimeDir()
+	}
 
-	// Check if configure script exists
-	if _, err := os.Stat(configurePath); os.IsNotExist(err) {
-		return &DieError{Message: fmt.Sprintf("econf: ./configure does not exist in %s", sourceDir)}
+	configurePath := filepath.Join(econfSource, "configure")
+
+	// Check if configure script exists and is executable (per Portage line 545)
+	info, err := os.Stat(configurePath)
+	if err != nil {
+		return &DieError{Message: fmt.Sprintf("econf: %s does not exist in %s", "configure", econfSource)}
+	}
+	if info.Mode()&0111 == 0 {
+		return &DieError{Message: "econf: configure is not executable"}
 	}
 
 	confArgs := h.buildConfArgs()
 	confArgs = append(confArgs, args...)
 
-	h.writeStdout(fmt.Sprintf(">>> Running: ./configure %s\n", strings.Join(confArgs, " ")))
+	h.writeStdout(fmt.Sprintf(">>> Running: %s/configure %s\n", econfSource, strings.Join(confArgs, " ")))
 
-	return h.runCommand("./configure", confArgs)
+	// Run configure from ECONF_SOURCE, not necessarily from $S
+	cmd := h.createCommand(configurePath, confArgs, h.getRuntimeDir())
+	output, cmdErr := cmd.CombinedOutput()
+	if len(output) > 0 {
+		h.writeStdout(string(output))
+	}
+	if cmdErr != nil {
+		return &DieError{Message: "econf failed"}
+	}
+	return nil
 }
 
 // buildConfArgs builds standard configure arguments from environment.
@@ -179,18 +199,12 @@ func (h *Helpers) buildConfArgs() []string {
 
 // getChost returns the target host triple.
 func (h *Helpers) getChost() string {
-	if chost := os.Getenv("CHOST"); chost != "" {
-		return chost
-	}
-	return ""
+	return h.getEnvVar("CHOST")
 }
 
 // getCbuild returns the build host triple.
 func (h *Helpers) getCbuild() string {
-	if cbuild := os.Getenv("CBUILD"); cbuild != "" {
-		return cbuild
-	}
-	return ""
+	return h.getEnvVar("CBUILD")
 }
 
 // getLibDir returns the library directory name (wrapper for existing).
