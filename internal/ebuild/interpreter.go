@@ -671,6 +671,7 @@ func (i *Interpreter) execHandler(next interp.ExecHandlerFunc) interp.ExecHandle
 		if handler, ok := commands[cmd]; ok {
 			// Make runtime bash variables available to Go helpers.
 			i.helpers.runtimeEnv = hc.Env
+			i.helpers.runtimeDir = hc.Dir
 
 			// Redirect helpers' stdout to context stdout for command substitution.
 			// When bash does $(some_command), hc.Stdout is a capture pipe.
@@ -680,6 +681,7 @@ func (i *Interpreter) execHandler(next interp.ExecHandlerFunc) interp.ExecHandle
 			err := handler(cmdArgs)
 			i.helpers.stdout = origStdout
 			i.helpers.runtimeEnv = nil
+			i.helpers.runtimeDir = ""
 			return err
 		}
 

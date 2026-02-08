@@ -45,6 +45,15 @@ func (h *Helpers) getMakeOpts() []string {
 }
 
 // getWorkDir returns the working directory (S or WORKDIR).
+// getRuntimeDir returns the best working directory for command execution.
+// Priority: runtimeDir (bash CWD from hc.Dir) > getWorkDir ($S/$WORKDIR).
+func (h *Helpers) getRuntimeDir() string {
+	if h.runtimeDir != "" {
+		return h.runtimeDir
+	}
+	return h.getWorkDir()
+}
+
 // Checks the bash runtime environment first (runtimeEnv) for the latest $S,
 // then falls back to the Go Environment struct.
 func (h *Helpers) getWorkDir() string {
@@ -69,7 +78,7 @@ func (h *Helpers) getWorkDir() string {
 
 // runCommand executes a command in the source directory.
 func (h *Helpers) runCommand(name string, args []string) error {
-	workDir := h.getWorkDir()
+	workDir := h.getRuntimeDir()
 	if workDir == "" {
 		return &DieError{Message: fmt.Sprintf("%s: working directory not set", name)}
 	}

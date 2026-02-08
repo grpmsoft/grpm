@@ -21,12 +21,16 @@ import (
 // EAPI 8 Filesystem Utilities
 // ============================================================================
 
-// resolvePath resolves a relative path against $S (source directory).
+// resolvePath resolves a relative path against the bash CWD.
+// Uses runtimeDir (from hc.Dir) first, then falls back to $S/$WORKDIR.
 // If the path is already absolute, it is returned as-is.
-// This ensures filesystem helpers work correctly regardless of Go's cwd.
 func (h *Helpers) resolvePath(path string) string {
 	if filepath.IsAbs(path) {
 		return path
+	}
+	// Prefer the runtime CWD from the bash interpreter (tracks cd commands)
+	if h.runtimeDir != "" {
+		return filepath.Join(h.runtimeDir, path)
 	}
 	if workDir := h.getWorkDir(); workDir != "" {
 		return filepath.Join(workDir, path)
@@ -111,7 +115,10 @@ func (h *Helpers) Sed(args []string) error {
 // sedExternal delegates sed to the system's sed command.
 func (h *Helpers) sedExternal(args []string) error {
 	cmd := exec.Command("sed", args...)
-	if workDir := h.getWorkDir(); workDir != "" {
+	// Use runtime CWD first (tracks cd in bash), then fall back to $S/$WORKDIR
+	if h.runtimeDir != "" {
+		cmd.Dir = h.runtimeDir
+	} else if workDir := h.getWorkDir(); workDir != "" {
 		cmd.Dir = workDir
 	}
 	var stdout, stderr bytes.Buffer
@@ -558,7 +565,8 @@ func (h *Helpers) Chmod(args []string) error {
 	modeStr := args[modeIdx]
 
 	for _, file := range args[modeIdx+1:] {
-		if err := applyMode(file, modeStr, recursive); err != nil {
+		resolved := h.resolvePath(file)
+		if err := applyMode(resolved, modeStr, recursive); err != nil {
 			return &DieError{Message: fmt.Sprintf("chmod: %s: %v", file, err)}
 		}
 	}
@@ -671,7 +679,7 @@ func (h *Helpers) Find(args []string) error {
 		return &DieError{Message: "find: requires path"}
 	}
 
-	path := args[0]
+	path := h.resolvePath(args[0])
 	namePattern := ""
 	typeFilter := ""
 

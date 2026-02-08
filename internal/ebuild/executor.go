@@ -909,6 +909,17 @@ func (e *Executor) RunPhaseFunction(phase Phase) (string, error) {
 	// This command is intercepted by the interpreter to update env.S, env.WORKDIR.
 	combinedScript.WriteString("__grpm_sync_env\n")
 
+	// Set CWD per Portage's phase-functions.sh rules.
+	// src_unpack runs in $WORKDIR; src_prepare through src_install run in $S
+	// (with $WORKDIR fallback if $S doesn't exist, per EAPI 7+).
+	// pkg_* phases don't change directory.
+	switch phase {
+	case PhaseUnpack:
+		combinedScript.WriteString("cd \"${WORKDIR}\" || true\n")
+	case PhasePrepare, PhaseConfigure, PhaseCompile, PhaseTest, PhaseInstall:
+		combinedScript.WriteString("if [[ -d \"${S}\" ]]; then cd \"${S}\"; else cd \"${WORKDIR}\"; fi\n")
+	}
+
 	// Determine which function to call
 	targetFunc := funcName
 	if eclassName != "" {
