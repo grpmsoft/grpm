@@ -86,8 +86,14 @@ func (s *Service) ResolveDistfiles(
 		"CATEGORY": meta.Category,
 	}
 
-	// Parse SRC_URI entries
-	entries, err := repo.ParseSrcURI(srcURI, nil, vars)
+	// Parse SRC_URI entries with USE flag filtering.
+	// This ensures conditional blocks like verify-sig? ( .sig ) are only
+	// included when the corresponding USE flag is enabled.
+	var activeFlags map[string]bool
+	if pkgInfo != nil && len(pkgInfo.UseFlags) > 0 {
+		activeFlags = pkgInfo.UseFlags
+	}
+	entries, err := repo.ParseSrcURI(srcURI, activeFlags, vars)
 	if err != nil {
 		logging.Warn("failed to parse SRC_URI: %v, using manifest distfiles", err)
 		return manifest.GetDistfiles(), nil

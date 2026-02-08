@@ -190,11 +190,21 @@ func (h *Helpers) verRsImpl(rangeSpec, newSep, version string) string {
 // Returns: exit code 0 (true) or 1 (false) via exitFalse().
 // Available in EAPI 7+.
 func (h *Helpers) VerTest(args []string) error {
-	if len(args) != 3 {
-		return &DieError{Message: "ver_test: requires exactly 3 arguments: <v1> <op> <v2>"}
-	}
+	var v1, op, v2 string
 
-	v1, op, v2 := args[0], args[1], args[2]
+	switch len(args) {
+	case 3:
+		v1, op, v2 = args[0], args[1], args[2]
+	case 2:
+		// 2-arg form: ver_test <op> <v2> — uses $PVR as implicit v1
+		v1 = h.getEnvVar("PVR")
+		if v1 == "" {
+			v1 = h.getEnvVar("PV")
+		}
+		op, v2 = args[0], args[1]
+	default:
+		return &DieError{Message: "ver_test: requires 2 or 3 arguments"}
+	}
 
 	// Use PMS-compliant version comparison from pkg package
 	cmp := pkg.CompareVersions(v1, v2)

@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/grpmsoft/grpm/internal/logging"
@@ -107,6 +108,9 @@ func (i *Interpreter) Run(ctx context.Context, script string) (runErr error) {
 			}
 		}
 	}()
+
+	// Transform unsupported bash constructs (${VAR@a}, etc.) before parsing.
+	script = preprocessScript(script)
 
 	// Parse the script with bash variant for full ebuild compatibility
 	parser := syntax.NewParser(syntax.Variant(syntax.LangBash))
@@ -406,6 +410,9 @@ func (i *Interpreter) buildCommandMap() map[string]helperFunc {
 		"has_version":      i.helpers.HasVersion,
 		"best_version":     i.helpers.BestVersion,
 
+		// app-alternatives.eclass functions
+		"get_alternative": i.helpers.GetAlternative,
+
 		// cmake.eclass functions
 		"cmake":                          i.helpers.Cmake,
 		"cmake_src_prepare":              i.helpers.CmakeSrcPrepare,
@@ -462,6 +469,14 @@ func (i *Interpreter) buildCommandMap() map[string]helperFunc {
 		// python-any-r1.eclass functions
 		"python-any-r1_pkg_setup": i.helpers.PythonAnyR1PkgSetup,
 		"python_check_deps":       i.helpers.PythonCheckDeps,
+
+		// Internal python-utils-r1 functions (underscore-prefixed).
+		// These are bash functions in the eclass that aren't preserved
+		// across interpreter runs, so we provide Go stubs.
+		"_python_set_impls":           i.helpers.PythonSetImpls,
+		"_python_export":              i.helpers.PythonInternalExport,
+		"_python_check_locale_sanity": i.helpers.PythonNoOp,
+		"_python_set_provider_pkg":    i.helpers.PythonNoOp,
 
 		// distutils-r1.eclass functions
 		"distutils-r1_src_prepare":   i.helpers.DistutilsR1SrcPrepare,
@@ -559,9 +574,16 @@ func (i *Interpreter) execHandler(next interp.ExecHandlerFunc) interp.ExecHandle
 		cmdArgs := args[1:]
 		hc := interp.HandlerCtx(ctx)
 
-		// Special handling for xargs - needs stdin from context
+		// Special handling for commands that need stdin from context
 		if cmd == "xargs" {
 			return i.helpers.XargsWithStdin(hc.Stdin, cmdArgs)
+		}
+		if cmd == "cat" {
+			return i.helpers.CatWithStdin(hc.Stdin, cmdArgs)
+		}
+		// newins/newdoc/newman with "-" source reads from stdin (heredoc piping)
+		if (cmd == "newins" || cmd == "newdoc" || cmd == "newman") && len(cmdArgs) >= 2 && cmdArgs[0] == "-" {
+			return i.helpers.NewinsFromStdin(hc.Stdin, cmdArgs[1], cmd)
 		}
 
 		// Special handling for inherit - needs environment from context
@@ -594,11 +616,15 @@ func (i *Interpreter) execHandler(next interp.ExecHandlerFunc) interp.ExecHandle
 		// Look up command in map
 		if handler, ok := commands[cmd]; ok {
 			// Make runtime bash variables available to Go helpers.
-			// Variables set in ebuild scripts (e.g., DISTUTILS_USE_PEP517)
-			// are only visible in the runner's environment, not in the
-			// Environment struct. This bridges the gap.
 			i.helpers.runtimeEnv = hc.Env
+
+			// Redirect helpers' stdout to context stdout for command substitution.
+			// When bash does $(some_command), hc.Stdout is a capture pipe.
+			// Without this, Go helpers write to the original stdout instead.
+			origStdout := i.helpers.stdout
+			i.helpers.stdout = hc.Stdout
 			err := handler(cmdArgs)
+			i.helpers.stdout = origStdout
 			i.helpers.runtimeEnv = nil
 			return err
 		}
@@ -695,4 +721,39 @@ func (i *Interpreter) Eval(ctx context.Context, expr string) (result string, eva
 	}
 
 	return buf.String(), nil
+}
+
+// paramExpansionRe matches ${VAR@op} parameter expansion operators
+// unsupported by mvdan.cc/sh. Captures: $1=varname (with optional !), $2=operator.
+var paramExpansionRe = regexp.MustCompile(`\$\{(!?[a-zA-Z_][a-zA-Z0-9_]*)@([aQEPAK])\}`)
+
+// preprocessScript transforms bash constructs unsupported by mvdan.cc/sh
+// into equivalent forms that won't cause parser/runtime panics.
+//
+// Handles:
+//   - ${VAR@a} → "a" (variable attributes; assume array for eclass compatibility)
+//   - ${VAR@Q/E/P/A/K} → "" (other transformation operators)
+//
+// This is needed because Gentoo eclasses (e.g., app-alternatives.eclass) use
+// ${ALTERNATIVES@a} to check if a variable is an array, which mvdan.cc/sh
+// does not support and panics on.
+func preprocessScript(script string) string {
+	if !strings.Contains(script, "@") {
+		return script
+	}
+	return paramExpansionRe.ReplaceAllStringFunc(script, func(match string) string {
+		sub := paramExpansionRe.FindStringSubmatch(match)
+		if len(sub) < 3 {
+			return match
+		}
+		switch sub[2] {
+		case "a":
+			// @a returns variable attributes. In Gentoo eclasses, this checks
+			// array declarations (e.g., ${ALTERNATIVES@a} should contain "a").
+			// Returning "a" satisfies the check since ebuilds declare these as arrays.
+			return "a"
+		default:
+			return ""
+		}
+	})
 }

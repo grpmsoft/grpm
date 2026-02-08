@@ -599,3 +599,122 @@ func (h *Helpers) copyFileWithMode(src, dst string, mode os.FileMode) error {
 
 	return os.WriteFile(dst, content, mode)
 }
+
+// ============================================================================
+// Internal Python Eclass Functions
+// ============================================================================
+// These are internal functions (prefixed with _) defined in python-utils-r1.eclass.
+// Since our eclass loader creates a new runner for each eclass, bash functions
+// defined in the eclass aren't preserved. We provide Go stubs instead.
+
+// PythonNoOp is a no-op stub for internal Python functions that can be safely skipped.
+func (h *Helpers) PythonNoOp(_ []string) error {
+	return nil
+}
+
+// PythonSetImpls implements _python_set_impls from python-utils-r1.eclass.
+// Validates PYTHON_COMPAT and sets _PYTHON_SUPPORTED_IMPLS / _PYTHON_UNSUPPORTED_IMPLS.
+func (h *Helpers) PythonSetImpls(_ []string) error {
+	// Get PYTHON_COMPAT from environment
+	compat := h.getEnvVar("PYTHON_COMPAT")
+	if compat == "" {
+		// Default to python3_12 if not set
+		compat = "python3_12"
+	}
+
+	// All known implementations in order
+	allImpls := []string{
+		"python3_11", "python3_12", "python3_13", "python3_14",
+		"pypy3_11",
+	}
+
+	compatList := strings.Fields(compat)
+	compatMap := make(map[string]bool)
+	for _, c := range compatList {
+		compatMap[c] = true
+	}
+
+	var supported, unsupported []string
+	for _, impl := range allImpls {
+		if compatMap[impl] {
+			supported = append(supported, impl)
+		} else {
+			unsupported = append(unsupported, impl)
+		}
+	}
+
+	if len(supported) == 0 {
+		// Fallback: treat all compat entries as supported
+		supported = compatList
+	}
+
+	h.setEnvVar("_PYTHON_SUPPORTED_IMPLS", strings.Join(supported, " "))
+	h.setEnvVar("_PYTHON_UNSUPPORTED_IMPLS", strings.Join(unsupported, " "))
+
+	return nil
+}
+
+// PythonInternalExport implements _python_export from python-utils-r1.eclass.
+// Exports Python implementation variables (PYTHON, PYTHON_SITEDIR, etc.).
+func (h *Helpers) PythonInternalExport(args []string) error {
+	// _python_export [impl] VAR1 VAR2 ...
+	// If impl is not specified, use EPYTHON
+	impl := ""
+	vars := args
+
+	if len(args) > 0 {
+		// Check if first arg looks like an implementation
+		if pythonImplPattern.MatchString(args[0]) {
+			impl = args[0]
+			vars = args[1:]
+		}
+	}
+
+	if impl == "" {
+		impl = h.getEnvVar("EPYTHON")
+	}
+	if impl == "" {
+		impl = h.getPythonImpl()
+	}
+	if impl == "" {
+		impl = "python3_12" // Default fallback
+	}
+
+	info, err := ParsePythonImpl(impl)
+	if err != nil {
+		// If we can't parse, just set EPYTHON and return
+		h.setEnvVar("EPYTHON", impl)
+		return nil
+	}
+
+	for _, v := range vars {
+		switch v {
+		case "EPYTHON":
+			h.setEnvVar("EPYTHON", impl)
+		case "PYTHON":
+			pythonPath, lookErr := exec.LookPath(info.Executable)
+			if lookErr != nil {
+				prefix := h.getEnvOrDefault("EPREFIX", "")
+				pythonPath = filepath.Join(prefix, "usr", "bin", info.Executable)
+			}
+			h.setEnvVar("PYTHON", pythonPath)
+		case "PYTHON_SITEDIR":
+			h.setEnvVar("PYTHON_SITEDIR", h.computePythonSitedir(impl))
+		case "PYTHON_INCLUDEDIR":
+			h.setEnvVar("PYTHON_INCLUDEDIR", h.computePythonIncludedir(impl))
+		case "PYTHON_LIBPATH":
+			h.setEnvVar("PYTHON_LIBPATH", h.computePythonLibrary(impl))
+		case "PYTHON_PKG_DEP":
+			h.setEnvVar("PYTHON_PKG_DEP", fmt.Sprintf("dev-lang/python:%d.%d", info.Major, info.Minor))
+		case "PYTHON_SCRIPTDIR":
+			prefix := h.getEnvOrDefault("EPREFIX", "")
+			h.setEnvVar("PYTHON_SCRIPTDIR", filepath.Join(prefix, "usr", "bin"))
+		case "PYTHON_STDLIB":
+			prefix := h.getEnvOrDefault("EPREFIX", "")
+			h.setEnvVar("PYTHON_STDLIB", filepath.Join(prefix, "usr", "lib",
+				fmt.Sprintf("python%d.%d", info.Major, info.Minor)))
+		}
+	}
+
+	return nil
+}

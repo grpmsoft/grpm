@@ -9,6 +9,7 @@ package ebuild
 
 import (
 	"fmt"
+	"os/exec"
 	"strings"
 )
 
@@ -81,10 +82,27 @@ func (h *Helpers) PythonSetup(args []string) error {
 		return h.PythonSingleR1PkgSetup(args)
 	}
 
-	// python-r1 mode - EPYTHON should already be set by python_foreach_impl
+	// Try to get current implementation from env
 	impl := h.getPythonImpl()
 	if impl == "" {
-		return &DieError{Message: "python_setup: EPYTHON not set"}
+		// python-any-r1 mode or no impl set: auto-detect available Python.
+		// Try implementations in preference order.
+		for _, candidate := range []string{
+			"python3_12", "python3_13", "python3_11", "python3_14",
+		} {
+			info, err := ParsePythonImpl(candidate)
+			if err != nil {
+				continue
+			}
+			if _, lookErr := exec.LookPath(info.Executable); lookErr == nil {
+				impl = candidate
+				break
+			}
+		}
+	}
+
+	if impl == "" {
+		impl = "python3_12" // Last resort fallback
 	}
 
 	return h.PythonExport([]string{impl})

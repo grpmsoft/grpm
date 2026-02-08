@@ -840,3 +840,37 @@ func buildConstraint(operator, version string) *pkg.VersionConstraint {
 		return nil
 	}
 }
+
+// GetAlternative implements get_alternative() from app-alternatives.eclass.
+// Returns the USE flag name for the selected alternative.
+func (h *Helpers) GetAlternative(_ []string) error {
+	// ALTERNATIVES is an array in bash, but we have it as space-separated string.
+	// Each entry is "flagname:provider" — we check which flag is enabled.
+	alts := h.getEnvVar("ALTERNATIVES")
+	if alts == "" {
+		// Try to find the first enabled USE flag as fallback
+		h.writeStdout("reference")
+		return nil
+	}
+
+	for _, alt := range strings.Fields(alts) {
+		flag := alt
+		if idx := strings.Index(alt, ":"); idx >= 0 {
+			flag = alt[:idx]
+		}
+
+		// Check if this USE flag is enabled
+		if h.isUseEnabled(flag) {
+			h.writeStdout(flag)
+			return nil
+		}
+	}
+
+	// Default: return first alternative
+	first := strings.Fields(alts)[0]
+	if idx := strings.Index(first, ":"); idx >= 0 {
+		first = first[:idx]
+	}
+	h.writeStdout(first)
+	return nil
+}
