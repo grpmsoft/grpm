@@ -42,52 +42,103 @@ func (h *Helpers) VerCut(args []string) error {
 	return nil
 }
 
-// verCutImpl implements version cutting logic.
+// verCutImpl implements version cutting logic matching Portage's ver_cut.
+//
+// Portage's __ver_split stores interleaved [separator, component] pairs:
+//
+//	"1.2.3" → ["", "1", ".", "2", ".", "3"]
+//
+// ver_cut extracts the slice and preserves original separators.
 func (h *Helpers) verCutImpl(rangeSpec, version string) (string, error) {
-	// Split version into components
-	parts := h.splitVersion(version)
-	if len(parts) == 0 {
+	comp := verSplit(version)
+	if len(comp) == 0 {
 		return "", nil
 	}
 
-	// Parse range
-	start, end, err := h.parseVerRange(rangeSpec, len(parts))
+	max := len(comp) / 2
+
+	start, end, err := h.parseVerRange(rangeSpec, max)
 	if err != nil {
 		return "", err
 	}
-
-	// Extract requested parts
-	if start > len(parts) {
+	if start > max {
 		return "", nil
 	}
-	if end > len(parts) {
-		end = len(parts)
+	if end > max {
+		end = max
 	}
 
-	return strings.Join(parts[start-1:end], "."), nil
+	// Portage: echo "${comp[*]:start:end*2-start}"
+	// start is 1-based component index → array index = start*2-1
+	arrStart := start*2 - 1
+	if start == 0 {
+		arrStart = 0
+	}
+	arrLen := end*2 - arrStart
+	if arrStart+arrLen > len(comp) {
+		arrLen = len(comp) - arrStart
+	}
+
+	var sb strings.Builder
+	for i := arrStart; i < arrStart+arrLen; i++ {
+		sb.WriteString(comp[i])
+	}
+	return sb.String(), nil
 }
 
-// splitVersion splits a version string into components.
-func (h *Helpers) splitVersion(version string) []string {
-	// Split on . - _ characters
-	var parts []string
-	var current strings.Builder
+// verSplit splits a version into interleaved [separator, component] pairs,
+// matching Portage's __ver_split exactly.
+//
+// Example: "1.2_alpha3-r1" → ["", "1", ".", "2", "_", "alpha", "", "3", "-", "r", "", "1"]
+func verSplit(version string) []string {
+	var comp []string
+	v := version
 
-	for _, r := range version {
-		if r == '.' || r == '-' || r == '_' {
-			if current.Len() > 0 {
-				parts = append(parts, current.String())
-				current.Reset()
+	for len(v) > 0 {
+		// Cut the separator (non-alphanumeric prefix)
+		sepEnd := 0
+		for sepEnd < len(v) && !isAlphanumeric(v[sepEnd]) {
+			sepEnd++
+		}
+		sep := v[:sepEnd]
+		v = v[sepEnd:]
+
+		// Cut the next component: either all digits or all letters
+		compEnd := 0
+		if len(v) > 0 && v[0] >= '0' && v[0] <= '9' {
+			for compEnd < len(v) && v[compEnd] >= '0' && v[compEnd] <= '9' {
+				compEnd++
 			}
 		} else {
-			current.WriteRune(r)
+			for compEnd < len(v) && isAlpha(v[compEnd]) {
+				compEnd++
+			}
+		}
+		c := v[:compEnd]
+		v = v[compEnd:]
+
+		comp = append(comp, sep, c)
+	}
+	return comp
+}
+
+func isAlphanumeric(b byte) bool {
+	return (b >= '0' && b <= '9') || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
+}
+
+func isAlpha(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
+}
+
+// splitVersion splits a version string into components (legacy, used by parseVerRange).
+func (h *Helpers) splitVersion(version string) []string {
+	comp := verSplit(version)
+	var parts []string
+	for i := 1; i < len(comp); i += 2 {
+		if comp[i] != "" {
+			parts = append(parts, comp[i])
 		}
 	}
-
-	if current.Len() > 0 {
-		parts = append(parts, current.String())
-	}
-
 	return parts
 }
 
@@ -145,34 +196,45 @@ func (h *Helpers) VerRs(args []string) error {
 	return nil
 }
 
-// verRsImpl implements separator replacement logic.
+// verRsImpl implements separator replacement logic matching Portage's ver_rs.
+//
+// Portage ver_rs replaces separators at specified positions (1-indexed).
+// Separator positions correspond to even indices in the verSplit array.
 func (h *Helpers) verRsImpl(rangeSpec, newSep, version string) string {
-	// Find separator positions
-	var sepPositions []int
-	for i, r := range version {
-		if r == '.' || r == '-' || r == '_' {
-			sepPositions = append(sepPositions, i)
-		}
-	}
-
-	if len(sepPositions) == 0 {
+	comp := verSplit(version)
+	if len(comp) == 0 {
 		return version
 	}
 
-	// Parse range
-	start, end, err := h.parseVerRange(rangeSpec, len(sepPositions))
+	// max separator index = number of components - 1
+	max := len(comp)/2 - 1
+	if max < 1 {
+		return version
+	}
+
+	start, end, err := h.parseVerRange(rangeSpec, max)
 	if err != nil {
 		return version
 	}
 
 	// Replace separators at specified positions
-	result := []byte(version)
-	for i := start - 1; i < end && i < len(sepPositions); i++ {
-		pos := sepPositions[i]
-		result[pos] = []byte(newSep)[0]
+	// Separator at position N is at comp[N*2]
+	for i := start; i <= end && i <= max; i++ {
+		idx := i * 2
+		if idx < len(comp) {
+			// Skip position 0 with empty separator
+			if idx == 0 && comp[idx] == "" {
+				continue
+			}
+			comp[idx] = newSep
+		}
 	}
 
-	return string(result)
+	var sb strings.Builder
+	for _, s := range comp {
+		sb.WriteString(s)
+	}
+	return sb.String()
 }
 
 // VerTest compares two version strings per PMS Section 12.3.14.

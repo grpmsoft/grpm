@@ -622,22 +622,36 @@ func (i *Interpreter) execHandler(next interp.ExecHandlerFunc) interp.ExecHandle
 		// to work (e.g., GCC_RELEASE_VER=$(ver_cut 1-3 ${GCC_PV}))
 		switch cmd {
 		case "ver_cut":
+			if len(cmdArgs) < 1 {
+				return &DieError{Message: "ver_cut: requires range argument"}
+			}
+			version := ""
 			if len(cmdArgs) >= 2 {
-				result, err := i.helpers.verCutImpl(cmdArgs[0], cmdArgs[1])
-				if err != nil {
-					return &DieError{Message: fmt.Sprintf("ver_cut: %v", err)}
-				}
-				_, _ = io.WriteString(hc.Stdout, result)
-				return nil
+				version = cmdArgs[1]
+			} else {
+				// Default to $PV per Portage spec
+				version = hc.Env.Get("PV").String()
 			}
-			return &DieError{Message: "ver_cut: requires range and version arguments"}
+			result, err := i.helpers.verCutImpl(cmdArgs[0], version)
+			if err != nil {
+				return &DieError{Message: fmt.Sprintf("ver_cut: %v", err)}
+			}
+			_, _ = io.WriteString(hc.Stdout, result)
+			return nil
 		case "ver_rs":
-			if len(cmdArgs) >= 3 {
-				result := i.helpers.verRsImpl(cmdArgs[0], cmdArgs[1], cmdArgs[2])
-				_, _ = io.WriteString(hc.Stdout, result)
-				return nil
+			if len(cmdArgs) < 2 {
+				return &DieError{Message: "ver_rs: requires range and separator arguments"}
 			}
-			return &DieError{Message: "ver_rs: requires range, separator, and version arguments"}
+			version := ""
+			if len(cmdArgs) >= 3 {
+				version = cmdArgs[2]
+			} else {
+				// Default to $PV per Portage spec
+				version = hc.Env.Get("PV").String()
+			}
+			result := i.helpers.verRsImpl(cmdArgs[0], cmdArgs[1], version)
+			_, _ = io.WriteString(hc.Stdout, result)
+			return nil
 		}
 
 		// Internal command to sync bash variables back to Go environment

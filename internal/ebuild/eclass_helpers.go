@@ -914,22 +914,50 @@ func (h *Helpers) NewBashcomp(args []string) error {
 // Additional Eclass Stubs
 // ============================================================================
 
-// Eautoreconf runs autoreconf -f -i. Delegates to the real command.
+// Eautoreconf runs autoreconf -f -i with Portage-compatible options.
+//
+// Supports AT_M4DIR for additional aclocal search paths.
+// Runs in the source directory ($S).
 func (h *Helpers) Eautoreconf(_ []string) error {
 	sourceDir := h.getSourceDir()
 	if sourceDir == "" {
 		return &DieError{Message: "eautoreconf: S not set"}
 	}
 
-	cmd := exec.Command("autoreconf", "-f", "-i")
+	h.writeStdout(fmt.Sprintf(">>> Running eautoreconf in %s\n", sourceDir))
+
+	args := []string{"-f", "-i"}
+
+	// Support AT_M4DIR — additional directories for aclocal to search for m4 files
+	// Portage's autotools.eclass passes these via ACLOCAL_FLAGS
+	if m4dir := h.getEnvVar("AT_M4DIR"); m4dir != "" {
+		for _, dir := range strings.Fields(m4dir) {
+			args = append(args, "-I", dir)
+		}
+	}
+
+	cmd := exec.Command("autoreconf", args...)
 	cmd.Dir = sourceDir
-	cmd.Env = h.env.ToSlice()
+
+	// Build environment with ACLOCAL_FLAGS if AT_M4DIR is set
+	env := h.env.ToSlice()
+	if m4dir := h.getEnvVar("AT_M4DIR"); m4dir != "" {
+		var aclocalFlags strings.Builder
+		for _, dir := range strings.Fields(m4dir) {
+			aclocalFlags.WriteString("-I ")
+			aclocalFlags.WriteString(dir)
+			aclocalFlags.WriteString(" ")
+		}
+		env = append(env, "ACLOCAL_FLAGS="+aclocalFlags.String())
+	}
+	cmd.Env = env
+
 	output, err := cmd.CombinedOutput()
 	if len(output) > 0 {
-		logging.Debug("[eautoreconf] %s", string(output))
+		h.writeStdout(string(output))
 	}
 	if err != nil {
-		return &DieError{Message: fmt.Sprintf("eautoreconf: %v", err)}
+		return &DieError{Message: fmt.Sprintf("eautoreconf failed: %v", err)}
 	}
 	return nil
 }

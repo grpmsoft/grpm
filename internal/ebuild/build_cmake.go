@@ -112,6 +112,9 @@ func (h *Helpers) Cmake(args []string) error {
 func (h *Helpers) CmakeSrcConfigure(args []string) error {
 	h.writeStdout(">>> cmake_src_configure\n")
 
+	// Equivalent of _cmake_check_build_dir() from cmake.eclass
+	h.cmakeCheckBuildDir()
+
 	// Run cmake with additional user args
 	allArgs := make([]string, 0)
 
@@ -124,6 +127,49 @@ func (h *Helpers) CmakeSrcConfigure(args []string) error {
 	allArgs = append(allArgs, args...)
 
 	return h.Cmake(allArgs)
+}
+
+// cmakeCheckBuildDir implements Portage's _cmake_check_build_dir().
+//
+// Sets CMAKE_USE_DIR and BUILD_DIR based on cmake eclass conventions:
+//   - CMAKE_USE_DIR defaults to ${S}
+//   - BUILD_DIR defaults to ${CMAKE_USE_DIR}_build (out-of-source)
+//   - If S == WORKDIR and BUILD_DIR would be above WORKDIR, use ${WORKDIR}/${P}_build
+func (h *Helpers) cmakeCheckBuildDir() {
+	if h.env == nil {
+		return
+	}
+
+	// CMAKE_USE_DIR defaults to $S (or WORKDIR)
+	if h.getEnvVar("CMAKE_USE_DIR") == "" {
+		useDir := h.getWorkDir()
+		if useDir != "" {
+			h.env.SetVar("CMAKE_USE_DIR", useDir)
+		}
+	}
+
+	cmakeUseDir := h.getEnvVar("CMAKE_USE_DIR")
+	if cmakeUseDir == "" {
+		cmakeUseDir = h.getWorkDir()
+	}
+
+	if h.getEnvVar("CMAKE_IN_SOURCE_BUILD") != "" {
+		// In-source build
+		h.env.SetVar("BUILD_DIR", cmakeUseDir)
+	} else if h.getEnvVar("BUILD_DIR") == "" {
+		// Out-of-source build (default)
+		buildDir := cmakeUseDir + "_build"
+
+		// Avoid creating ${WORKDIR}_build (which is above WORKDIR)
+		workdir := h.env.WORKDIR
+		if h.env.S == workdir && buildDir == workdir+"_build" {
+			buildDir = filepath.Join(workdir, h.env.P+"_build")
+		}
+		h.env.SetVar("BUILD_DIR", buildDir)
+	}
+
+	h.writeStdout(fmt.Sprintf(">>> Source directory (CMAKE_USE_DIR): %q\n", cmakeUseDir))
+	h.writeStdout(fmt.Sprintf(">>> Build directory  (BUILD_DIR):     %q\n", h.getEnvVar("BUILD_DIR")))
 }
 
 // CmakeSrcCompile implements the default cmake src_compile phase.
@@ -139,6 +185,7 @@ func (h *Helpers) CmakeSrcConfigure(args []string) error {
 func (h *Helpers) CmakeSrcCompile(args []string) error {
 	h.writeStdout(">>> cmake_src_compile\n")
 
+	h.cmakeCheckBuildDir()
 	buildDir := h.getCmakeBuildDir()
 
 	// Check if build directory exists
@@ -172,6 +219,7 @@ func (h *Helpers) CmakeSrcCompile(args []string) error {
 func (h *Helpers) CmakeSrcInstall(args []string) error {
 	h.writeStdout(">>> cmake_src_install\n")
 
+	h.cmakeCheckBuildDir()
 	buildDir := h.getCmakeBuildDir()
 
 	// Check if build directory exists
@@ -212,6 +260,7 @@ func (h *Helpers) CmakeSrcInstall(args []string) error {
 func (h *Helpers) CmakeSrcTest(args []string) error {
 	h.writeStdout(">>> cmake_src_test\n")
 
+	h.cmakeCheckBuildDir()
 	buildDir := h.getCmakeBuildDir()
 
 	// Check if build directory exists
