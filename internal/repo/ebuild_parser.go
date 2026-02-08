@@ -14,9 +14,19 @@ var (
 	// Pattern: ^VARNAME="value" (single line)
 	ebuildVarRe = coregex.MustCompile(`(?m)^([A-Z_][A-Z0-9_]*)="([^"]*(?:\\"[^"]*)*)"`)
 
+	// ebuildVarAppendRe matches VAR+="value" (bash append operator, single line).
+	// Pattern: ^VARNAME+="value" — appends to existing variable.
+	// Used in ebuilds like sys-libs/pam: BDEPEND+="acct-group/shadow ..."
+	ebuildVarAppendRe = coregex.MustCompile(`(?m)^([A-Z_][A-Z0-9_]*)\+="([^"]*(?:\\"[^"]*)*)"`)
+
 	// ebuildMultiLineVarRe matches multi-line variable assignments.
 	// Pattern: VARNAME="line1\nline2\nline3"
-	ebuildMultiLineVarRe = coregex.MustCompile(`(?s)^([A-Z_][A-Z0-9_]*)="(.*?)"`)
+	// Uses (?ms): m=multiline ^/$, s=dotall (.=\n)
+	ebuildMultiLineVarRe = coregex.MustCompile(`(?ms)^([A-Z_][A-Z0-9_]*)="(.*?)"`)
+
+	// ebuildMultiLineVarAppendRe matches multi-line VAR+="..." (append).
+	// Uses (?ms): m=multiline ^/$, s=dotall (.=\n)
+	ebuildMultiLineVarAppendRe = coregex.MustCompile(`(?ms)^([A-Z_][A-Z0-9_]*)\+="(.*?)"`)
 
 	// ebuildVarRefRe matches variable references: ${VAR} or ${VAR:-default}
 	ebuildVarRefRe = coregex.MustCompile(`\$\{([A-Z_][A-Z0-9_]*)(?::-([^}]*))?\}`)
@@ -196,7 +206,8 @@ func (ep *EbuildParser) ParseDependencies() ([]ParsedDependency, error) {
 }
 
 // extractAllVariables extracts all variables from ebuild content
-// Populates ep.variables map with variable name -> raw value mappings
+// Populates ep.variables map with variable name -> raw value mappings.
+// Handles both VAR="..." assignment and VAR+="..." append operators.
 func (ep *EbuildParser) extractAllVariables() {
 	// Find all variable assignments using precompiled regex
 	matches := ebuildVarRe.FindAllStringSubmatch(ep.content, -1)
@@ -220,6 +231,37 @@ func (ep *EbuildParser) extractAllVariables() {
 			// Only set if not already set (prefer first match)
 			if _, exists := ep.variables[varName]; !exists {
 				ep.variables[varName] = strings.TrimSpace(match[2])
+			}
+		}
+	}
+
+	// Handle VAR+="..." append operator (single-line)
+	appendMatches := ebuildVarAppendRe.FindAllStringSubmatch(ep.content, -1)
+	for _, match := range appendMatches {
+		if len(match) >= 3 {
+			varName := match[1]
+			appendValue := match[2]
+			if existing, exists := ep.variables[varName]; exists {
+				ep.variables[varName] = existing + " " + appendValue
+			} else {
+				ep.variables[varName] = appendValue
+			}
+		}
+	}
+
+	// Handle multi-line VAR+="..." append operator
+	multiAppendMatches := ebuildMultiLineVarAppendRe.FindAllStringSubmatch(ep.content, -1)
+	for _, match := range multiAppendMatches {
+		if len(match) >= 3 {
+			varName := match[1]
+			appendValue := strings.TrimSpace(match[2])
+			// Check if already appended by single-line regex
+			if existing, exists := ep.variables[varName]; exists {
+				if !strings.Contains(existing, appendValue) {
+					ep.variables[varName] = existing + " " + appendValue
+				}
+			} else {
+				ep.variables[varName] = appendValue
 			}
 		}
 	}
