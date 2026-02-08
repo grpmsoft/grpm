@@ -32,9 +32,9 @@ GRPM (Go Resource Package Manager) is a modern source-based package manager writ
 | **SAT-based Dependency Resolution** | Boolean satisfiability solver for guaranteed conflict-free resolution |
 | **Binary Package Support** | Full GPKG (.gpkg.tar) and legacy TBZ2 (.tbz2) format support |
 | **Transactional Updates** | Btrfs/ZFS snapshot-based rollbacks for safe system updates |
-| **Source Building** | Complete ebuild execution with autotools, CMake, and Meson |
-| **Build Systems** | cmake.eclass, meson.eclass, toolchain-funcs, flag-o-matic |
-| **Language Ecosystems** | Python (distutils-r1), Rust (cargo.eclass), Go (go-module.eclass) |
+| **Source Building** | Ebuild execution with autotools; CMake and Meson support (basic) |
+| **Build Systems** | toolchain-funcs, flag-o-matic, cmake.eclass, meson.eclass |
+| **Language Ecosystems** | Python (distutils-r1), Rust (cargo.eclass), Go (go-module.eclass) — basic support |
 | **Multilib Support** | 32-bit/64-bit library support with ABI management |
 | **Package Sets** | @world, @system, @selected in ALL commands (resolve, install, emerge, fetch) |
 | **Distfile Fetching** | Automatic source downloading with mirror failover |
@@ -57,9 +57,10 @@ GRPM (Go Resource Package Manager) is a modern source-based package manager writ
 ### Install from Binary
 
 ```bash
-# Download latest release
-wget https://github.com/grpmsoft/grpm/releases/latest/download/grpm_linux_amd64.tar.gz
-tar -xzf grpm_linux_amd64.tar.gz
+# Download latest release (check https://github.com/grpmsoft/grpm/releases for VERSION)
+VERSION="0.9.3"
+wget "https://github.com/grpmsoft/grpm/releases/download/v${VERSION}/grpm_${VERSION}_linux_x86_64.tar.gz"
+tar -xzf "grpm_${VERSION}_linux_x86_64.tar.gz"
 sudo install -m 0755 grpm /usr/bin/grpm
 
 # Verify
@@ -235,8 +236,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidelines and [AGENTS.md
 
 **Completed Features:**
 - ✅ SAT-based dependency resolution
-- ✅ Full ebuild execution (autotools, CMake, Meson)
-- ✅ Language ecosystems (Python, Rust, Go)
+- ✅ Ebuild execution (autotools full; CMake, Meson basic)
+- ✅ Language ecosystem support (Python, Rust, Go — basic)
 - ✅ Multilib support (32-bit/64-bit)
 - ✅ Binary package support (GPKG, TBZ2)
 - ✅ Repository sync (rsync, git) with GPG verification

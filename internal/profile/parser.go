@@ -28,11 +28,13 @@ func (p *Profile) loadEAPI() error {
 
 // loadMakeDefaults loads variables from the "make.defaults" file.
 //
-// Format:
+// Supports shell-style variable expansion: ${VAR} and $VAR references
+// are replaced with previously defined values. This is critical for
+// profiles like default/linux/make.defaults which use incremental assignment:
 //
-//	KEY="value"
-//	USE="ssl unicode"
-//	CFLAGS="-O2 -pipe"
+//	USE="crypt ipv6 pam ssl"
+//	USE="${USE} seccomp"
+//	USE="${USE} iconv"
 func (p *Profile) loadMakeDefaults() error {
 	makeDefaultsPath := filepath.Join(p.Path, "make.defaults")
 	file, err := os.Open(makeDefaultsPath)
@@ -62,10 +64,52 @@ func (p *Profile) loadMakeDefaults() error {
 		// Remove quotes
 		value = strings.Trim(value, `"'`)
 
+		// Expand variable references: ${VAR} and $VAR
+		value = p.expandVariables(value)
+
 		p.MakeDefaults[key] = value
 	}
 
 	return scanner.Err()
+}
+
+// expandVariables expands ${VAR} and $VAR references in a value string
+// using previously stored MakeDefaults values.
+func (p *Profile) expandVariables(value string) string {
+	// Expand ${VAR} references
+	for strings.Contains(value, "${") {
+		start := strings.Index(value, "${")
+		end := strings.Index(value[start:], "}")
+		if end == -1 {
+			break
+		}
+		end += start
+		varName := value[start+2 : end]
+		varValue := p.MakeDefaults[varName]
+		value = value[:start] + varValue + value[end+1:]
+	}
+
+	// Expand $VAR references (without braces) — only uppercase var names
+	// to avoid false positives with e.g. $1
+	for i := 0; i < len(value); i++ {
+		if value[i] != '$' || i+1 >= len(value) || value[i+1] == '{' {
+			continue
+		}
+		// Find end of variable name (uppercase letters + underscore + digits)
+		j := i + 1
+		for j < len(value) && (value[j] >= 'A' && value[j] <= 'Z' || value[j] == '_' || value[j] >= '0' && value[j] <= '9') {
+			j++
+		}
+		if j == i+1 {
+			continue
+		}
+		varName := value[i+1 : j]
+		varValue := p.MakeDefaults[varName]
+		value = value[:i] + varValue + value[j:]
+		i += len(varValue) - 1
+	}
+
+	return value
 }
 
 // loadUSEMask loads masked USE flags from the "use.mask" file.

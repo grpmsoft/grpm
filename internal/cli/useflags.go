@@ -17,15 +17,20 @@ import (
 // Common USE_EXPAND prefixes that should be displayed separately.
 // These are standard Portage USE_EXPAND variables.
 var defaultUSEExpandPrefixes = []string{
+	"abi_mips_",
+	"abi_s390_",
+	"abi_x86_",
 	"cpu_flags_x86_",
 	"cpu_flags_arm_",
-	"python_targets_",
-	"python_single_target_",
-	"ruby_targets_",
-	"lua_targets_",
-	"l10n_",
-	"video_cards_",
 	"input_devices_",
+	"l10n_",
+	"llvm_targets_",
+	"lua_single_target_",
+	"lua_targets_",
+	"python_single_target_",
+	"python_targets_",
+	"ruby_targets_",
+	"video_cards_",
 }
 
 // FormatUSEFlags formats USE flags for display in emerge --pretend output.
@@ -164,6 +169,11 @@ func resolvePackageUSE(p *pkg.Package, cfg *config.Config) (enabled, disabled []
 		}
 	}
 
+	// Apply USE_EXPAND from make.conf (e.g., PYTHON_SINGLE_TARGET, PYTHON_TARGETS)
+	if cfg != nil {
+		applyUSEExpandToFlags(cfg, p.UseFlags, flagState)
+	}
+
 	// Apply per-package USE from package.use
 	if cfg != nil {
 		// Extract category and package name for pattern matching
@@ -202,6 +212,35 @@ func resolvePackageUSE(p *pkg.Package, cfg *config.Config) (enabled, disabled []
 	}
 
 	return enabled, disabled
+}
+
+// useExpandMapping maps USE_EXPAND variable names to their flag prefixes.
+var useExpandMapping = []struct {
+	varName string
+	prefix  string
+}{
+	{"PYTHON_SINGLE_TARGET", "python_single_target_"},
+	{"PYTHON_TARGETS", "python_targets_"},
+	{"LUA_SINGLE_TARGET", "lua_single_target_"},
+	{"LUA_TARGETS", "lua_targets_"},
+	{"RUBY_TARGETS", "ruby_targets_"},
+}
+
+// applyUSEExpandToFlags enables USE_EXPAND flags in flagState based on
+// make.conf variables (e.g., PYTHON_TARGETS="python3_12" -> python_targets_python3_12=true).
+func applyUSEExpandToFlags(cfg *config.Config, iuseFlags map[string]bool, flagState map[string]bool) {
+	for _, uev := range useExpandMapping {
+		value := cfg.GetVariable(uev.varName)
+		if value == "" {
+			continue
+		}
+		for _, val := range strings.Fields(value) {
+			flag := uev.prefix + strings.ToLower(val)
+			if _, exists := iuseFlags[flag]; exists {
+				flagState[flag] = true
+			}
+		}
+	}
 }
 
 // getUSEExpandPrefix returns the USE_EXPAND prefix if the flag matches one,

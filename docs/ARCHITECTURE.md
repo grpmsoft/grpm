@@ -11,7 +11,7 @@ flowchart TB
 
     subgraph Daemon["Daemon Layer"]
         GRPC_SERVER[gRPC Server<br/>unix:///var/run/grpm.sock]
-        REST_API[REST API<br/>:8080]
+        REST_API[REST API<br/>unix:///var/run/grpm-rest.sock]
         JOB_QUEUE[Job Queue]
         WORKERS[Worker Pool]
     end
@@ -88,7 +88,7 @@ flowchart TB
 
 ### Daemon Layer
 - **gRPC Server**: Unix socket server for CLI communication
-- **REST API**: HTTP API for external integrations
+- **REST API**: Unix socket API for external integrations (TCP optional)
 - **Job Queue**: Prioritized queue with conflict detection
 - **Worker Pool**: Parallel job execution
 

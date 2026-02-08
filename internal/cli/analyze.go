@@ -49,7 +49,7 @@ func (a *App) runAnalyze(args []string) error {
 	// Set custom help handler
 	fs.Usage = func() { fmt.Print(GetCommandHelp("analyze")) }
 
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(reorderArgs(args)); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}

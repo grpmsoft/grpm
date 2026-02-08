@@ -101,6 +101,24 @@ func (r *PortageResolver) isInstalled(name string) bool {
 	return r.installedDB.IsInstalled(name)
 }
 
+// sortAlternativesByInstalled reorders OR-group alternatives to put
+// already-installed packages first. This creates a preference for keeping
+// installed packages when the SAT solver picks from OR alternatives.
+func (r *PortageResolver) sortAlternativesByInstalled(alternatives []pkg.Constraint) []pkg.Constraint {
+	sorted := make([]pkg.Constraint, 0, len(alternatives))
+	var notInstalled []pkg.Constraint
+
+	for _, alt := range alternatives {
+		if r.isInstalled(alt.Name) {
+			sorted = append(sorted, alt)
+		} else {
+			notInstalled = append(notInstalled, alt)
+		}
+	}
+
+	return append(sorted, notInstalled...)
+}
+
 // groupDependenciesByOrGroupID groups dependencies by their OrGroupID
 // Returns required dependencies (OrGroupID=0) and OR-groups (OrGroupID>0)
 func groupDependenciesByOrGroupID(deps []pkg.Constraint) (requiredDeps []pkg.Constraint, orGroups map[int][]pkg.Constraint) {
@@ -180,8 +198,9 @@ func (r *PortageResolver) collectDependencies(p *pkg.Package, allPackages map[st
 		}
 	}
 
-	// For OR-groups: Register all alternatives but DON'T collect their dependencies yet
-	// The SAT solver will choose ONE alternative from each group
+	// For OR-groups: add alternative packages to allPackages (so SAT solver knows
+	// about them), but DON'T recursively collect their dependencies yet.
+	// After SAT solving, we'll collect deps for chosen alternatives in a second pass.
 	for groupID, alternatives := range orGroups {
 		logging.Debug("OR-group %d for %s: %d alternatives", groupID, p.Name, len(alternatives))
 		for _, alt := range alternatives {
@@ -193,10 +212,17 @@ func (r *PortageResolver) collectDependencies(p *pkg.Package, allPackages map[st
 			if r.isInstalled(alt.Name) && !r.options.Deep {
 				continue
 			}
-			// Just ensure the alternative package exists in the repository
-			// Use loadUnmaskedPackage to filter masked alternatives
-			if _, err := r.loadUnmaskedPackage(alt.Name); err != nil {
+			altPkg, err := r.loadUnmaskedPackage(alt.Name)
+			if err != nil {
 				logging.Debug("Warning: OR-alternative %s not found or masked: %v", alt.Name, err)
+				continue
+			}
+			// Add to allPackages so SAT solver has variables for it,
+			// but don't recurse into its deps (those would be required
+			// only if this alternative is chosen)
+			if _, exists := allPackages[altPkg.Name]; !exists {
+				copyPkg := *altPkg
+				allPackages[altPkg.Name] = &copyPkg
 			}
 		}
 	}
@@ -240,9 +266,13 @@ func (r *PortageResolver) addPackageConstraints(adapter *GophersatAdapter, p *pk
 	}
 
 	// Add OR-group constraints (OR logic)
+	// Prefer installed alternatives by putting them first in the clause.
+	// SAT solvers typically assign positive values to earlier variables,
+	// so this creates a soft preference for already-installed packages.
 	for groupID, alternatives := range orGroups {
 		logging.Debug("Adding OR-group %d with %d alternatives", groupID, len(alternatives))
-		if err := adapter.AddOrGroupConstraint(alternatives); err != nil {
+		sorted := r.sortAlternativesByInstalled(alternatives)
+		if err := adapter.AddOrGroupConstraint(sorted); err != nil {
 			logging.Debug("Warning: failed to add OR-group constraint: %v", err)
 		}
 	}
@@ -325,6 +355,7 @@ func (r *PortageResolver) loadPackageFromAtom(atomStr string) (*pkg.Package, err
 	return r.loadUnmaskedPackage(atom.CP())
 }
 
+//nolint:gocyclo // Complexity inherent to multi-pass Portage-compatible resolution with OR-group support
 func (r *PortageResolver) Resolve(packages []string) (map[string]*pkg.Package, error) {
 	adapter := NewGophersatAdapter()
 	allPackages := make(map[string]*pkg.Package)
@@ -382,6 +413,65 @@ func (r *PortageResolver) Resolve(packages []string) (map[string]*pkg.Package, e
 	result, err := r.buildResultFromSolution(solution)
 	if err != nil {
 		return nil, err
+	}
+
+	// Post-SAT pass: iteratively resolve transitive deps for all packages in the
+	// result. OR-group alternatives were added shallowly (without recursing into
+	// their deps), so we need to fill in the gaps now. Loop until convergence.
+	for pass := 1; pass <= 10; pass++ {
+		added := 0
+		// Snapshot current result keys to avoid modifying map while iterating
+		currentPkgs := make([]*pkg.Package, 0, len(result))
+		for _, p := range result {
+			currentPkgs = append(currentPkgs, p)
+		}
+
+		for _, p := range currentPkgs {
+			// Group deps by OR-group
+			requiredDeps, orGroups := groupDependenciesByOrGroupID(p.Deps)
+
+			// Required deps
+			for _, dep := range requiredDeps {
+				if _, inResult := result[dep.Name]; inResult {
+					continue
+				}
+				depPkg, err := r.loadUnmaskedPackage(dep.Name)
+				if err != nil {
+					continue
+				}
+				result[dep.Name] = depPkg
+				added++
+			}
+
+			// OR-groups: pick first available alternative (Portage default behavior)
+			for _, alternatives := range orGroups {
+				// Check if any alternative is already in result
+				satisfied := false
+				for _, alt := range alternatives {
+					if _, inResult := result[alt.Name]; inResult {
+						satisfied = true
+						break
+					}
+				}
+				if satisfied {
+					continue
+				}
+				// Pick first available alternative
+				for _, alt := range alternatives {
+					altPkg, err := r.loadUnmaskedPackage(alt.Name)
+					if err != nil {
+						continue
+					}
+					result[alt.Name] = altPkg
+					added++
+					break // Take first available
+				}
+			}
+		}
+		logging.Debug("Post-pass %d: added %d packages", pass, added)
+		if added == 0 {
+			break
+		}
 	}
 
 	// Output formatted package list

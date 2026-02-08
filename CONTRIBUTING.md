@@ -120,9 +120,9 @@ Look for issues labeled `good first issue` or `help wanted`.
 
 ### Areas Needing Help
 
-- EAPI 8 support
-- CMake/Meson build systems
-- Eclass implementations
+- Complex eclass support (kernel, LLVM, Java)
+- CMake/Meson build system edge cases
+- Real-world package testing and bug reports
 - Test coverage improvements
 - Documentation
 

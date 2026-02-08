@@ -76,7 +76,7 @@ func (a *App) runEmerge(args []string) error {
 	// Set custom help handler
 	fs.Usage = func() { fmt.Print(GetCommandHelp("emerge")) }
 
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(reorderArgs(args)); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil // Help was requested, not an error
 		}
@@ -101,6 +101,11 @@ func (a *App) runEmerge(args []string) error {
 	if len(packages) == 0 {
 		a.log.Info("No packages in specified set(s)")
 		return nil
+	}
+
+	// When using --deep, installed packages will be in the solution — implicitly enable replace
+	if *deep && !*replace {
+		*replace = true
 	}
 
 	// Validate parallel builds count
@@ -202,7 +207,7 @@ func (a *App) runEmerge(args []string) error {
 	}
 
 	// Sequential build (original behavior)
-	return a.buildAndInstallPackages(solution, *repoPath, *distDir, *tmpDir, *makeJobs, *keepWork, *enableTests, *replace, *force, *rootPath, fetcher)
+	return a.buildAndInstallPackages(solution, *repoPath, *distDir, *tmpDir, *makeJobs, *keepWork, *enableTests, *replace, *force, *rootPath, *keepGoing, fetcher)
 }
 
 // parallelBuildOptions holds options for parallel build execution.
@@ -457,11 +462,13 @@ func (a *App) createFetcher(distDir string) fetch.Fetcher {
 }
 
 // buildAndInstallPackages builds packages from source and installs them.
-func (a *App) buildAndInstallPackages(solution map[string]*pkg.Package, repoPath, distDir, tmpDir string, jobs int, keepWork, enableTests, replace, force bool, root string, fetcher fetch.Fetcher) error {
+func (a *App) buildAndInstallPackages(solution map[string]*pkg.Package, repoPath, distDir, tmpDir string, jobs int, keepWork, enableTests, replace, force bool, root string, keepGoing bool, fetcher fetch.Fetcher) error {
 	logging.Action("Starting source build...")
 
 	builtCount := 0
+	failedCount := 0
 	totalPackages := len(solution)
+	var failedPkgs []string
 
 	// Get package database (with root prefix)
 	db, err := a.getOrCreatePackageDBWithRoot(root)
@@ -473,25 +480,57 @@ func (a *App) buildAndInstallPackages(solution map[string]*pkg.Package, repoPath
 	installer := install.NewInstaller(root, db)
 	installer.Verbose = a.verbose
 
+	pkgNum := 0
 	for name, p := range solution {
-		logging.Action("(%d/%d) Emerging %s-%s", builtCount+1, totalPackages, name, p.Version)
+		pkgNum++
+		logging.Action("(%d/%d) Emerging %s-%s", pkgNum, totalPackages, name, p.Version)
 
-		// Build from source (fetcher will download sources automatically)
-		imageDir, err := a.buildPackageFromSource(p, repoPath, distDir, tmpDir, jobs, keepWork, enableTests, fetcher)
-		if err != nil {
-			return fmt.Errorf("failed to build %s: %w", name, err)
-		}
-
-		// Install to system
-		if err := a.installFromImageDir(installer, p, imageDir, keepWork, replace, force); err != nil {
-			return fmt.Errorf("failed to install %s: %w", name, err)
+		buildErr := a.buildAndInstallSingle(name, p, installer, repoPath, distDir, tmpDir, jobs, keepWork, enableTests, replace, force, fetcher)
+		if buildErr != nil {
+			if keepGoing {
+				logging.Error("failed to emerge %s: %v", name, buildErr)
+				failedCount++
+				failedPkgs = append(failedPkgs, name)
+				continue
+			}
+			return fmt.Errorf("failed to emerge %s: %w", name, buildErr)
 		}
 
 		builtCount++
 		logging.Action("%s-%s merged successfully (%d/%d)", name, p.Version, builtCount, totalPackages)
 	}
 
+	if failedCount > 0 {
+		logging.Error("Emerge completed with %d failure(s) out of %d package(s):", failedCount, totalPackages)
+		for _, name := range failedPkgs {
+			logging.Error("  - %s", name)
+		}
+		return fmt.Errorf("%d package(s) failed to build", failedCount)
+	}
+
 	logging.Action("Emerge completed successfully: %d package(s) built and installed", builtCount)
+	return nil
+}
+
+// buildAndInstallSingle builds and installs a single package with panic recovery.
+// This prevents interpreter panics (e.g., unsupported bash features) from
+// crashing the entire emerge process when --keep-going is used.
+func (a *App) buildAndInstallSingle(name string, p *pkg.Package, installer *install.Installer, repoPath, distDir, tmpDir string, jobs int, keepWork, enableTests, replace, force bool, fetcher fetch.Fetcher) (buildErr error) {
+	defer func() {
+		if r := recover(); r != nil {
+			buildErr = fmt.Errorf("internal error (panic): %v", r)
+		}
+	}()
+
+	imageDir, err := a.buildPackageFromSource(p, repoPath, distDir, tmpDir, jobs, keepWork, enableTests, fetcher)
+	if err != nil {
+		return fmt.Errorf("build failed: %w", err)
+	}
+
+	if err := a.installFromImageDir(installer, p, imageDir, keepWork, replace, force); err != nil {
+		return fmt.Errorf("install failed: %w", err)
+	}
+
 	return nil
 }
 

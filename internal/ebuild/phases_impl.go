@@ -131,7 +131,7 @@ func (e *Executor) phaseSetup() (string, error) {
 //
 // Uses the $A variable (populated from Manifest) to determine which
 // archives to extract. Falls back to pattern matching if $A is empty.
-// Supports: .tar.gz, .tar.bz2, .tar.xz
+// Supports: .tar.gz, .tar.bz2, .tar.xz, .tar.zst, .tar, .zip, .gz, .bz2, .xz, .zst
 func (e *Executor) phaseUnpack() (string, error) {
 	var archives []string
 
@@ -160,9 +160,20 @@ func (e *Executor) phaseUnpack() (string, error) {
 		return "No source tarball found (ebuild-only package or binary)", nil
 	}
 
-	// Extract each archive
+	// Extract each archive using helpers unpack (supports all formats).
+	// Skip non-archive files like PGP signatures and patches.
+	helpers := &Helpers{}
 	var extracted []string
 	for _, archive := range archives {
+		// Skip non-archive files (PGP signatures, patches, etc.)
+		lower := strings.ToLower(archive)
+		if strings.HasSuffix(lower, ".asc") || strings.HasSuffix(lower, ".sig") ||
+			strings.HasSuffix(lower, ".sign") || strings.HasSuffix(lower, ".patch") ||
+			strings.HasSuffix(lower, ".diff") {
+			logging.Debug("[ebuild] Skipping non-archive file: %s", archive)
+			continue
+		}
+
 		tarball := filepath.Join(e.Env.DISTDIR, archive)
 		if _, err := os.Stat(tarball); err != nil {
 			logging.Debug("[ebuild] Archive %s not found in DISTDIR, skipping", archive)
@@ -170,7 +181,7 @@ func (e *Executor) phaseUnpack() (string, error) {
 		}
 
 		logging.Debug("[ebuild] Extracting %s to %s", archive, e.Env.WORKDIR)
-		if err := extractTarball(tarball, e.Env.WORKDIR); err != nil {
+		if err := helpers.unpackArchive(tarball, e.Env.WORKDIR); err != nil {
 			return "", fmt.Errorf("failed to extract %s: %w", archive, err)
 		}
 		extracted = append(extracted, archive)

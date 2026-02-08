@@ -4,7 +4,7 @@ name: Integration Tests (Standalone)
 #
 # This workflow runs integration tests independently of the release process.
 # Use it for:
-# - Manual testing before creating a release branch
+# - Manual testing before triggering a release via workflow_dispatch
 # - Weekly regression testing
 # - Debugging integration issues
 #

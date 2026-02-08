@@ -244,6 +244,37 @@ func TestGetUSEFlags(t *testing.T) {
 	}
 }
 
+func TestGetUSEFlags_IncrementalExpansion(t *testing.T) {
+	// Simulates default/linux/make.defaults which uses ${USE} expansion:
+	//   USE="crypt ipv6 pam ssl"
+	//   USE="${USE} seccomp"
+	//   USE="${USE} iconv"
+	files := map[string]string{
+		"eapi": "8",
+		"make.defaults": `USE="crypt ipv6 pam ssl"
+USE="${USE} seccomp"
+USE="${USE} iconv"`,
+	}
+
+	dir := setupTestProfile(t, "incremental_use", files)
+	prof, err := LoadProfile(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	flags := prof.GetUSEFlags()
+	flagMap := make(map[string]bool)
+	for _, flag := range flags {
+		flagMap[flag] = true
+	}
+
+	for _, expected := range []string{"crypt", "ipv6", "pam", "ssl", "seccomp", "iconv"} {
+		if !flagMap[expected] {
+			t.Errorf("Expected USE flag %q not found in %v", expected, flags)
+		}
+	}
+}
+
 func TestGetSystemPackages(t *testing.T) {
 	files := map[string]string{
 		"eapi": "8",

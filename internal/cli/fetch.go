@@ -52,7 +52,7 @@ func (a *App) runFetch(args []string) error {
 	// Set custom help handler
 	fs.Usage = func() { fmt.Print(GetCommandHelp("fetch")) }
 
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(reorderArgs(args)); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
