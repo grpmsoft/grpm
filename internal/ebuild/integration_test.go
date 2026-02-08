@@ -406,6 +406,8 @@ func TestIntegration_PhaseCompile_NoMakefile(t *testing.T) {
 }
 
 // TestIntegration_PhaseInstall_NoMakefile tests install without Makefile.
+// Per PMS, packages without Makefiles (virtual/*, acct-*, Python packages)
+// should succeed with a skip message rather than fail.
 func TestIntegration_PhaseInstall_NoMakefile(t *testing.T) {
 	testPkg := createTestPackage("app-misc/hello", "2.10")
 
@@ -427,12 +429,9 @@ func TestIntegration_PhaseInstall_NoMakefile(t *testing.T) {
 
 	result := executor.ExecutePhaseReal(PhaseInstall)
 
-	// Should fail when no Makefile
-	if result.Success {
-		t.Error("Install phase should fail without Makefile")
-	}
-	if result.Error == nil {
-		t.Error("Install phase should have error")
+	// Should succeed (skip gracefully) when no Makefile
+	if !result.Success {
+		t.Errorf("Install phase should succeed without Makefile, got error: %v", result.Error)
 	}
 }
 

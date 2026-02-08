@@ -432,17 +432,17 @@ func (i *Interpreter) buildCommandMap() map[string]helperFunc {
 		"meson_use_bool":      i.helpers.MesonUseBool,
 
 		// python-utils-r1.eclass functions
-		"python_export":        i.helpers.PythonExport,
-		"python_get_sitedir":   i.helpers.PythonGetSitedir,
+		"python_export":         i.helpers.PythonExport,
+		"python_get_sitedir":    i.helpers.PythonGetSitedir,
 		"python_get_includedir": i.helpers.PythonGetIncludedir,
-		"python_get_library":   i.helpers.PythonGetLibrary,
-		"python_get_scriptdir": i.helpers.PythonGetScriptdir,
-		"python_is_installed":  i.helpers.PythonIsInstalled,
-		"python_is_compatible": i.helpers.PythonIsCompatible,
-		"python_wrapper":       i.helpers.PythonWrapper,
-		"python_doexe":         i.helpers.PythonDoexe,
-		"python_newexe":        i.helpers.PythonNewexe,
-		"python_domodule":      i.helpers.PythonDomodule,
+		"python_get_library":    i.helpers.PythonGetLibrary,
+		"python_get_scriptdir":  i.helpers.PythonGetScriptdir,
+		"python_is_installed":   i.helpers.PythonIsInstalled,
+		"python_is_compatible":  i.helpers.PythonIsCompatible,
+		"python_wrapper":        i.helpers.PythonWrapper,
+		"python_doexe":          i.helpers.PythonDoexe,
+		"python_newexe":         i.helpers.PythonNewexe,
+		"python_domodule":       i.helpers.PythonDomodule,
 
 		// python-r1.eclass functions
 		"python-r1_pkg_setup":       i.helpers.PythonR1PkgSetup,
@@ -593,7 +593,14 @@ func (i *Interpreter) execHandler(next interp.ExecHandlerFunc) interp.ExecHandle
 
 		// Look up command in map
 		if handler, ok := commands[cmd]; ok {
-			return handler(cmdArgs)
+			// Make runtime bash variables available to Go helpers.
+			// Variables set in ebuild scripts (e.g., DISTUTILS_USE_PEP517)
+			// are only visible in the runner's environment, not in the
+			// Environment struct. This bridges the gap.
+			i.helpers.runtimeEnv = hc.Env
+			err := handler(cmdArgs)
+			i.helpers.runtimeEnv = nil
+			return err
 		}
 
 		// Pass through to next handler (real shell execution)

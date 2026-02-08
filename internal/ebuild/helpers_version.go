@@ -303,10 +303,24 @@ func (h *Helpers) InheritWithEnv(args []string, env expand.Environ) error {
 		return nil
 	}
 
+	// Sync ALL runtime variables from the outer bash script to Environment.
+	// Eclasses run in a nested interpreter that reads from buildEnvPairs(),
+	// which uses Environment.ExtraVars. Variables set in the ebuild script
+	// (e.g., DISTUTILS_USE_PEP517, PYTHON_COMPAT) must be propagated so
+	// eclasses can see them at source time.
+	if env != nil && h.env != nil {
+		env.Each(func(name string, vr expand.Variable) bool {
+			val := vr.String()
+			if val != "" {
+				h.env.SetVar(name, val)
+			}
+			return true
+		})
+	}
+
 	ctx := context.Background()
 
-	// Pass critical environment variables to the eclass executor
-	// EAPI is required by many eclasses (e.g., toolchain.eclass only supports EAPI 8)
+	// For DynamicEclassLoader, also pass variables through its SetEnv mechanism
 	if loader, ok := h.eclassLoader.(*DynamicEclassLoader); ok {
 		envVars := map[string]string{}
 
@@ -319,12 +333,6 @@ func (h *Helpers) InheritWithEnv(args []string, env expand.Environ) error {
 			if val := env.Get(varName).String(); val != "" {
 				envVars[varName] = val
 			}
-		}
-
-		// DEBUG: Print extracted variables
-		h.writeStdout(">>> InheritWithEnv: Extracted vars:\n")
-		for k, v := range envVars {
-			h.writeStdout(fmt.Sprintf(">>>   %s=%s\n", k, v))
 		}
 
 		loader.SetEnv(envVars)
