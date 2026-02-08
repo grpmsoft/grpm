@@ -640,6 +640,19 @@ func (i *Interpreter) execHandler(next interp.ExecHandlerFunc) interp.ExecHandle
 			return &DieError{Message: "ver_rs: requires range, separator, and version arguments"}
 		}
 
+		// Internal command to sync bash variables back to Go environment
+		if cmd == "__grpm_sync_env" {
+			if i.env != nil {
+				if s := hc.Env.Get("S").String(); s != "" {
+					i.env.S = s
+				}
+				if workdir := hc.Env.Get("WORKDIR").String(); workdir != "" {
+					i.env.WORKDIR = workdir
+				}
+			}
+			return nil
+		}
+
 		// Look up command in map
 		if handler, ok := commands[cmd]; ok {
 			// Make runtime bash variables available to Go helpers.

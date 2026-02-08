@@ -904,6 +904,11 @@ func (e *Executor) RunPhaseFunction(phase Phase) (string, error) {
 		}
 	}
 
+	// Sync critical variables from bash env to Go struct.
+	// Ebuilds may override S, WORKDIR, etc. in top-level code (e.g., S="${WORKDIR}/${MY_P}").
+	// This command is intercepted by the interpreter to update env.S, env.WORKDIR.
+	combinedScript.WriteString("__grpm_sync_env\n")
+
 	// Determine which function to call
 	targetFunc := funcName
 	if eclassName != "" {
