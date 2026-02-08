@@ -184,21 +184,32 @@ func (a *App) runEmerge(args []string) error {
 		}
 	}
 
+	// Resolve effective USE flags for each package before building.
+	// This applies make.conf USE, USE_EXPAND variables (PYTHON_TARGETS, etc.),
+	// and per-package USE from package.use to each package's UseFlags map.
+	// Per Portage: USE_EXPAND vars like PYTHON_TARGETS="python3_12" are converted
+	// to USE flags like python_targets_python3_12.
+	for _, p := range solution {
+		ApplyEffectiveUSE(p, cfg)
+	}
+
 	// Create fetcher for downloading sources (with mirrors from config)
 	fetcher := a.createFetcherWithConfig(*distDir, cfg)
 
 	// Build options for the build function
 	buildOpts := &parallelBuildOptions{
-		repoPath:    *repoPath,
-		distDir:     *distDir,
-		tmpDir:      *tmpDir,
-		makeJobs:    *makeJobs,
-		keepWork:    *keepWork,
-		enableTests: *enableTests,
-		replace:     *replace,
-		force:       *force,
-		root:        *rootPath,
-		fetcher:     fetcher,
+		repoPath:      *repoPath,
+		distDir:       *distDir,
+		tmpDir:        *tmpDir,
+		makeJobs:      *makeJobs,
+		keepWork:      *keepWork,
+		enableTests:   *enableTests,
+		replace:       *replace,
+		force:         *force,
+		root:          *rootPath,
+		fetcher:       fetcher,
+		useExpandVars: GetUSEExpandVars(cfg),
+		cfg:           cfg,
 	}
 
 	// Use parallel scheduler if jobs > 1
@@ -207,21 +218,23 @@ func (a *App) runEmerge(args []string) error {
 	}
 
 	// Sequential build (original behavior)
-	return a.buildAndInstallPackages(solution, *repoPath, *distDir, *tmpDir, *makeJobs, *keepWork, *enableTests, *replace, *force, *rootPath, *keepGoing, fetcher)
+	return a.buildAndInstallPackages(solution, *repoPath, *distDir, *tmpDir, *makeJobs, *keepWork, *enableTests, *replace, *force, *rootPath, *keepGoing, fetcher, buildOpts.useExpandVars, cfg)
 }
 
 // parallelBuildOptions holds options for parallel build execution.
 type parallelBuildOptions struct {
-	repoPath    string
-	distDir     string
-	tmpDir      string
-	makeJobs    int
-	keepWork    bool
-	enableTests bool
-	replace     bool
-	force       bool
-	root        string
-	fetcher     fetch.Fetcher
+	repoPath      string
+	distDir       string
+	tmpDir        string
+	makeJobs      int
+	keepWork      bool
+	enableTests   bool
+	replace       bool
+	force         bool
+	root          string
+	fetcher       fetch.Fetcher
+	useExpandVars map[string]string // USE_EXPAND variables (e.g., PYTHON_TARGETS="python3_12")
+	cfg           *config.Config    // Portage configuration for CFLAGS, etc.
 }
 
 // buildPackagesParallel builds packages using the parallel scheduler.
@@ -343,7 +356,7 @@ func (a *App) buildAndInstallSinglePackage(ctx context.Context, p *pkg.Package, 
 	logging.Action("Building %s-%s", p.Name, p.Version)
 
 	// Build from source
-	imageDir, err := a.buildPackageFromSource(p, opts.repoPath, opts.distDir, opts.tmpDir, opts.makeJobs, opts.keepWork, opts.enableTests, opts.fetcher)
+	imageDir, err := a.buildPackageFromSource(p, opts.repoPath, opts.distDir, opts.tmpDir, opts.makeJobs, opts.keepWork, opts.enableTests, opts.fetcher, opts.useExpandVars, opts.cfg)
 	if err != nil {
 		return fmt.Errorf("build failed: %w", err)
 	}
@@ -462,7 +475,7 @@ func (a *App) createFetcher(distDir string) fetch.Fetcher {
 }
 
 // buildAndInstallPackages builds packages from source and installs them.
-func (a *App) buildAndInstallPackages(solution map[string]*pkg.Package, repoPath, distDir, tmpDir string, jobs int, keepWork, enableTests, replace, force bool, root string, keepGoing bool, fetcher fetch.Fetcher) error {
+func (a *App) buildAndInstallPackages(solution map[string]*pkg.Package, repoPath, distDir, tmpDir string, jobs int, keepWork, enableTests, replace, force bool, root string, keepGoing bool, fetcher fetch.Fetcher, useExpandVars map[string]string, cfg *config.Config) error {
 	logging.Action("Starting source build...")
 
 	builtCount := 0
@@ -485,7 +498,7 @@ func (a *App) buildAndInstallPackages(solution map[string]*pkg.Package, repoPath
 		pkgNum++
 		logging.Action("(%d/%d) Emerging %s-%s", pkgNum, totalPackages, name, p.Version)
 
-		buildErr := a.buildAndInstallSingle(name, p, installer, repoPath, distDir, tmpDir, jobs, keepWork, enableTests, replace, force, fetcher)
+		buildErr := a.buildAndInstallSingle(name, p, installer, repoPath, distDir, tmpDir, jobs, keepWork, enableTests, replace, force, fetcher, useExpandVars, cfg)
 		if buildErr != nil {
 			if keepGoing {
 				logging.Error("failed to emerge %s: %v", name, buildErr)
@@ -515,14 +528,14 @@ func (a *App) buildAndInstallPackages(solution map[string]*pkg.Package, repoPath
 // buildAndInstallSingle builds and installs a single package with panic recovery.
 // This prevents interpreter panics (e.g., unsupported bash features) from
 // crashing the entire emerge process when --keep-going is used.
-func (a *App) buildAndInstallSingle(name string, p *pkg.Package, installer *install.Installer, repoPath, distDir, tmpDir string, jobs int, keepWork, enableTests, replace, force bool, fetcher fetch.Fetcher) (buildErr error) {
+func (a *App) buildAndInstallSingle(name string, p *pkg.Package, installer *install.Installer, repoPath, distDir, tmpDir string, jobs int, keepWork, enableTests, replace, force bool, fetcher fetch.Fetcher, useExpandVars map[string]string, cfg *config.Config) (buildErr error) {
 	defer func() {
 		if r := recover(); r != nil {
 			buildErr = fmt.Errorf("internal error (panic): %v", r)
 		}
 	}()
 
-	imageDir, err := a.buildPackageFromSource(p, repoPath, distDir, tmpDir, jobs, keepWork, enableTests, fetcher)
+	imageDir, err := a.buildPackageFromSource(p, repoPath, distDir, tmpDir, jobs, keepWork, enableTests, fetcher, useExpandVars, cfg)
 	if err != nil {
 		return fmt.Errorf("build failed: %w", err)
 	}
@@ -538,7 +551,7 @@ func (a *App) buildAndInstallSingle(name string, p *pkg.Package, installer *inst
 //
 // Returns the image directory (D) where files are installed.
 // If fetcher is provided, source tarballs are downloaded automatically.
-func (a *App) buildPackageFromSource(p *pkg.Package, repoPath, distDir, tmpDir string, jobs int, keepWork, enableTests bool, fetcher fetch.Fetcher) (string, error) {
+func (a *App) buildPackageFromSource(p *pkg.Package, repoPath, distDir, tmpDir string, jobs int, keepWork, enableTests bool, fetcher fetch.Fetcher, useExpandVars map[string]string, cfg *config.Config) (string, error) {
 	// Find ebuild file
 	ebuildPath := a.findEbuildFile(p, repoPath)
 	if ebuildPath == "" && a.verbose {
@@ -548,16 +561,15 @@ func (a *App) buildPackageFromSource(p *pkg.Package, repoPath, distDir, tmpDir s
 	// Create executor options with fetcher for automatic distfile download
 	// NOTE: KeepWork is always true here because we need the image directory
 	// for installation. Cleanup happens after install in installFromImageDir.
-	opts := ebuild.ExecutorOptions{
-		TmpDir:        tmpDir,
-		PortDir:       repoPath,
-		DistDir:       distDir,
-		EbuildPath:    ebuildPath,
-		EnableSandbox: true,
-		EnableTests:   enableTests,
-		KeepWork:      true, // Must be true - cleanup after install
-		Fetcher:       fetcher,
-	}
+	opts := ebuild.DefaultOptions()
+	opts.TmpDir = tmpDir
+	opts.PortDir = repoPath
+	opts.DistDir = distDir
+	opts.EbuildPath = ebuildPath
+	opts.EnableSandbox = true
+	opts.EnableTests = enableTests
+	opts.KeepWork = true // Must be true - cleanup after install
+	opts.Fetcher = fetcher
 
 	// Create ebuild executor
 	executor, err := ebuild.NewExecutor(p, opts)
@@ -582,6 +594,34 @@ func (a *App) buildPackageFromSource(p *pkg.Package, repoPath, distDir, tmpDir s
 
 	// Set MAKEOPTS for parallel builds
 	executor.Env.MAKEOPTS = fmt.Sprintf("-j%d", jobs)
+
+	// Apply make.conf build variables (CFLAGS, CXXFLAGS, LDFLAGS).
+	// os.Getenv in NewEnvironment may return empty since GRPM runs standalone,
+	// not through a Portage profile that sources make.conf.
+	if cfg != nil && cfg.MakeConf != nil {
+		if executor.Env.CFLAGS == "" && cfg.MakeConf.CFLAGS != "" {
+			executor.Env.CFLAGS = cfg.MakeConf.CFLAGS
+		}
+		if executor.Env.CXXFLAGS == "" && cfg.MakeConf.CXXFLAGS != "" {
+			executor.Env.CXXFLAGS = cfg.MakeConf.CXXFLAGS
+		}
+		if executor.Env.LDFLAGS == "" && cfg.MakeConf.LDFLAGS != "" {
+			executor.Env.LDFLAGS = cfg.MakeConf.LDFLAGS
+		}
+	}
+
+	// Set USE_EXPAND variables as separate environment variables.
+	// Per Portage: PYTHON_TARGETS, PYTHON_SINGLE_TARGET, etc. are set
+	// both as USE flags (python_targets_python3_12 in USE) and as
+	// separate variables (PYTHON_TARGETS="python3_12").
+	if len(useExpandVars) > 0 {
+		if executor.Env.ExtraVars == nil {
+			executor.Env.ExtraVars = make(map[string]string)
+		}
+		for k, v := range useExpandVars {
+			executor.Env.ExtraVars[k] = v
+		}
+	}
 
 	// Execute build phases (fetch happens automatically before unpack)
 	logging.Action("Fetching sources...")

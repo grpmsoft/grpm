@@ -228,6 +228,12 @@ var useExpandMapping = []struct {
 
 // applyUSEExpandToFlags enables USE_EXPAND flags in flagState based on
 // make.conf variables (e.g., PYTHON_TARGETS="python3_12" -> python_targets_python3_12=true).
+//
+// USE_EXPAND flags are always applied unconditionally because eclasses
+// dynamically add them to IUSE (e.g., python-r1.eclass adds
+// python_targets_* to IUSE from PYTHON_COMPAT). Since our eclass
+// processing may not capture all dynamic IUSE additions, we apply
+// USE_EXPAND flags regardless of IUSE presence — matching Portage behavior.
 func applyUSEExpandToFlags(cfg *config.Config, iuseFlags map[string]bool, flagState map[string]bool) {
 	for _, uev := range useExpandMapping {
 		value := cfg.GetVariable(uev.varName)
@@ -236,9 +242,11 @@ func applyUSEExpandToFlags(cfg *config.Config, iuseFlags map[string]bool, flagSt
 		}
 		for _, val := range strings.Fields(value) {
 			flag := uev.prefix + strings.ToLower(val)
-			if _, exists := iuseFlags[flag]; exists {
-				flagState[flag] = true
-			}
+			// Always apply USE_EXPAND flags — eclasses add them to IUSE
+			// dynamically (e.g., python-r1.eclass generates python_targets_*
+			// from PYTHON_COMPAT). Also register in iuseFlags for downstream.
+			iuseFlags[flag] = true
+			flagState[flag] = true
 		}
 	}
 }
@@ -263,6 +271,52 @@ func prefixToVarName(prefix string) string {
 	// Remove trailing underscore and convert to uppercase
 	name := strings.TrimSuffix(prefix, "_")
 	return strings.ToUpper(name)
+}
+
+// ApplyEffectiveUSE resolves the effective USE flags for a package and updates
+// p.UseFlags in-place. This must be called before building a package so that
+// NewEnvironment() picks up the correct USE flags including USE_EXPAND conversions.
+//
+// This applies the same resolution as FormatUSEFlags but modifies the package
+// rather than just formatting for display. It also sets USE_EXPAND variables
+// (like PYTHON_TARGETS) in the package's ExtraEnv map for environment export.
+//
+// Per Portage behavior: USE_EXPAND variables from make.conf (e.g.,
+// PYTHON_TARGETS="python3_12") are converted to USE flags
+// (python_targets_python3_12) and also set as separate env variables.
+func ApplyEffectiveUSE(p *pkg.Package, cfg *config.Config) {
+	if p == nil {
+		return
+	}
+
+	// Resolve effective USE flags (applies make.conf USE, USE_EXPAND, package.use)
+	enabled, _ := resolvePackageUSE(p, cfg)
+
+	// Update p.UseFlags: set all to false first, then enable resolved ones
+	for flag := range p.UseFlags {
+		p.UseFlags[flag] = false
+	}
+	for _, flag := range enabled {
+		p.UseFlags[flag] = true
+	}
+}
+
+// GetUSEExpandVars returns USE_EXPAND variables and their values from config.
+// These should be set as environment variables alongside USE flags.
+// For example: PYTHON_TARGETS="python3_11 python3_12"
+func GetUSEExpandVars(cfg *config.Config) map[string]string {
+	if cfg == nil {
+		return nil
+	}
+
+	result := make(map[string]string)
+	for _, uev := range useExpandMapping {
+		value := cfg.GetVariable(uev.varName)
+		if value != "" {
+			result[uev.varName] = value
+		}
+	}
+	return result
 }
 
 // getEbuildIUSEDefaults reads the ebuild file and extracts IUSE defaults.
