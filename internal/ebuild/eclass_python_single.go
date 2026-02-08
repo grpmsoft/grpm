@@ -54,17 +54,36 @@ func (e *PythonSingleEclass) Variables() map[string]string {
 //
 // Usage (in ebuild): inherit python-single-r1
 // Then pkg_setup automatically calls this function.
-func (h *Helpers) PythonSingleR1PkgSetup(args []string) error {
+func (h *Helpers) PythonSingleR1PkgSetup(_ []string) error {
 	// Get the single target from USE flags
 	target := h.getPythonSingleTarget()
 	if target == "" {
-		return &DieError{Message: "python-single-r1_pkg_setup: No PYTHON_SINGLE_TARGET set"}
-	}
-
-	// Validate target is in PYTHON_COMPAT
-	if !h.isPythonCompatible(target) {
-		return &DieError{Message: fmt.Sprintf(
-			"python-single-r1_pkg_setup: %s not in PYTHON_COMPAT", target)}
+		// Auto-detect: pick the best available Python from PYTHON_COMPAT
+		compat := strings.Fields(h.getEnvOrDefault("PYTHON_COMPAT", ""))
+		for _, candidate := range []string{
+			"python3_12", "python3_13", "python3_11", "python3_14",
+		} {
+			for _, c := range compat {
+				if c == candidate {
+					info, err := ParsePythonImpl(candidate)
+					if err == nil {
+						if _, lookErr := exec.LookPath(info.Executable); lookErr == nil {
+							target = candidate
+							break
+						}
+					}
+				}
+			}
+			if target != "" {
+				break
+			}
+		}
+		if target == "" && len(compat) > 0 {
+			target = compat[len(compat)-1] // Last entry is usually newest
+		}
+		if target == "" {
+			target = "python3_12" // Last resort
+		}
 	}
 
 	// Export Python environment

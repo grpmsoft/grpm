@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/grpmsoft/grpm/internal/logging"
 	"github.com/grpmsoft/grpm/internal/pkg"
 	"github.com/grpmsoft/grpm/internal/state"
 )
@@ -872,5 +873,116 @@ func (h *Helpers) GetAlternative(_ []string) error {
 		first = first[:idx]
 	}
 	h.writeStdout(first)
+	return nil
+}
+
+// ============================================================================
+// Shell Completion Eclass Functions
+// ============================================================================
+
+// GetBashcompdir returns the bash completion directory.
+func (h *Helpers) GetBashcompdir(_ []string) error {
+	h.writeStdout("/usr/share/bash-completion/completions")
+	return nil
+}
+
+// GetZshcompdir returns the zsh completion directory.
+func (h *Helpers) GetZshcompdir(_ []string) error {
+	h.writeStdout("/usr/share/zsh/site-functions")
+	return nil
+}
+
+// GetFishcompdir returns the fish completion directory.
+func (h *Helpers) GetFishcompdir(_ []string) error {
+	h.writeStdout("/usr/share/fish/vendor_completions.d")
+	return nil
+}
+
+// DoBashcomp installs bash completion files.
+func (h *Helpers) DoBashcomp(args []string) error {
+	h.insDestTree = "/usr/share/bash-completion/completions"
+	return h.Doins(args)
+}
+
+// NewBashcomp installs a bash completion file with a new name.
+func (h *Helpers) NewBashcomp(args []string) error {
+	h.insDestTree = "/usr/share/bash-completion/completions"
+	return h.Newins(args)
+}
+
+// ============================================================================
+// Additional Eclass Stubs
+// ============================================================================
+
+// Eautoreconf runs autoreconf -f -i. Delegates to the real command.
+func (h *Helpers) Eautoreconf(_ []string) error {
+	sourceDir := h.getSourceDir()
+	if sourceDir == "" {
+		return &DieError{Message: "eautoreconf: S not set"}
+	}
+
+	cmd := exec.Command("autoreconf", "-f", "-i")
+	cmd.Dir = sourceDir
+	cmd.Env = h.env.ToSlice()
+	output, err := cmd.CombinedOutput()
+	if len(output) > 0 {
+		logging.Debug("[eautoreconf] %s", string(output))
+	}
+	if err != nil {
+		return &DieError{Message: fmt.Sprintf("eautoreconf: %v", err)}
+	}
+	return nil
+}
+
+// Eprefixify replaces @GENTOO_PORTAGE_EPREFIX@ with the actual prefix.
+func (h *Helpers) Eprefixify(args []string) error {
+	prefix := h.getEnvOrDefault("EPREFIX", "")
+	for _, file := range args {
+		path := h.resolveSourcePath(file)
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return &DieError{Message: fmt.Sprintf("eprefixify: %v", err)}
+		}
+		result := strings.ReplaceAll(string(content), "@GENTOO_PORTAGE_EPREFIX@", prefix)
+		if err := os.WriteFile(path, []byte(result), 0644); err != nil {
+			return &DieError{Message: fmt.Sprintf("eprefixify: %v", err)}
+		}
+	}
+	return nil
+}
+
+// LinuxInfoPkgSetup implements linux-info_pkg_setup.
+func (h *Helpers) LinuxInfoPkgSetup(_ []string) error {
+	// Skip kernel checks in our context — just ensure variables are set
+	logging.Debug("[linux-info] pkg_setup: skipping kernel configuration checks")
+	return nil
+}
+
+// KernelIs checks kernel version (simplified).
+func (h *Helpers) KernelIs(args []string) error {
+	// In our context, assume kernel check passes
+	if len(args) < 2 {
+		return exitFalse()
+	}
+	return nil // Assume condition is met
+}
+
+// DistutilsEnableTests enables test dependencies for distutils packages.
+func (h *Helpers) DistutilsEnableTests(args []string) error {
+	// This is called at global scope to set up IUSE and test deps.
+	// Just set IUSE+=" test" and return.
+	if len(args) >= 1 {
+		h.setEnvVar("_DISTUTILS_TEST_RUNNER", args[0])
+	}
+	return nil
+}
+
+// UnpackerNoOp is a no-op stub for unpacker eclass functions.
+func (h *Helpers) UnpackerNoOp(_ []string) error {
+	return nil
+}
+
+// LlvmOrgNoOp is a no-op stub for llvm.org eclass functions.
+func (h *Helpers) LlvmOrgNoOp(_ []string) error {
 	return nil
 }

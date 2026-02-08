@@ -246,10 +246,11 @@ func TestPythonSingleR1PkgSetup_NoTarget(t *testing.T) {
 
 	env.SetVar("PYTHON_COMPAT", "python3_10 python3_11")
 	// No python_single_target_* USE flag set
+	// Should auto-detect from PYTHON_COMPAT instead of failing
 
 	err := h.PythonSingleR1PkgSetup(nil)
-	if err == nil {
-		t.Error("expected error when no PYTHON_SINGLE_TARGET set")
+	if err != nil {
+		t.Errorf("PythonSingleR1PkgSetup should auto-detect target: %v", err)
 	}
 }
 

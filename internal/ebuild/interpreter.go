@@ -413,6 +413,33 @@ func (i *Interpreter) buildCommandMap() map[string]helperFunc {
 		// app-alternatives.eclass functions
 		"get_alternative": i.helpers.GetAlternative,
 
+		// bash-completion-r1.eclass / shell-completion.eclass
+		"get_bashcompdir": i.helpers.GetBashcompdir,
+		"get_zshcompdir":  i.helpers.GetZshcompdir,
+		"get_fishcompdir": i.helpers.GetFishcompdir,
+		"dobashcomp":      i.helpers.DoBashcomp,
+		"newbashcomp":     i.helpers.NewBashcomp,
+
+		// autotools.eclass
+		"eautoreconf": i.helpers.Eautoreconf,
+
+		// prefix.eclass
+		"eprefixify": i.helpers.Eprefixify,
+
+		// linux-info.eclass additional
+		"linux-info_pkg_setup": i.helpers.LinuxInfoPkgSetup,
+		"kernel_is":            i.helpers.KernelIs,
+
+		// distutils-r1.eclass additional
+		"distutils_enable_tests": i.helpers.DistutilsEnableTests,
+
+		// unpacker.eclass
+		"unpacker_src_uri_depends": i.helpers.UnpackerNoOp,
+
+		// llvm.org.eclass
+		"llvm.org_set_globals": i.helpers.LlvmOrgNoOp,
+		"llvm.org_src_prepare": i.helpers.LlvmOrgNoOp,
+
 		// cmake.eclass functions
 		"cmake":                          i.helpers.Cmake,
 		"cmake_src_prepare":              i.helpers.CmakeSrcPrepare,
