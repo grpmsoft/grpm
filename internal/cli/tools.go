@@ -48,7 +48,7 @@ func (a *App) runTools(args []string) error {
 	// Set custom help handler
 	fs.Usage = func() { fmt.Print(GetCommandHelp("tools")) }
 
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(reorderArgs(args)); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}

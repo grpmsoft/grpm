@@ -51,6 +51,12 @@ func (e *UserError) Error() string {
 		}
 	}
 
+	if e.Technical != nil {
+		sb.WriteString("\n  Technical: ")
+		sb.WriteString(e.Technical.Error())
+		sb.WriteString("\n")
+	}
+
 	return sb.String()
 }
 

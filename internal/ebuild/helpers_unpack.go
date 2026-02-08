@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/ulikunitz/xz"
 )
 
@@ -23,7 +24,7 @@ import (
 // Usage: unpack file.tar.gz
 // Usage: unpack ${A}
 //
-// Supported formats: .tar.gz, .tar.bz2, .tar.xz, .tar, .zip
+// Supported formats: .tar.gz, .tar.bz2, .tar.xz, .tar.zst, .tar, .zip, .gz, .bz2, .xz, .zst
 // Pure Go implementation, no external commands.
 func (h *Helpers) Unpack(args []string) error {
 	if len(args) < 1 {
@@ -93,10 +94,20 @@ func (h *Helpers) unpackArchive(archivePath, destDir string) error {
 		return h.unpackTarBz2(archivePath, destDir)
 	case strings.HasSuffix(lowerPath, ".tar.xz") || strings.HasSuffix(lowerPath, ".txz"):
 		return h.unpackTarXz(archivePath, destDir)
+	case strings.HasSuffix(lowerPath, ".tar.zst") || strings.HasSuffix(lowerPath, ".tar.zstd"):
+		return h.unpackTarZst(archivePath, destDir)
 	case strings.HasSuffix(lowerPath, ".tar"):
 		return h.unpackTar(archivePath, destDir)
 	case strings.HasSuffix(lowerPath, ".zip"):
 		return h.unpackZip(archivePath, destDir)
+	case strings.HasSuffix(lowerPath, ".gz"):
+		return h.unpackSingleGz(archivePath, destDir)
+	case strings.HasSuffix(lowerPath, ".bz2"):
+		return h.unpackSingleBz2(archivePath, destDir)
+	case strings.HasSuffix(lowerPath, ".xz"):
+		return h.unpackSingleXz(archivePath, destDir)
+	case strings.HasSuffix(lowerPath, ".zst") || strings.HasSuffix(lowerPath, ".zstd"):
+		return h.unpackSingleZst(archivePath, destDir)
 	default:
 		return fmt.Errorf("unsupported archive format: %s", archivePath)
 	}
@@ -145,6 +156,103 @@ func (h *Helpers) unpackTarXz(archivePath, destDir string) error {
 	}
 
 	return h.extractTar(tar.NewReader(xzReader), destDir)
+}
+
+// unpackTarZst extracts a .tar.zst archive.
+func (h *Helpers) unpackTarZst(archivePath, destDir string) error {
+	file, err := os.Open(archivePath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = file.Close() }()
+
+	decoder, err := zstd.NewReader(file)
+	if err != nil {
+		return fmt.Errorf("zstd reader: %w", err)
+	}
+	defer decoder.Close()
+
+	return h.extractTar(tar.NewReader(decoder), destDir)
+}
+
+// unpackSingleGz decompresses a standalone .gz file (not a tar archive).
+func (h *Helpers) unpackSingleGz(archivePath, destDir string) error {
+	file, err := os.Open(archivePath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = file.Close() }()
+
+	gz, err := gzip.NewReader(file)
+	if err != nil {
+		return fmt.Errorf("gzip reader: %w", err)
+	}
+	defer func() { _ = gz.Close() }()
+
+	outName := strings.TrimSuffix(filepath.Base(archivePath), ".gz")
+	return h.writeDecompressed(gz, filepath.Join(destDir, outName))
+}
+
+// unpackSingleBz2 decompresses a standalone .bz2 file.
+func (h *Helpers) unpackSingleBz2(archivePath, destDir string) error {
+	file, err := os.Open(archivePath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = file.Close() }()
+
+	outName := strings.TrimSuffix(filepath.Base(archivePath), ".bz2")
+	return h.writeDecompressed(bzip2.NewReader(file), filepath.Join(destDir, outName))
+}
+
+// unpackSingleXz decompresses a standalone .xz file.
+func (h *Helpers) unpackSingleXz(archivePath, destDir string) error {
+	file, err := os.Open(archivePath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = file.Close() }()
+
+	xzReader, err := xz.NewReader(file)
+	if err != nil {
+		return fmt.Errorf("xz reader: %w", err)
+	}
+
+	outName := strings.TrimSuffix(filepath.Base(archivePath), ".xz")
+	return h.writeDecompressed(xzReader, filepath.Join(destDir, outName))
+}
+
+// unpackSingleZst decompresses a standalone .zst file.
+func (h *Helpers) unpackSingleZst(archivePath, destDir string) error {
+	file, err := os.Open(archivePath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = file.Close() }()
+
+	decoder, err := zstd.NewReader(file)
+	if err != nil {
+		return fmt.Errorf("zstd reader: %w", err)
+	}
+	defer decoder.Close()
+
+	outName := strings.TrimSuffix(filepath.Base(archivePath), ".zst")
+	outName = strings.TrimSuffix(outName, ".zstd")
+	return h.writeDecompressed(decoder, filepath.Join(destDir, outName))
+}
+
+// writeDecompressed writes decompressed data from a reader to a file.
+func (h *Helpers) writeDecompressed(r io.Reader, outPath string) error {
+	out, err := os.Create(outPath)
+	if err != nil {
+		return fmt.Errorf("create output: %w", err)
+	}
+	defer func() { _ = out.Close() }()
+
+	if _, err := io.Copy(out, r); err != nil {
+		return fmt.Errorf("decompress: %w", err)
+	}
+	return nil
 }
 
 // unpackTar extracts a plain .tar archive.

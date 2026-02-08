@@ -239,7 +239,7 @@ func (a *App) runResolve(args []string) error {
 	// Set custom help handler
 	fs.Usage = func() { fmt.Print(GetCommandHelp("resolve")) }
 
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(reorderArgs(args)); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
@@ -415,7 +415,7 @@ func (a *App) runInstall(args []string) error {
 	// Set custom help handler
 	fs.Usage = func() { fmt.Print(GetCommandHelp("install")) }
 
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(reorderArgs(args)); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
@@ -852,7 +852,7 @@ func (a *App) runSync(args []string) error {
 	// Set custom help handler
 	fs.Usage = func() { fmt.Print(GetCommandHelp("sync")) }
 
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(reorderArgs(args)); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
@@ -1002,7 +1002,7 @@ func (a *App) runCompletion(args []string) error {
 	// Set custom help handler
 	fs.Usage = func() { fmt.Print(GetCommandHelp("completion")) }
 
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(reorderArgs(args)); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
@@ -1121,7 +1121,7 @@ View generated man page:
   grpm doc man emerge | man -l -`)
 	}
 
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(reorderArgs(args)); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
@@ -1187,4 +1187,20 @@ func (a *App) generateAllManPages(gen *ManPageGenerator, dir string) error {
 
 	a.log.Success("Generated %d man page(s) in %s", count, dir)
 	return nil
+}
+
+// reorderArgs moves flag-like arguments (starting with "-") before positional
+// arguments so that Go's flag package can parse them correctly.
+// Go's flag.Parse stops at the first non-flag argument, but Portage allows
+// flags anywhere: "emerge @world --deep" should work the same as "emerge --deep @world".
+func reorderArgs(args []string) []string {
+	var flags, positional []string
+	for _, arg := range args {
+		if len(arg) > 0 && arg[0] == '-' {
+			flags = append(flags, arg)
+		} else {
+			positional = append(positional, arg)
+		}
+	}
+	return append(flags, positional...)
 }
