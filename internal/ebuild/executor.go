@@ -825,6 +825,13 @@ func (e *Executor) HasPhaseFunction(phase Phase) bool {
 		}
 	}
 
+	// Also check the dynamic eclass loader's executor (separate EXPORT_FUNCTIONS state)
+	if e.dynamicLoader != nil {
+		if _, ok := e.dynamicLoader.GetExportedFunction(funcName); ok {
+			return true
+		}
+	}
+
 	return false
 }
 
@@ -873,6 +880,12 @@ func (e *Executor) RunPhaseFunction(phase Phase) (string, error) {
 	helpers := e.interpreter.GetHelpers()
 	if helpers != nil && helpers.eclassRegistry != nil {
 		if ec, ok := helpers.eclassRegistry.GetExportedFunction(funcName); ok {
+			eclassName = ec
+		}
+	}
+	// Also check dynamic loader (separate EXPORT_FUNCTIONS state)
+	if eclassName == "" && e.dynamicLoader != nil {
+		if ec, ok := e.dynamicLoader.GetExportedFunction(funcName); ok {
 			eclassName = ec
 		}
 	}
@@ -947,9 +960,25 @@ func (e *Executor) RunPhaseFunction(phase Phase) (string, error) {
 	var output bytes.Buffer
 	ctx := context.Background()
 
-	// Create interpreter with output capture
+	// Create interpreter with output capture.
+	// Share the eclass loader from the executor's main interpreter so that
+	// dynamically loaded eclasses (meson, cmake, etc.) and their
+	// EXPORT_FUNCTIONS are available when the ebuild is sourced.
 	logging.Debug("[ebuild] RunPhaseFunction: creating interpreter with S=%s", e.Env.S)
 	interp := NewInterpreter(e.Env, &output, &output)
+	if e.interpreter != nil {
+		mainHelpers := e.interpreter.GetHelpers()
+		if mainHelpers != nil {
+			// Share the eclass loader so inherit() can load eclasses from repository
+			if loader := mainHelpers.GetEclassLoader(); loader != nil {
+				interp.GetHelpers().SetEclassLoader(loader)
+			}
+			// Share the eclass registry so EXPORT_FUNCTIONS state persists
+			if mainHelpers.eclassRegistry != nil {
+				interp.GetHelpers().eclassRegistry = mainHelpers.eclassRegistry
+			}
+		}
+	}
 
 	// Execute the combined script
 	if err := interp.Run(ctx, combinedScript.String()); err != nil {
