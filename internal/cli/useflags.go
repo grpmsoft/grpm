@@ -47,6 +47,15 @@ func FormatUSEFlags(p *pkg.Package, cfg *config.Config) string {
 		return `USE=""`
 	}
 
+	// Remember which USE_EXPAND prefixes the package originally has in IUSE.
+	// This prevents showing PYTHON_TARGETS on non-Python packages.
+	originalExpandPrefixes := make(map[string]bool)
+	for flag := range p.UseFlags {
+		if prefix := getUSEExpandPrefix(flag); prefix != "" {
+			originalExpandPrefixes[prefix] = true
+		}
+	}
+
 	// Get effective USE flags for this package
 	enabled, disabled := resolvePackageUSE(p, cfg)
 
@@ -58,6 +67,10 @@ func FormatUSEFlags(p *pkg.Package, cfg *config.Config) string {
 
 	for _, flag := range enabled {
 		if prefix := getUSEExpandPrefix(flag); prefix != "" {
+			// Only show USE_EXPAND flags for prefixes in the original IUSE
+			if !originalExpandPrefixes[prefix] {
+				continue
+			}
 			shortFlag := strings.TrimPrefix(flag, prefix)
 			expandEnabled[prefix] = append(expandEnabled[prefix], shortFlag)
 		} else {
@@ -67,6 +80,10 @@ func FormatUSEFlags(p *pkg.Package, cfg *config.Config) string {
 
 	for _, flag := range disabled {
 		if prefix := getUSEExpandPrefix(flag); prefix != "" {
+			// Only show USE_EXPAND flags for prefixes in the original IUSE
+			if !originalExpandPrefixes[prefix] {
+				continue
+			}
 			shortFlag := strings.TrimPrefix(flag, prefix)
 			expandDisabled[prefix] = append(expandDisabled[prefix], shortFlag)
 		} else {
