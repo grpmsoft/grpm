@@ -152,6 +152,12 @@ func (pr *PortageRepository) getEffectiveUSE(category, pkgName, version, slot st
 		}
 	}
 
+	// 3b. Apply USE_EXPAND variables (PYTHON_SINGLE_TARGET, PYTHON_TARGETS, etc.)
+	// Profile defines USE_EXPAND="PYTHON_SINGLE_TARGET PYTHON_TARGETS ..."
+	// make.conf sets PYTHON_SINGLE_TARGET="python3_12"
+	// This expands to USE flag: python_single_target_python3_12
+	pr.applyUSEExpand(effectiveUSE)
+
 	// 4. Apply package.use per-package USE flags
 	if pr.config != nil {
 		packageUSE := pr.config.GetPackageUSEForPackage(category, pkgName, version, slot)
@@ -193,6 +199,58 @@ func (pr *PortageRepository) isUSEConditionalActive(useConditional string, effec
 	// Regular conditional: flag
 	// flag? means include if flag IS enabled
 	return effectiveUSE[useConditional]
+}
+
+// applyUSEExpand expands critical USE_EXPAND variables into USE flags.
+//
+// In Portage, USE_EXPAND variables are expanded into lowercase USE flags:
+//
+//	PYTHON_SINGLE_TARGET="python3_12"   → python_single_target_python3_12
+//	PYTHON_TARGETS="python3_12"         → python_targets_python3_12
+//
+// Currently handles Python-related variables which are the most commonly used
+// in dependency conditions. Full USE_EXPAND support (ABI_X86, ELIBC, etc.)
+// requires additional implicit variable handling and is planned for later.
+//
+// Sources checked (in priority order):
+//  1. make.conf variables
+//  2. Profile make.defaults variables
+func (pr *PortageRepository) applyUSEExpand(effectiveUSE map[string]bool) {
+	// Expand only well-known USE_EXPAND variables that appear in dependency conditions.
+	// Full USE_EXPAND expansion requires proper handling of implicit variables
+	// (ELIBC, KERNEL, ARCH) and ABI flags, which is deferred.
+	useExpandVars := []string{
+		"PYTHON_SINGLE_TARGET",
+		"PYTHON_TARGETS",
+		"LUA_SINGLE_TARGET",
+		"LUA_TARGETS",
+		"RUBY_TARGETS",
+	}
+
+	for _, varName := range useExpandVars {
+		prefix := strings.ToLower(varName) + "_"
+
+		// Check make.conf first (higher priority)
+		var value string
+		if pr.config != nil {
+			value = pr.config.GetVariable(varName)
+		}
+
+		// Fall back to profile make.defaults
+		if value == "" && pr.profile != nil {
+			value = pr.profile.MakeDefaults[varName]
+		}
+
+		if value == "" {
+			continue
+		}
+
+		// Expand each value into a USE flag
+		for _, val := range strings.Fields(value) {
+			flag := prefix + strings.ToLower(val)
+			effectiveUSE[flag] = true
+		}
+	}
 }
 
 func (pr *PortageRepository) LoadPackages(names []string) ([]*pkg.Package, error) {
