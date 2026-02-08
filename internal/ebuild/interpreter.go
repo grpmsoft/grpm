@@ -783,17 +783,32 @@ func (i *Interpreter) Eval(ctx context.Context, expr string) (result string, eva
 // unsupported by mvdan.cc/sh. Captures: $1=varname (with optional !), $2=operator.
 var paramExpansionRe = regexp.MustCompile(`\$\{(!?[a-zA-Z_][a-zA-Z0-9_]*)@([aQEPAK])\}`)
 
+// redirectRe matches ">& file" (redirect stdout+stderr to file) which mvdan.cc/sh
+// doesn't support (it only handles ">& fd" for fd duplication). We transform it to
+// "&> file" which is the equivalent bash syntax that mvdan.cc/sh handles correctly.
+// The regex requires that >& is NOT preceded by a digit (to avoid matching n>&m fd dup)
+// and IS followed by a non-digit (filename, not fd number).
+var redirectRe = regexp.MustCompile(`(?m)(^|[^0-9])>&(\s*[^0-9\s&])`)
+
 // preprocessScript transforms bash constructs unsupported by mvdan.cc/sh
 // into equivalent forms that won't cause parser/runtime panics.
 //
 // Handles:
 //   - ${VAR@a} → "a" (variable attributes; assume array for eclass compatibility)
 //   - ${VAR@Q/E/P/A/K} → "" (other transformation operators)
+//   - >& file → &> file (bash synonym, mvdan/sh panics on >& with filename)
 //
 // This is needed because Gentoo eclasses (e.g., app-alternatives.eclass) use
 // ${ALTERNATIVES@a} to check if a variable is an array, which mvdan.cc/sh
 // does not support and panics on.
 func preprocessScript(script string) string {
+	// Transform >& file → &> file (both mean redirect stdout+stderr to file).
+	// mvdan.cc/sh panics on >& with a filename argument (it only supports
+	// >& fd for file descriptor duplication). Bash treats >& file as &> file.
+	if strings.Contains(script, ">&") {
+		script = redirectRe.ReplaceAllString(script, "${1}&>${2}")
+	}
+
 	if !strings.Contains(script, "@") {
 		return script
 	}

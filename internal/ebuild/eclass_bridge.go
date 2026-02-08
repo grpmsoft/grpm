@@ -137,14 +137,19 @@ func (l *DynamicEclassLoader) Inherit(ctx context.Context, eclasses []string) er
 			continue
 		}
 
+		// Mark as loaded BEFORE sourcing, per Portage behavior.
+		// Portage's inherit() adds to INHERITED before sourcing the eclass
+		// (ebuild.sh line 384-385). This prevents infinite recursion when
+		// eclass A inherits B which inherits A again.
+		eclassPath := ""
+		if ec, err := l.hybridLoader.GetCache().Get(name); err == nil {
+			eclassPath = ec.Path
+		}
+		l.registry.MarkLoaded(name, eclassPath)
+
 		// Try dynamic loading via hybrid loader
 		if err := l.hybridLoader.Inherit(ctx, []string{name}); err != nil {
 			return fmt.Errorf("inheriting %s: %w", name, err)
-		}
-
-		// Mark as loaded in registry
-		if ec, err := l.hybridLoader.GetCache().Get(name); err == nil {
-			l.registry.MarkLoaded(name, ec.Path)
 		}
 	}
 

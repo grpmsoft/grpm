@@ -615,12 +615,46 @@ func (a *App) buildPackageFromSource(p *pkg.Package, repoPath, distDir, tmpDir s
 	// Per Portage: PYTHON_TARGETS, PYTHON_SINGLE_TARGET, etc. are set
 	// both as USE flags (python_targets_python3_12 in USE) and as
 	// separate variables (PYTHON_TARGETS="python3_12").
-	if len(useExpandVars) > 0 {
-		if executor.Env.ExtraVars == nil {
-			executor.Env.ExtraVars = make(map[string]string)
-		}
-		for k, v := range useExpandVars {
+	if executor.Env.ExtraVars == nil {
+		executor.Env.ExtraVars = make(map[string]string)
+	}
+	for k, v := range useExpandVars {
+		executor.Env.ExtraVars[k] = v
+	}
+
+	// Set multilib/ABI variables from profile defaults.
+	// These come from profiles/arch/amd64/make.defaults in Portage.
+	// Without them, multilib_foreach_abi fails with "no ABIs enabled".
+	multilibDefaults := map[string]string{
+		"DEFAULT_ABI":  "amd64",
+		"MULTILIB_ABIS": "amd64 x86",
+		"ABI":          "amd64",
+		"ABI_X86":      "64",
+		"CHOST":        "x86_64-pc-linux-gnu",
+		"CBUILD":       "x86_64-pc-linux-gnu",
+		"CHOST_amd64":  "x86_64-pc-linux-gnu",
+		"CHOST_x86":    "i686-pc-linux-gnu",
+		"LIBDIR_amd64": "lib64",
+		"LIBDIR_x86":   "lib",
+	}
+	for k, v := range multilibDefaults {
+		if _, exists := executor.Env.ExtraVars[k]; !exists {
 			executor.Env.ExtraVars[k] = v
+		}
+	}
+
+	// Pass all make.conf variables to environment (profile variables, etc.)
+	if cfg != nil {
+		for _, varName := range []string{
+			"ARCH", "KERNEL", "USERLAND",
+			"ACCEPT_KEYWORDS", "ACCEPT_LICENSE",
+			"USE_EXPAND", "USE_EXPAND_HIDDEN",
+		} {
+			if v := cfg.GetVariable(varName); v != "" {
+				if _, exists := executor.Env.ExtraVars[varName]; !exists {
+					executor.Env.ExtraVars[varName] = v
+				}
+			}
 		}
 	}
 
