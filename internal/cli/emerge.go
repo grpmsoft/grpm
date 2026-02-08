@@ -568,7 +568,8 @@ func (a *App) buildPackageFromSource(p *pkg.Package, repoPath, distDir, tmpDir s
 	opts.EbuildPath = ebuildPath
 	opts.EnableSandbox = true
 	opts.EnableTests = enableTests
-	opts.KeepWork = true // Must be true - cleanup after install
+	opts.KeepWork = true    // Must be true - cleanup after install
+	opts.DenyNetwork = false // Must be false - fetcher needs network access
 	opts.Fetcher = fetcher
 
 	// Create ebuild executor
