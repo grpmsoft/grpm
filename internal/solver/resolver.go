@@ -101,6 +101,24 @@ func (r *PortageResolver) isInstalled(name string) bool {
 	return r.installedDB.IsInstalled(name)
 }
 
+// sortAlternativesByInstalled reorders OR-group alternatives to put
+// already-installed packages first. This creates a preference for keeping
+// installed packages when the SAT solver picks from OR alternatives.
+func (r *PortageResolver) sortAlternativesByInstalled(alternatives []pkg.Constraint) []pkg.Constraint {
+	sorted := make([]pkg.Constraint, 0, len(alternatives))
+	var notInstalled []pkg.Constraint
+
+	for _, alt := range alternatives {
+		if r.isInstalled(alt.Name) {
+			sorted = append(sorted, alt)
+		} else {
+			notInstalled = append(notInstalled, alt)
+		}
+	}
+
+	return append(sorted, notInstalled...)
+}
+
 // groupDependenciesByOrGroupID groups dependencies by their OrGroupID
 // Returns required dependencies (OrGroupID=0) and OR-groups (OrGroupID>0)
 func groupDependenciesByOrGroupID(deps []pkg.Constraint) (requiredDeps []pkg.Constraint, orGroups map[int][]pkg.Constraint) {
@@ -248,9 +266,13 @@ func (r *PortageResolver) addPackageConstraints(adapter *GophersatAdapter, p *pk
 	}
 
 	// Add OR-group constraints (OR logic)
+	// Prefer installed alternatives by putting them first in the clause.
+	// SAT solvers typically assign positive values to earlier variables,
+	// so this creates a soft preference for already-installed packages.
 	for groupID, alternatives := range orGroups {
 		logging.Debug("Adding OR-group %d with %d alternatives", groupID, len(alternatives))
-		if err := adapter.AddOrGroupConstraint(alternatives); err != nil {
+		sorted := r.sortAlternativesByInstalled(alternatives)
+		if err := adapter.AddOrGroupConstraint(sorted); err != nil {
 			logging.Debug("Warning: failed to add OR-group constraint: %v", err)
 		}
 	}
