@@ -651,17 +651,18 @@ func (a *App) buildPackageFromSource(p *pkg.Package, repoPath, distDir, tmpDir s
 	// Set multilib/ABI variables from profile defaults.
 	// These come from profiles/arch/amd64/make.defaults in Portage.
 	// Without them, multilib_foreach_abi fails with "no ABIs enabled".
+	// Note: MULTILIB_ABIS only includes "amd64" because ABI_X86="64"
+	// means only 64-bit is enabled. The x86 (32-bit) ABI requires
+	// ABI_X86="64 32" and a 32-bit cross-compiler (i686-pc-linux-gnu-gcc).
 	multilibDefaults := map[string]string{
-		"DEFAULT_ABI":  "amd64",
-		"MULTILIB_ABIS": "amd64 x86",
-		"ABI":          "amd64",
-		"ABI_X86":      "64",
-		"CHOST":        "x86_64-pc-linux-gnu",
-		"CBUILD":       "x86_64-pc-linux-gnu",
-		"CHOST_amd64":  "x86_64-pc-linux-gnu",
-		"CHOST_x86":    "i686-pc-linux-gnu",
-		"LIBDIR_amd64": "lib64",
-		"LIBDIR_x86":   "lib",
+		"DEFAULT_ABI":   "amd64",
+		"MULTILIB_ABIS": "amd64",
+		"ABI":           "amd64",
+		"ABI_X86":       "64",
+		"CHOST":         "x86_64-pc-linux-gnu",
+		"CBUILD":        "x86_64-pc-linux-gnu",
+		"CHOST_amd64":   "x86_64-pc-linux-gnu",
+		"LIBDIR_amd64":  "lib64",
 	}
 	for k, v := range multilibDefaults {
 		if _, exists := executor.Env.ExtraVars[k]; !exists {
