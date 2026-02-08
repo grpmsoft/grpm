@@ -310,7 +310,7 @@ internal/solver/gophersat_adapter.go  # SAT encoding
 | pkg_postrm | Full | |
 | pkg_config | Partial | |
 | pkg_info | Partial | |
-| pkg_nofetch | Not Yet | |
+| pkg_nofetch | Full | Default implementation per PMS 9.1.16 |
 
 ### Default Phase Implementations
 

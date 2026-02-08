@@ -46,7 +46,7 @@ This guide covers installation of GRPM on Gentoo Linux and compatible distributi
 ```bash
 # Set version and architecture
 VERSION="0.9.3"
-ARCH="amd64"  # Options: amd64, arm64, arm_7, arm_6, 386
+ARCH="x86_64"  # Options: x86_64, arm64, armv7, armv6, i386
 
 # Download binary
 wget "https://github.com/grpmsoft/grpm/releases/download/v${VERSION}/grpm_${VERSION}_linux_${ARCH}.tar.gz"
@@ -71,11 +71,11 @@ grpm -V
 
 | Architecture | Filename | Description |
 |--------------|----------|-------------|
-| x86_64 | `grpm_*_linux_amd64.tar.gz` | 64-bit Intel/AMD (most common) |
+| x86_64 | `grpm_*_linux_x86_64.tar.gz` | 64-bit Intel/AMD (most common) |
 | ARM64 | `grpm_*_linux_arm64.tar.gz` | 64-bit ARM (Apple Silicon, AWS Graviton) |
-| ARMv7 | `grpm_*_linux_arm_7.tar.gz` | 32-bit ARM with hardware float |
-| ARMv6 | `grpm_*_linux_arm_6.tar.gz` | Raspberry Pi Zero/1 |
-| i386 | `grpm_*_linux_386.tar.gz` | 32-bit Intel/AMD |
+| ARMv7 | `grpm_*_linux_armv7.tar.gz` | 32-bit ARM with hardware float |
+| ARMv6 | `grpm_*_linux_armv6.tar.gz` | Raspberry Pi Zero/1 |
+| i386 | `grpm_*_linux_i386.tar.gz` | 32-bit Intel/AMD |
 
 ---
 

@@ -17,6 +17,7 @@ Complete command-line reference for GRPM. See [CHANGELOG](../CHANGELOG.md) for v
   - [fetch](#fetch)
   - [build](#build)
   - [update](#update)
+  - [depclean](#depclean)
   - [analyze](#analyze)
   - [tools](#tools)
   - [completion](#completion)
@@ -220,11 +221,16 @@ grpm emerge [options] <package|@set>...
 | `--mock` | Use mock repository for testing | `false` |
 | `--pretend`, `-p` | Show build plan without building | `false` |
 | `--ask`, `-a` | Ask for confirmation before building | `false` |
-| `--jobs <n>` | Number of parallel make jobs | From MAKEOPTS or 4 |
+| `--jobs <n>`, `-j <n>` | Number of packages to build in parallel | `1` |
+| `--make-jobs <n>` | Number of parallel make jobs per package | From MAKEOPTS or 4 |
+| `--keep-going`, `-k` | Continue building remaining packages on failure | `false` |
 | `--keep-work` | Keep work directory after build | `false` |
 | `--test` | Run test phase (make check/test) | `false` |
+| `--replace`, `-R` | Replace existing package (unmerge old before merge) | `false` |
+| `--force`, `-f` | Force installation (skip collision checks) | `false` |
 | `--onlydeps`, `-o` | Build dependencies only, skip target | `false` |
 | `--check-tools` | Perform optional pre-build tool availability check | `false` |
+| `--info` | Show system environment information (like `emerge --info`) | `false` |
 | `--deep`, `-D` | Traverse dependencies of already-installed packages | `false` |
 | `--with-bdeps` | Include build-time dependencies for installed packages | `false` |
 | `--emptytree`, `-e` | Assume no packages installed (full dependency tree) | `false` |
@@ -567,9 +573,10 @@ grpm update [options]
 | `--repo <path>` | Path to Portage repository | `/var/db/repos/gentoo` |
 | `--mock` | Use mock repository | `false` |
 | `--pretend`, `-p` | Show what would be updated | `false` |
+| `--ask`, `-a` | Ask for confirmation before updating | `false` |
 | `--deep`, `-D` | Include dependencies | `false` |
-
-**Note:** Full update functionality is planned for future releases.
+| `--newuse`, `-N` | Recalculate USE flags for installed packages | `false` |
+| `--changed-use`, `-U` | Only update packages with changed USE flags | `false` |
 
 **Examples:**
 
@@ -579,7 +586,50 @@ grpm update --pretend
 
 # Include dependencies
 grpm update --deep --pretend
+
+# Update with USE flag recalculation
+grpm update --deep --newuse --pretend
+
+# Update @world with confirmation
+sudo grpm update --ask --deep --newuse
 ```
+
+---
+
+### depclean
+
+Remove unused/orphaned packages from the system.
+
+```
+grpm depclean [options] [package...]
+```
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--pretend`, `-p` | Show what would be removed | `false` |
+| `--ask`, `-a` | Ask for confirmation before removing | `false` |
+| `--exclude <pkg>` | Exclude packages from removal (repeatable) | |
+
+**Examples:**
+
+```bash
+# Show orphaned packages (dry-run)
+grpm depclean --pretend
+
+# Remove unused packages with confirmation
+sudo grpm depclean --ask
+
+# Exclude specific packages from removal
+sudo grpm depclean --exclude sys-libs/glibc --exclude sys-devel/gcc
+```
+
+**Notes:**
+- Depclean removes packages not in @world/@system that no other package depends on
+- Always use `--pretend` first to review what would be removed
+- Use `--exclude` to protect packages from removal
+- Also accessible via `grpm remove --depclean` / `grpm remove -c`
 
 ---
 
@@ -913,7 +963,7 @@ grpm daemon
 
 The daemon provides:
 - gRPC server on Unix socket (`/var/run/grpm.sock`)
-- REST API on HTTP (`127.0.0.1:8080`)
+- REST API on Unix socket (`/var/run/grpm-rest.sock`)
 - Job queue with conflict detection
 - Background monitoring
 
