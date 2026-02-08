@@ -103,6 +103,11 @@ func (a *App) runEmerge(args []string) error {
 		return nil
 	}
 
+	// When using --deep, installed packages will be in the solution — implicitly enable replace
+	if *deep && !*replace {
+		*replace = true
+	}
+
 	// Validate parallel builds count
 	if *parallelBuilds < 1 {
 		*parallelBuilds = 1
