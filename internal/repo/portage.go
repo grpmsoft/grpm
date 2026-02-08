@@ -410,11 +410,11 @@ func (pr *PortageRepository) parseEbuild(name, path string) (*pkg.Package, error
 				// Default disabled (explicit)
 				cleanFlag := strings.TrimPrefix(flag, "-")
 				iuseDefaults[cleanFlag] = false
-				p.UseFlags[cleanFlag] = true
+				p.UseFlags[cleanFlag] = false
 			} else {
 				// No prefix = default disabled
 				iuseDefaults[flag] = false
-				p.UseFlags[flag] = true
+				p.UseFlags[flag] = false
 			}
 		}
 	}
@@ -426,6 +426,11 @@ func (pr *PortageRepository) parseEbuild(name, path string) (*pkg.Package, error
 
 	// Compute effective USE flags for this package (profile + make.conf + package.use + IUSE defaults)
 	effectiveUSE := pr.getEffectiveUSE(category, pkgName, p.Version, p.Slot.String(), iuseDefaults)
+
+	// Apply effective USE to package UseFlags for runtime checks (e.g., `use minizip`)
+	for flag := range p.UseFlags {
+		p.UseFlags[flag] = effectiveUSE[flag]
+	}
 
 	// Parse dependencies using EbuildParser with package metadata
 	// This enables ${P}, ${PN}, ${PV} expansion in DEPEND, SRC_URI, etc.
@@ -846,16 +851,21 @@ func (pr *PortageRepository) parseFromMetadataCache(name, ebuildPath string) (*p
 			} else if strings.HasPrefix(flag, "-") {
 				cleanFlag := strings.TrimPrefix(flag, "-")
 				iuseDefaults[cleanFlag] = false
-				p.UseFlags[cleanFlag] = true
+				p.UseFlags[cleanFlag] = false
 			} else {
 				iuseDefaults[flag] = false
-				p.UseFlags[flag] = true
+				p.UseFlags[flag] = false
 			}
 		}
 	}
 
 	// Compute effective USE flags
 	effectiveUSE := pr.getEffectiveUSE(category, pkgName, p.Version, p.Slot.String(), iuseDefaults)
+
+	// Apply effective USE to package UseFlags for runtime checks
+	for flag := range p.UseFlags {
+		p.UseFlags[flag] = effectiveUSE[flag]
+	}
 
 	// Parse dependencies from cache using EbuildParser
 	meta := NewPackageMetadata(category, pkgName, version)

@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // ============================================================================
@@ -1131,6 +1132,20 @@ func (h *Helpers) Which(args []string) error {
 // Touch creates or updates file timestamps.
 func (h *Helpers) Touch(args []string) error {
 	for _, file := range args {
+		if strings.HasPrefix(file, "-") {
+			continue // Skip flags like -r, -t
+		}
+		// Resolve relative paths against $S
+		if !filepath.IsAbs(file) {
+			if h.env != nil && h.env.S != "" {
+				file = filepath.Join(h.env.S, file)
+			}
+		}
+		// Ensure parent directory exists
+		dir := filepath.Dir(file)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return &DieError{Message: fmt.Sprintf("touch: %s: %v", file, err)}
+		}
 		// Check if file exists
 		_, err := os.Stat(file)
 		if os.IsNotExist(err) {
@@ -1140,8 +1155,11 @@ func (h *Helpers) Touch(args []string) error {
 				return &DieError{Message: fmt.Sprintf("touch: %s: %v", file, err)}
 			}
 			_ = f.Close()
+		} else {
+			// Update mtime
+			now := time.Now()
+			_ = os.Chtimes(file, now, now)
 		}
-		// Update timestamps would use os.Chtimes but we skip for simplicity
 	}
 
 	return nil

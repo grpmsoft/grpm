@@ -109,8 +109,31 @@ func (h *Helpers) unpackArchive(archivePath, destDir string) error {
 	case strings.HasSuffix(lowerPath, ".zst") || strings.HasSuffix(lowerPath, ".zstd"):
 		return h.unpackSingleZst(archivePath, destDir)
 	default:
-		return fmt.Errorf("unsupported archive format: %s", archivePath)
+		// Non-archive files: copy to WORKDIR as-is (per PMS spec)
+		return h.copyFileToDir(archivePath, destDir)
 	}
+}
+
+// copyFileToDir copies a non-archive file to the destination directory.
+// This handles SRC_URI entries that are plain files (e.g., .py, .patch, .conf).
+func (h *Helpers) copyFileToDir(srcPath, destDir string) error {
+	src, err := os.Open(srcPath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = src.Close() }()
+
+	destPath := filepath.Join(destDir, filepath.Base(srcPath))
+	dst, err := os.Create(destPath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = dst.Close() }()
+
+	if _, err := io.Copy(dst, src); err != nil {
+		return err
+	}
+	return nil
 }
 
 // unpackTarGz extracts a .tar.gz archive.

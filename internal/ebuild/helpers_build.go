@@ -113,11 +113,12 @@ func newExecCmd(name string, args ...string) *execCmd {
 //
 // Automatically adds standard configure options like --prefix, --host, etc.
 func (h *Helpers) Econf(args []string) error {
-	configurePath := filepath.Join(h.getWorkDir(), "configure")
+	sourceDir := h.getWorkDir()
+	configurePath := filepath.Join(sourceDir, "configure")
 
 	// Check if configure script exists
 	if _, err := os.Stat(configurePath); os.IsNotExist(err) {
-		return &DieError{Message: "econf: ./configure does not exist"}
+		return &DieError{Message: fmt.Sprintf("econf: ./configure does not exist in %s", sourceDir)}
 	}
 
 	confArgs := h.buildConfArgs()

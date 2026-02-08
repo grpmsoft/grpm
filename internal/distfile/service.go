@@ -89,9 +89,14 @@ func (s *Service) ResolveDistfiles(
 	// Parse SRC_URI entries with USE flag filtering.
 	// This ensures conditional blocks like verify-sig? ( .sig ) are only
 	// included when the corresponding USE flag is enabled.
-	var activeFlags map[string]bool
-	if pkgInfo != nil && len(pkgInfo.UseFlags) > 0 {
-		activeFlags = pkgInfo.UseFlags
+	// IMPORTANT: We always pass a non-nil map (even if empty) so that
+	// conditionMet() filters conditionals. nil means "include everything"
+	// which would download .sig files even when verify-sig is disabled.
+	activeFlags := make(map[string]bool)
+	if pkgInfo != nil {
+		for k, v := range pkgInfo.UseFlags {
+			activeFlags[k] = v
+		}
 	}
 	entries, err := repo.ParseSrcURI(srcURI, activeFlags, vars)
 	if err != nil {
