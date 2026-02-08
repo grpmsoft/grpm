@@ -392,21 +392,18 @@ func (h *Helpers) InheritWithEnv(args []string, env expand.Environ) error {
 
 	ctx := context.Background()
 
-	// For DynamicEclassLoader, also pass variables through its SetEnv mechanism
+	// For DynamicEclassLoader, pass ALL bash variables through to the eclass
+	// executor. Eclasses rely on variables set before inherit (e.g.,
+	// DISTUTILS_USE_PEP517, PYTHON_COMPAT, CMAKE_MAKEFILE_GENERATOR).
+	// Portage inherits within the same bash scope so all vars are visible.
 	if loader, ok := h.eclassLoader.(*DynamicEclassLoader); ok {
 		envVars := map[string]string{}
-
-		// Get variables from the interpreter's environment
-		for _, varName := range []string{
-			"EAPI", "P", "PN", "PV", "PR", "PVR", "PF",
-			"CATEGORY", "SLOT", "USE", "PORTDIR", "DISTDIR",
-			"WORKDIR", "S", "T", "D", "ROOT", "EROOT", "EPREFIX",
-		} {
-			if val := env.Get(varName).String(); val != "" {
-				envVars[varName] = val
+		env.Each(func(name string, vr expand.Variable) bool {
+			if val := vr.String(); val != "" {
+				envVars[name] = val
 			}
-		}
-
+			return true
+		})
 		loader.SetEnv(envVars)
 	}
 

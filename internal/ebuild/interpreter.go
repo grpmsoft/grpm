@@ -598,7 +598,7 @@ func (i *Interpreter) execHandler(next interp.ExecHandlerFunc) interp.ExecHandle
 		}
 
 		cmd := args[0]
-		cmdArgs := args[1:]
+		cmdArgs := expandBraceArgs(args[1:])
 		hc := interp.HandlerCtx(ctx)
 
 		// Special handling for commands that need stdin from context
@@ -777,6 +777,85 @@ func (i *Interpreter) Eval(ctx context.Context, expr string) (result string, eva
 	}
 
 	return buf.String(), nil
+}
+
+// expandBraceArgs expands brace patterns in command arguments.
+//
+// mvdan.cc/sh has a limitation where brace expansion doesn't work when
+// mixed with variable expansion in the same word (e.g., ${PN}/config.{sub,guess}).
+// In real bash, brace expansion happens BEFORE variable expansion, but mvdan.cc/sh
+// doesn't implement this ordering. This function expands remaining literal braces
+// in arguments that the interpreter failed to expand.
+//
+// Handles: prefix{a,b,c}suffix → prefix-a-suffix prefix-b-suffix prefix-c-suffix
+func expandBraceArgs(args []string) []string {
+	var needsExpansion bool
+	for _, arg := range args {
+		if strings.Contains(arg, "{") && strings.Contains(arg, ",") && strings.Contains(arg, "}") {
+			needsExpansion = true
+			break
+		}
+	}
+	if !needsExpansion {
+		return args
+	}
+
+	result := make([]string, 0, len(args))
+	for _, arg := range args {
+		expanded := expandSingleBrace(arg)
+		result = append(result, expanded...)
+	}
+	return result
+}
+
+// expandSingleBrace expands a single brace pattern in a string.
+// Supports: prefix{a,b,c}suffix → [prefix+a+suffix, prefix+b+suffix, prefix+c+suffix]
+// Does NOT support nested braces (rare in ebuilds).
+func expandSingleBrace(s string) []string {
+	open := strings.Index(s, "{")
+	if open < 0 {
+		return []string{s}
+	}
+
+	// Find matching close brace (skip nested)
+	close := -1
+	depth := 0
+	for i := open; i < len(s); i++ {
+		switch s[i] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				close = i
+				goto found
+			}
+		}
+	}
+found:
+	if close < 0 {
+		return []string{s}
+	}
+
+	// Extract prefix, alternatives, suffix
+	prefix := s[:open]
+	inner := s[open+1 : close]
+	suffix := s[close+1:]
+
+	// Check for comma (brace expansion requires at least one comma)
+	if !strings.Contains(inner, ",") {
+		return []string{s}
+	}
+
+	// Split alternatives by comma
+	parts := strings.Split(inner, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		expanded := prefix + part + suffix
+		// Recursively expand remaining braces in suffix
+		result = append(result, expandSingleBrace(expanded)...)
+	}
+	return result
 }
 
 // paramExpansionRe matches ${VAR@op} parameter expansion operators
