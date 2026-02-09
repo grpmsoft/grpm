@@ -58,19 +58,16 @@ func (s *Service) ResolveDistfiles(
 	ebuildPath string,
 	manifest *fetch.Manifest,
 ) ([]fetch.Distfile, error) {
+	// Build USE flag set for filtering
+	activeFlags := make(map[string]bool)
+	if pkgInfo != nil {
+		for k, v := range pkgInfo.UseFlags {
+			activeFlags[k] = v
+		}
+	}
+
 	if ebuildPath == "" {
-		return manifest.GetDistfiles(), nil
-	}
-
-	// Evaluate SRC_URI with full bash/eclass support
-	srcURI, err := s.evaluateSrcURI(ctx, pkgInfo, ebuildPath)
-	if err != nil {
-		logging.Debug("SRC_URI evaluation failed: %v, using manifest distfiles", err)
-		return manifest.GetDistfiles(), nil
-	}
-
-	if srcURI == "" {
-		return manifest.GetDistfiles(), nil
+		return filterSignatureFiles(manifest.GetDistfiles(), activeFlags), nil
 	}
 
 	// Parse package metadata for variable expansion
@@ -86,22 +83,30 @@ func (s *Service) ResolveDistfiles(
 		"CATEGORY": meta.Category,
 	}
 
+	// Evaluate SRC_URI with full bash/eclass support
+	srcURI, err := s.evaluateSrcURI(ctx, pkgInfo, ebuildPath)
+	if err != nil {
+		logging.Debug("SRC_URI evaluation failed: %v, trying raw extraction", err)
+		// Fallback: extract SRC_URI directly from ebuild text.
+		// This handles cases where eclass loading fails in the Go interpreter
+		// but SRC_URI is a simple variable assignment in the ebuild.
+		srcURI = extractRawSrcURI(ebuildPath, vars)
+	}
+
+	if srcURI == "" {
+		return filterSignatureFiles(manifest.GetDistfiles(), activeFlags), nil
+	}
+
 	// Parse SRC_URI entries with USE flag filtering.
 	// This ensures conditional blocks like verify-sig? ( .sig ) are only
 	// included when the corresponding USE flag is enabled.
 	// IMPORTANT: We always pass a non-nil map (even if empty) so that
 	// conditionMet() filters conditionals. nil means "include everything"
 	// which would download .sig files even when verify-sig is disabled.
-	activeFlags := make(map[string]bool)
-	if pkgInfo != nil {
-		for k, v := range pkgInfo.UseFlags {
-			activeFlags[k] = v
-		}
-	}
 	entries, err := repo.ParseSrcURI(srcURI, activeFlags, vars)
 	if err != nil {
-		logging.Warn("failed to parse SRC_URI: %v, using manifest distfiles", err)
-		return manifest.GetDistfiles(), nil
+		logging.Warn("failed to parse SRC_URI: %v, using filtered manifest", err)
+		return filterSignatureFiles(manifest.GetDistfiles(), activeFlags), nil
 	}
 
 	// Build filename set and URI map
@@ -240,6 +245,184 @@ func (s *Service) findBestEbuild(catPkg, pkgName string) (string, string, error)
 	logging.Debug("Best ebuild: %s (version %s)", filepath.Base(best.path), best.version)
 
 	return best.path, best.version, nil
+}
+
+// signatureExtensions lists file extensions typically behind verify-sig USE conditional.
+var signatureExtensions = []string{".sig", ".asc", ".sign"}
+
+// filterSignatureFiles removes GPG signature files from distfiles when
+// the verify-sig USE flag is not enabled.
+//
+// In Gentoo ebuilds, signature files (.sig, .asc, .sign) are always behind
+// a "verify-sig? ( ... )" conditional in SRC_URI. When SRC_URI evaluation
+// fails and we fall back to manifest entries, we must filter these out
+// to avoid downloading files that aren't needed.
+//
+// This is the safety net for all fallback paths in ResolveDistfiles.
+func filterSignatureFiles(distfiles []fetch.Distfile, activeFlags map[string]bool) []fetch.Distfile {
+	// If verify-sig is enabled, keep all files
+	if activeFlags != nil && activeFlags["verify-sig"] {
+		return distfiles
+	}
+
+	filtered := make([]fetch.Distfile, 0, len(distfiles))
+	for _, df := range distfiles {
+		if isSignatureFile(df.Filename) {
+			logging.Debug("filtering out signature file %s (verify-sig not enabled)", df.Filename)
+			continue
+		}
+		filtered = append(filtered, df)
+	}
+	return filtered
+}
+
+// isSignatureFile checks if a filename is a GPG signature file.
+func isSignatureFile(filename string) bool {
+	lower := strings.ToLower(filename)
+	for _, ext := range signatureExtensions {
+		if strings.HasSuffix(lower, ext) {
+			return true
+		}
+	}
+	return false
+}
+
+// extractRawSrcURI extracts SRC_URI directly from ebuild text as a fallback.
+//
+// When the bash interpreter fails to evaluate the ebuild (e.g., due to
+// unsupported syntax in eclasses), this function reads the raw SRC_URI
+// assignments from the ebuild text. It handles both:
+//   - SRC_URI="..." (initial assignment)
+//   - SRC_URI+="..." (append assignment, e.g., for verify-sig conditionals)
+//
+// The returned string preserves USE conditionals (e.g., "verify-sig? ( ... )")
+// so that ParseSrcURI can properly filter them.
+//
+// Limitations:
+//   - Cannot evaluate bash conditionals (if/elif/else blocks)
+//   - Cannot call eclass functions (e.g., get_gcc_src_uri)
+//   - Only handles literal string assignments
+func extractRawSrcURI(ebuildPath string, vars map[string]string) string {
+	data, err := os.ReadFile(ebuildPath)
+	if err != nil {
+		return ""
+	}
+
+	content := string(data)
+	var parts []string
+
+	// Extract initial SRC_URI="..." assignment
+	if val := extractQuotedVariable(content, "SRC_URI"); val != "" {
+		parts = append(parts, val)
+	}
+
+	// Extract append SRC_URI+="..." assignments
+	parts = append(parts, extractAppendAssignments(content, "SRC_URI")...)
+
+	if len(parts) == 0 {
+		return ""
+	}
+
+	// Join all parts and expand variables
+	raw := strings.Join(parts, "\n")
+	return expandVars(raw, vars)
+}
+
+// extractQuotedVariable extracts the value of a variable assignment: VAR="value".
+// Handles multi-line quoted strings.
+func extractQuotedVariable(content, varName string) string {
+	// Search for VAR=" at word boundary
+	pattern := varName + `="`
+	idx := findAssignment(content, pattern)
+	if idx == -1 {
+		return ""
+	}
+
+	start := idx + len(pattern)
+	// Find matching closing quote
+	depth := 0
+	for i := start; i < len(content); i++ {
+		switch content[i] {
+		case '\\':
+			i++ // skip escaped character
+		case '(':
+			depth++
+		case ')':
+			if depth > 0 {
+				depth--
+			}
+		case '"':
+			return content[start:i]
+		}
+	}
+
+	return ""
+}
+
+// extractAppendAssignments finds all VAR+="value" assignments in content.
+func extractAppendAssignments(content, varName string) []string {
+	pattern := varName + `+="`
+	var results []string
+	searchFrom := 0
+
+	for searchFrom < len(content) {
+		idx := findAssignment(content[searchFrom:], pattern)
+		if idx == -1 {
+			break
+		}
+		absIdx := searchFrom + idx + len(pattern)
+		// Find matching closing quote
+		for i := absIdx; i < len(content); i++ {
+			if content[i] == '\\' {
+				i++
+				continue
+			}
+			if content[i] == '"' {
+				results = append(results, content[absIdx:i])
+				searchFrom = i + 1
+				break
+			}
+		}
+		if searchFrom <= absIdx {
+			break // no closing quote found
+		}
+	}
+
+	return results
+}
+
+// findAssignment finds a variable assignment pattern at a word boundary.
+// Returns the index of the pattern, or -1 if not found.
+func findAssignment(content, pattern string) int {
+	idx := 0
+	for {
+		pos := strings.Index(content[idx:], pattern)
+		if pos == -1 {
+			return -1
+		}
+		absPos := idx + pos
+		// Check word boundary: must be at start of line or after whitespace/newline
+		if absPos == 0 || content[absPos-1] == '\n' || content[absPos-1] == '\t' || content[absPos-1] == ' ' {
+			return absPos
+		}
+		idx = absPos + 1
+	}
+}
+
+// expandVars performs simple variable expansion in a string.
+// Expands both ${VAR} and $VAR forms.
+func expandVars(s string, vars map[string]string) string {
+	result := s
+	for name, value := range vars {
+		result = strings.ReplaceAll(result, "${"+name+"}", value)
+	}
+	// Expand $VAR (followed by non-identifier chars)
+	for name, value := range vars {
+		for _, sep := range []string{"/", ".", "-", " ", "\t", "\n", "\"", "'"} {
+			result = strings.ReplaceAll(result, "$"+name+sep, value+sep)
+		}
+	}
+	return result
 }
 
 // splitCatPkg splits "category/package" into category and package name.

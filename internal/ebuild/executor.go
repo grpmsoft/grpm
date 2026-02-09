@@ -347,9 +347,7 @@ func (e *Executor) fetchDistfiles(ctx context.Context) error {
 	// Get distfiles with expanded URIs from SRC_URI
 	distfiles, err := e.getDistfilesWithURIs(manifest)
 	if err != nil {
-		// Fallback to manifest-only distfiles if SRC_URI parsing fails
-		logging.Debug("[ebuild] Warning: SRC_URI parsing failed: %v, using manifest-only", err)
-		distfiles = manifest.GetDistfiles()
+		return fmt.Errorf("resolving distfiles: %w", err)
 	}
 
 	if len(distfiles) == 0 {
@@ -387,13 +385,7 @@ func (e *Executor) getDistfilesWithURIs(manifest *fetch.Manifest) ([]fetch.Distf
 	svc := distfile.NewService(e.RepoPath, evaluator)
 	ctx := context.Background()
 
-	distfiles, err := svc.ResolveDistfiles(ctx, e.Package, e.EbuildPath, manifest)
-	if err != nil {
-		logging.Warn("distfile resolution failed: %v, using manifest", err)
-		return manifest.GetDistfiles(), nil
-	}
-
-	return distfiles, nil
+	return svc.ResolveDistfiles(ctx, e.Package, e.EbuildPath, manifest)
 }
 
 // extractEbuildVariable extracts a variable value from ebuild content.
