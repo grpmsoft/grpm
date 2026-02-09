@@ -33,11 +33,11 @@
 | Ch. 7: Ebuild Variables | **Full** | All mandatory/optional variables parsed |
 | Ch. 8: Dependencies | **Full** | All operators, slots, USE deps supported |
 | Ch. 9: Phase Functions | **Partial** | Core phases work, hardened metadata extraction |
-| Ch. 10: Eclasses | **Partial** | 14 eclass modules, dynamic loading, BASH_VERSINFO emulation |
+| Ch. 10: Eclasses | **Partial** | 12 eclass Go modules + 2 via helpers, dynamic loading, BASH_VERSINFO emulation |
 | Ch. 11: Environment | **Full** | All core variables, CHOST/CBUILD, USE_EXPAND |
-| Ch. 12: Commands | **Partial** | 214 helpers, 159 routed commands |
+| Ch. 12: Commands | **Partial** | ~160 helper functions, ~55 command map entries |
 
-**Overall Estimate:** ~80% PMS compliance for common use cases.
+**Overall Estimate:** ~60% PMS compliance for simple autotools packages, ~51% weighted across all package types. Primary limitation: `mvdan.cc/sh` Go interpreter handles ~90% of bash correctly, but remaining edge cases cause failures in complex eclasses. See [Known Bugs](#known-bugs) and [Fundamental Limitation](#fundamental-limitation-bash-interpreter) below.
 
 ---
 
@@ -295,7 +295,7 @@ internal/pkg/package.go         # Package struct
 |---------|--------|-------|
 | Simple `category/package` | Full | |
 | Version operators `<`, `<=`, `=`, `~`, `>=`, `>` | Full | |
-| Glob match `=cat/pkg-1.2*` | Full | |
+| Glob match `=cat/pkg-1.2*` | Partial | `=*` uses `strings.HasPrefix` — overly permissive per PMS (should match at component boundary). See [Known Bugs](#known-bugs) |
 | Weak blocker `!cat/pkg` | Full | |
 | Strong blocker `!!cat/pkg` | Full | |
 | Slot deps `:slot` | Full | |
@@ -326,11 +326,11 @@ internal/solver/gophersat_adapter.go  # SAT encoding
 | pkg_pretend | Partial | Called but limited checks |
 | pkg_setup | Full | |
 | src_unpack | Full | 11 archive formats including .tar.lz |
-| src_prepare | Full | eapply_user handling |
+| src_prepare | Partial | eapply_user exists in `helpers_default.go` but phase dispatch routing in `phases_impl.go` may not invoke it in all code paths |
 | src_configure | Full | econf with ECONF_SOURCE, CHOST, CBUILD |
 | src_compile | Partial | Simple builds work |
 | src_test | Partial | When --test flag used |
-| src_install | Partial | Basic installation works |
+| src_install | Partial | einstalldocs exists in `helpers_default.go` but phase dispatch routing needs verification |
 | pkg_preinst | Full | |
 | pkg_postinst | Full | |
 | pkg_prerm | Full | |
@@ -345,12 +345,12 @@ internal/solver/gophersat_adapter.go  # SAT encoding
 |------|---------------------|--------|
 | 0-1 | No-op | Full |
 | 2-5 | No-op | Full |
-| 6-8 | eapply_user | Full |
+| 6-8 | eapply_user | Partial (implementation exists, dispatch routing needs audit) |
 
 | EAPI | default_src_install | Status |
 |------|---------------------|--------|
 | 0-3 | No-op | Full |
-| 4-5 | emake DESTDIR install, einstalldocs | Partial |
+| 4-5 | emake DESTDIR install, einstalldocs | Partial (einstalldocs implementation exists, dispatch routing needs audit) |
 | 6-8 | Same as EAPI 4 | Partial |
 
 ### Unpack Format Support (v0.9.4)
@@ -393,7 +393,7 @@ internal/ebuild/helpers_unpack.go  # 11 archive formats
 | BASH_VERSINFO emulation | Full | Forces bash 4 code paths in eclasses |
 | Eclass stdout isolation | Full | `>/dev/null` redirect during sourcing |
 
-### Eclass Go Modules (14 specialized implementations)
+### Eclass Go Modules (12 dedicated modules + 2 via helpers)
 
 | Eclass Module | File | Status | Notes |
 |---------------|------|--------|-------|
@@ -430,10 +430,10 @@ internal/ebuild/helpers_unpack.go  # 11 archive formats
 ### Implementation
 
 ```
-internal/eclass/loader.go           # Dynamic eclass loading and caching
+internal/eclass/integration.go      # HybridLoader: dynamic eclass loading and caching
 internal/ebuild/eclass_bridge.go    # Go <-> bash bridging layer
-internal/ebuild/eclass_*.go         # 14 eclass-specific modules
-internal/ebuild/build_*.go          # Build system implementations
+internal/ebuild/eclass_*.go         # 12 eclass-specific modules
+internal/ebuild/build_*.go          # Build system implementations (CMake, Meson)
 ```
 
 ---
@@ -493,7 +493,7 @@ internal/config/config.go       # USE flag resolution with variable expansion
 
 ### Overview
 
-GRPM implements **214 helper functions** in Go, with **159 bash commands** routed through the interpreter's exec handler.
+GRPM implements **~160 helper functions** in Go across 15 helper files, 12 eclass modules, and 2 build system files. The interpreter's exec handler routes **~55 command map entries**, with some entries dispatching to multiple sub-functions (e.g., `tc-*` family).
 
 ### Section 12.3: Package Manager Commands
 
@@ -541,7 +541,7 @@ GRPM implements **214 helper functions** in Go, with **159 bash commands** route
 | eapply | Full | EAPI 6+ |
 | eapply_user | Full | EAPI 6+ |
 | epatch | Partial | Deprecated, basic support |
-| eshopts_push/pop | Full | |
+| eshopts_push/pop | Partial | Stack works correctly; shell option changes simulated (Go interpreter limitation) |
 | estack_push/pop | Full | |
 
 #### USE Flag Helpers (10 functions)
@@ -635,9 +635,9 @@ GRPM implements **214 helper functions** in Go, with **159 bash commands** route
 ### Implementation
 
 ```
-internal/ebuild/interpreter.go       # Command dispatch (159 routed commands)
-internal/ebuild/helpers*.go          # 214 helper functions across 15 files
-internal/ebuild/eclass_*.go          # Eclass-specific helpers
+internal/ebuild/interpreter.go       # Command dispatch (~55 map entries)
+internal/ebuild/helpers*.go          # ~160 helper functions across 15 files
+internal/ebuild/eclass_*.go          # 12 eclass-specific modules
 internal/ebuild/build_*.go           # Build system helpers (CMake, Meson)
 ```
 
@@ -797,6 +797,56 @@ EAPI 7+ cross-compilation variables (SYSROOT, ESYSROOT, BROOT) are defined but n
 
 ---
 
+## Known Bugs
+
+Issues identified during community code audit (2026-02-09) and tracked for resolution:
+
+| Bug | Location | Impact | Planned Fix |
+|-----|----------|--------|-------------|
+| `=*` glob operator overly permissive | `internal/pkg/atom.go:748` | `strings.HasPrefix` matches at any position; PMS requires component boundary match | v0.10.0 |
+| Phase defaults routing | `internal/ebuild/phases_impl.go` | Dispatch may call incomplete defaults instead of correct implementations in `helpers_default.go` | v0.10.0 |
+| `phasePrepare()` eapply_user dispatch | `internal/ebuild/phases_impl.go` | Implementation exists but may not be invoked in all phase entry points | v0.10.0 |
+| `phaseInstall()` einstalldocs dispatch | `internal/ebuild/phases_impl.go` | Implementation exists but may not be invoked in all phase entry points | v0.10.0 |
+| Hardcoded `--libdir=/usr/lib64` | `internal/ebuild/phases_impl.go` | `phaseConfigure()` always uses lib64 instead of detecting from ABI/profile | v0.10.0 |
+| Dead code in compat | `internal/compat/portage.go` | 17 lines with "not yet implemented" placeholder | v0.10.0 |
+
+---
+
+## Fundamental Limitation: Bash Interpreter
+
+GRPM uses `mvdan.cc/sh` (pure Go bash interpreter) instead of `/bin/bash`. This is the **primary blocker** for full PMS compliance.
+
+**What works (~90% of bash):** Variable expansion, conditionals, loops, functions, arrays, pipes, redirections, basic process handling.
+
+**What fails (~10% of bash):** `declare -f` introspection, `${var@a}` parameter attributes, process substitution `>()`, extended globbing `!(pattern)`, `read -a`, complex brace expansion in variable names.
+
+**Impact:** Simple autotools packages build correctly. Complex eclasses (python-r1, multilib-build, llvm) may fail during metadata extraction or build phases.
+
+**Planned resolution (v0.10.0):** Decision pending. Options under evaluation:
+1. **File issues upstream** — contribute fixes to mvdan/sh for the specific bash features needed
+2. **Write custom interpreter** — pure Go, optimized for ebuild/eclass semantics
+
+Additionally, GRPM will support **configurable interpreter backend** — users who prefer real `/bin/bash` can enable it via settings for full compatibility.
+
+---
+
+## Community Audit (2026-02-09)
+
+This document was validated against source code by a 4-agent deep code audit. Key corrections from the audit:
+
+| Claim | Before Audit | After Validation |
+|-------|--------------|------------------|
+| PMS compliance | ~80% | ~60% simple / ~51% weighted |
+| Helper functions | 214+ | ~160 across all files |
+| Eclass modules | 14 | 12 dedicated + 2 via helpers |
+| Routed commands | 159 | ~55 command map entries |
+| `eshopts_push/pop` | Full | Partial (stack works, shell options simulated) |
+| `src_prepare` | Full | Partial (routing issue) |
+
+Full audit report: `docs/dev/research/audit-validated-2026-02-09.md` (internal)
+
+---
+
 ## References
 
 - [Official PMS](https://projects.gentoo.org/pms/)
@@ -807,5 +857,6 @@ EAPI 7+ cross-compilation variables (SYSROOT, ESYSROOT, BROOT) are defined but n
 
 ---
 
-*This document is maintained alongside GRPM development.*
-*Contributions and corrections welcome via GitHub Issues.*
+*This document is maintained alongside GRPM development and validated against source code.*
+*Corrections welcome via [GitHub Issues](https://github.com/grpmsoft/grpm/issues).*
+*Last audit: 2026-02-09 (4-agent code analysis)*

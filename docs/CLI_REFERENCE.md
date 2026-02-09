@@ -984,15 +984,17 @@ grpm status
 
 ## Exit Codes
 
+> **Note:** Codes 2-6 are target conventions. Currently most error paths return code 1. Structured exit codes are planned for v0.10.0.
+
 | Code | Description |
 |------|-------------|
 | 0 | Success |
 | 1 | General error |
-| 2 | Invalid arguments |
-| 3 | Package not found |
-| 4 | Dependency resolution failed |
-| 5 | Installation failed |
-| 6 | Permission denied |
+| 2 | Invalid arguments (planned) |
+| 3 | Package not found (planned) |
+| 4 | Dependency resolution failed (planned) |
+| 5 | Installation failed (planned) |
+| 6 | Permission denied (planned) |
 
 ---
 

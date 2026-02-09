@@ -32,7 +32,7 @@ GRPM (Go Resource Package Manager) is a modern source-based package manager writ
 | **SAT-based Dependency Resolution** | Boolean satisfiability solver for guaranteed conflict-free resolution |
 | **Binary Package Support** | Full GPKG (.gpkg.tar) and legacy TBZ2 (.tbz2) format support |
 | **Transactional Updates** | Btrfs/ZFS snapshot-based rollbacks for safe system updates |
-| **Source Building** | Ebuild execution with autotools; CMake and Meson support (basic); hardened bash interpreter |
+| **Source Building** | Ebuild execution with autotools (full); CMake and Meson (basic); hardened bash interpreter (~160 Go helpers) |
 | **Build Systems** | toolchain-funcs, flag-o-matic, cmake.eclass, meson.eclass |
 | **Language Ecosystems** | Python (distutils-r1), Rust (cargo.eclass), Go (go-module.eclass) — basic support |
 | **Multilib Support** | 32-bit/64-bit library support with ABI management |
@@ -58,7 +58,7 @@ GRPM (Go Resource Package Manager) is a modern source-based package manager writ
 
 ```bash
 # Download latest release (check https://github.com/grpmsoft/grpm/releases for VERSION)
-VERSION="0.9.3"
+VERSION="0.9.4"
 wget "https://github.com/grpmsoft/grpm/releases/download/v${VERSION}/grpm_${VERSION}_linux_x86_64.tar.gz"
 tar -xzf "grpm_${VERSION}_linux_x86_64.tar.gz"
 sudo install -m 0755 grpm /usr/bin/grpm
@@ -228,11 +228,11 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidelines and [AGENTS.md
 
 ## Roadmap
 
-> **Pre-Release Testing**
+> **v0.10.0 Phase — Audit-Driven Quality & Bash Evolution**
 >
 > Rapid development complete. Infrastructure, build quality, and security hardening done.
-> **98.2% tree coverage verified on real Gentoo WSL2!**
-> See [CHANGELOG.md](CHANGELOG.md) for latest features.
+> **Community audit completed (2026-02-09): PMS compliance validated at ~60%.**
+> **98.2% tree coverage verified on real Gentoo WSL2.**
 
 **Completed Features:**
 - ✅ SAT-based dependency resolution
@@ -254,9 +254,14 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidelines and [AGENTS.md
 - ✅ Hardened bash interpreter with function body stripping and USE-conditional distfile filtering
 - ✅ Eclass metadata extraction with BASH_VERSINFO emulation and stdout isolation
 
+**Known Limitations:**
+- Bash interpreter (`mvdan.cc/sh`) handles ~90% of bash; complex eclasses may fail (interpreter evolution planned for v0.10.0)
+- Build success ~20% of @world (autotools packages pass; Python/CMake/Meson builds need interpreter improvements)
+- PMS compliance ~60% for simple packages (validated by community audit, 2026-02-09)
+
 **v1.0.0** — Production ready after community validation (no fixed date).
 
-See [CHANGELOG.md](CHANGELOG.md) for full release history.
+See [ROADMAP.md](ROADMAP.md) for detailed plans and [CHANGELOG.md](CHANGELOG.md) for full release history.
 
 ---
 
@@ -280,5 +285,5 @@ Do not open public issues for security reports.
 GRPM is licensed under the [Apache License 2.0](LICENSE).
 
 ```
-Copyright 2025 Andrey Kolkov and GRPM contributors
+Copyright 2025-2026 Andrey Kolkov and GRPM contributors
 ```

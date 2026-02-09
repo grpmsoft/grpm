@@ -173,7 +173,7 @@ git log --oneline HEAD..origin/master
 ## Community Feedback Integration
 
 ### Gentoo Forums (2026-01-17)
-- grknight: Consider hybrid bash execution
+- grknight: Concerns about internal bash executor — addressed with configurable backend (users can opt into real /bin/bash)
 - NeddySeagoon: Bug-for-bug compatibility concerns
 - pietinger: Track gentoo-dev@ for eclass changes
 
