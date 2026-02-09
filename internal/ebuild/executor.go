@@ -926,6 +926,23 @@ func (e *Executor) RunPhaseFunction(phase Phase) (string, error) {
 	//
 	// mvdan.cc/sh's `. file` (source) does not reliably persist function
 	// definitions from sourced files, so we embed them inline instead.
+	// Split ebuild into pre-inherit and post-inherit parts.
+	// In Portage, variables like PYTHON_COMPAT are set BEFORE `inherit`,
+	// so eclasses can see them in top-level code. We replicate this by
+	// emitting pre-inherit lines before the embedded eclasses.
+	var ebuildPostInherit []byte
+	if e.eclassCache != nil && e.EbuildPath != "" {
+		if ebContent, err := os.ReadFile(e.EbuildPath); err == nil {
+			preInherit, postInherit := splitEbuildAtInherit(ebContent)
+			if len(preInherit) > 0 {
+				combinedScript.WriteString("\n# --- BEGIN EBUILD SOURCE (pre-inherit) ---\n")
+				combinedScript.Write(preInherit)
+				combinedScript.WriteString("\n# --- END EBUILD SOURCE (pre-inherit) ---\n")
+			}
+			ebuildPostInherit = postInherit
+		}
+	}
+
 	if e.eclassCache != nil {
 		combinedScript.WriteString("\n# --- BEGIN ECLASS SUPPORT ---\n")
 
@@ -934,6 +951,13 @@ func (e *Executor) RunPhaseFunction(phase Phase) (string, error) {
 		if e.Env != nil && e.Env.EAPI != "" {
 			combinedScript.WriteString(fmt.Sprintf("EAPI=%s\n", e.Env.EAPI))
 		}
+
+		// Set BASH_VERSINFO to bash 4 so eclasses that check the version
+		// (e.g., python-utils-r1 `${BASH_VERSINFO[0]} -ge 5`) take the
+		// bash 4 code path which uses `declare -p` (replaced by __grpm_has_var)
+		// instead of bash 5+ parameter attributes (`${var@a}`) that mvdan.cc/sh
+		// doesn't support.
+		combinedScript.WriteString("BASH_VERSINFO=(4 4 0 0 release x86_64-pc-linux-gnu)\n")
 
 		// Initialize multilib arrays to empty to prevent mvdan.cc/sh from
 		// expanding unset "${arr[@]}" to a single empty string (which causes
@@ -974,6 +998,10 @@ func (e *Executor) RunPhaseFunction(phase Phase) (string, error) {
 				// 2. Replace 'declare -p' with '__grpm_has_var' (declare -p unsupported)
 				processed := bytes.ReplaceAll(content, []byte("declare -f "), []byte("__grpm_has_func "))
 				processed = bytes.ReplaceAll(processed, []byte("declare -p "), []byte("__grpm_has_var "))
+				// mvdan.cc/sh: `type -P` returns "NOT IMPLEMENTED" (exit 3).
+				// `command -v` is functionally equivalent and supported.
+				// See: https://github.com/mvdan/sh/issues/XXX (TODO: file upstream)
+				processed = bytes.ReplaceAll(processed, []byte("type -P "), []byte("command -v "))
 				combinedScript.WriteString(fmt.Sprintf("\n# --- BEGIN ECLASS: %s ---\n", ec.name))
 				combinedScript.WriteString(fmt.Sprintf("ECLASS=%s\n", ec.name))
 				combinedScript.Write(processed)
@@ -1021,15 +1049,21 @@ multibuild_foreach_variant() {
 		combinedScript.WriteString("# --- END ECLASS SUPPORT ---\n\n")
 	}
 
-	// Source the ebuild to define all functions
-	if e.EbuildPath != "" {
+	// Source the ebuild to define all functions.
+	// The post-inherit portion was already split in ebuildPostInherit above;
+	// pre-inherit was emitted before eclasses so variables like PYTHON_COMPAT
+	// are available when eclass top-level code runs.
+	if len(ebuildPostInherit) > 0 {
+		combinedScript.WriteString("\n# --- BEGIN EBUILD SOURCE (post-inherit) ---\n")
+		combinedScript.Write(ebuildPostInherit)
+		combinedScript.WriteString("\n# --- END EBUILD SOURCE ---\n\n")
+	} else if e.EbuildPath != "" {
+		// No eclass support — emit the full ebuild
 		if _, err := os.Stat(e.EbuildPath); err == nil {
 			content, err := os.ReadFile(e.EbuildPath)
 			if err != nil {
 				return "", fmt.Errorf("reading ebuild: %w", err)
 			}
-			// Embed ebuild content directly in the script
-			// This ensures function definitions persist for the function call
 			combinedScript.WriteString("\n# --- BEGIN EBUILD SOURCE ---\n")
 			combinedScript.Write(content)
 			combinedScript.WriteString("\n# --- END EBUILD SOURCE ---\n\n")
@@ -1249,6 +1283,34 @@ func scanInheritCalls(content string) []string {
 		}
 	}
 	return eclasses
+}
+
+// splitEbuildAtInherit splits ebuild content into pre-inherit and post-inherit
+// parts. In Portage, the ebuild is sourced top-to-bottom, so variables defined
+// before `inherit` (like PYTHON_COMPAT, DISTUTILS_USE_PEP517) are available
+// when eclass top-level code runs. The pre-inherit portion includes everything
+// up to (but not including) the first top-level `inherit` call. The post-inherit
+// portion starts right after. If no `inherit` is found, pre is empty and post
+// is the full content.
+func splitEbuildAtInherit(content []byte) (pre, post []byte) {
+	lines := bytes.Split(content, []byte("\n"))
+	for i, line := range lines {
+		trimmed := bytes.TrimSpace(line)
+		if bytes.HasPrefix(trimmed, []byte("#")) {
+			continue
+		}
+		if bytes.HasPrefix(trimmed, []byte("inherit ")) || bytes.Equal(trimmed, []byte("inherit")) {
+			// Everything up to this line is pre-inherit (skip the inherit line itself)
+			pre = bytes.Join(lines[:i], []byte("\n"))
+			// Post-inherit: everything after the inherit line
+			if i+1 < len(lines) {
+				post = bytes.Join(lines[i+1:], []byte("\n"))
+			}
+			return pre, post
+		}
+	}
+	// No inherit found — everything is post-inherit
+	return nil, content
 }
 
 // GetCurrentPhase returns the currently executing phase.

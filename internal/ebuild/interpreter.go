@@ -695,12 +695,19 @@ func (i *Interpreter) execHandler(next interp.ExecHandlerFunc) interp.ExecHandle
 		}
 
 		// __grpm_has_var replaces 'declare -p varname' which mvdan.cc/sh
-		// doesn't support. Checks if a variable is set in the environment.
+		// doesn't support. Mimics declare -p output so callers that check
+		// the output format (e.g., `[[ $(declare -p X) == "declare -a"* ]]`
+		// in python-utils-r1.eclass) work correctly.
 		if cmd == "__grpm_has_var" {
 			if len(cmdArgs) > 0 {
 				varName := cmdArgs[0]
 				if val := hc.Env.Get(varName).String(); val != "" {
-					return nil // variable exists
+					// Output declare -p format to hc.Stdout (not i.stdout)
+					// so command substitutions like $(declare -p X) capture it.
+					// Report as array (-a) since eclasses typically check this
+					// for array variables like PYTHON_COMPAT, MULTILIB_COMPAT.
+					fmt.Fprintf(hc.Stdout, "declare -a %s='(%s)'\n", varName, val)
+					return nil
 				}
 				return interp.ExitStatus(1) // variable not found
 			}
