@@ -11,65 +11,65 @@
 ```mermaid
 flowchart TB
     subgraph Client["Client Layer"]
-        CLI[CLI Commands<br>resolve, emerge, sync, search, info]
-        GRPC_CLIENT[gRPC Client]
+        CLI["CLI: resolve, emerge, sync, search, info"]
+        GRPC_CLIENT["gRPC Client"]
     end
 
     subgraph Daemon["Daemon Layer"]
-        GRPC_SERVER[gRPC Server<br>unix:///var/run/grpm.sock]
-        REST_API[REST API<br>unix:///var/run/grpm-rest.sock]
-        JOB_QUEUE[Job Queue<br>conflict detection]
-        WORKERS[Worker Pool]
+        GRPC_SERVER["gRPC Server (unix socket)"]
+        REST_API["REST API (unix socket)"]
+        JOB_QUEUE["Job Queue + conflict detection"]
+        WORKERS["Worker Pool"]
     end
 
     subgraph Application["Application Layer"]
-        PKG_SERVICE[Package Service]
+        PKG_SERVICE["Package Service"]
     end
 
     subgraph Domain["Domain Layer"]
-        RESOLVER[Dependency Resolver]
-        SAT[SAT Solver<br>gophersat]
-        PKG[Package Model<br>Version, Slot, Constraint]
-        ATOM[Atom Parser<br>PMS Section 8.3]
-        DEP_SERVICE[Dependency Service]
+        RESOLVER["Dependency Resolver"]
+        SAT["SAT Solver (gophersat)"]
+        PKG["Package Model: Version, Slot, Constraint"]
+        ATOM["Atom Parser (PMS 8.3)"]
+        DEP_SERVICE["Dependency Service"]
     end
 
     subgraph Build["Build Execution Layer"]
-        EXECUTOR[Ebuild Executor<br>phase dispatch]
-        INTERPRETER[Bash Interpreter<br>mvdan.cc/sh]
-        COMMAND_MAP[Command Map<br>~160 Go helpers]
-        METADATA[Metadata Evaluator<br>Go + native bash]
-        ECLASS[Eclass System<br>dynamic loading]
-        DISTFILE[Distfile Service<br>SRC_URI resolution]
-        SANDBOX[Sandbox<br>namespace isolation]
-        PRIVILEGE[Privilege Manager<br>portage user]
+        EXECUTOR["Ebuild Executor (phase dispatch)"]
+        INTERPRETER["Bash Interpreter (mvdan.cc/sh)"]
+        COMMAND_MAP["Command Map (~160 Go helpers)"]
+        METADATA["Metadata Evaluator (Go + native bash)"]
+        ECLASS["Eclass System (dynamic loading)"]
+        DISTFILE["Distfile Service (SRC_URI resolution)"]
+        SANDBOX["Sandbox (namespace isolation)"]
+        PRIVILEGE["Privilege Manager (portage user)"]
     end
 
     subgraph Infrastructure["Infrastructure Layer"]
-        REPO[Repository<br>Portage / Mock / Cached]
-        SYNC_MOD[Sync Module<br>rsync / git+GPG]
-        FETCH[Fetch Module<br>mirror failover]
-        INSTALL[Install Engine<br>merge / unmerge]
-        BINPKG[Binary Packages<br>GPKG / TBZ2]
-        STATE[System State<br>VarDB]
-        SNAPSHOT[Snapshot Manager<br>Btrfs / ZFS]
-        CACHE[Metadata Cache<br>SQLite + md5-cache]
+        REPO["Repository: Portage, Mock, Cached"]
+        SYNC_MOD["Sync: rsync, git+GPG"]
+        FETCH["Fetch: mirror failover"]
+        INSTALL["Install: merge, unmerge"]
+        BINPKG["Binary Packages: GPKG, TBZ2"]
+        STATE["System State (VarDB)"]
+        SNAPSHOT["Snapshot Manager: Btrfs, ZFS"]
+        CACHE["Metadata Cache: SQLite, md5-cache"]
     end
 
     subgraph Config["Configuration Layer"]
-        MAKE_CONF[Config Loader<br>make.conf]
-        PROFILE[Profile System<br>USE defaults, masks]
-        SETS[Package Sets<br>@world, @system]
-        MASK[Mask Manager<br>package.mask, keywords]
-        VIRTUAL[Virtual Providers<br>virtual/* resolution]
+        MAKE_CONF["Config Loader (make.conf)"]
+        PROFILE["Profile System (USE, masks)"]
+        SETS["Package Sets (@world, @system)"]
+        MASK["Mask Manager (keywords)"]
+        VIRTUAL["Virtual Providers"]
     end
 
     subgraph External["External Systems"]
-        PORTAGE_TREE[Portage Tree<br>/var/db/repos/gentoo]
-        MIRRORS[Distfile Mirrors]
-        BINHOST[Binary Host]
-        FS[File System<br>target root]
-        BASH[/bin/bash<br>native fallback]
+        PORTAGE_TREE["Portage Tree"]
+        MIRRORS["Distfile Mirrors"]
+        BINHOST["Binary Host"]
+        FS["File System (target root)"]
+        NATIVE_BASH["Native bash (optional backend)"]
     end
 
     CLI --> GRPC_CLIENT
@@ -96,7 +96,7 @@ flowchart TB
     INTERPRETER --> COMMAND_MAP
     INTERPRETER --> ECLASS
     METADATA --> INTERPRETER
-    METADATA --> BASH
+    METADATA --> NATIVE_BASH
     ECLASS --> REPO
 
     REPO --> CACHE
