@@ -120,6 +120,20 @@ func (r *EclassRegistry) GetInherited() string {
 	return strings.Join(r.inherited, " ")
 }
 
+// GetLoadedPaths returns the inheritance order and a map of eclass name to file path.
+// This is used to embed eclass content directly in combined scripts.
+func (r *EclassRegistry) GetLoadedPaths() (order []string, paths map[string]string) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	order = make([]string, len(r.inherited))
+	copy(order, r.inherited)
+	paths = make(map[string]string, len(r.loaded))
+	for k, v := range r.loaded {
+		paths[k] = v
+	}
+	return order, paths
+}
+
 // FindEclass locates an eclass file in the search paths.
 //
 // Returns the full path to the eclass file or error if not found.

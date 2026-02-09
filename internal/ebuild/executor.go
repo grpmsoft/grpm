@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/grpmsoft/grpm/internal/distfile"
 	"github.com/grpmsoft/grpm/internal/eclass"
@@ -875,18 +876,27 @@ func (e *Executor) RunPhaseFunction(phase Phase) (string, error) {
 		}
 	}
 
-	// Check if we need to call an eclass function instead of ebuild's own
+	// Determine whether to call the ebuild's own function or an eclass export.
+	// Priority: ebuild's own function > eclass EXPORT_FUNCTIONS.
+	// When an eclass does EXPORT_FUNCTIONS src_configure, Portage creates a
+	// wrapper src_configure() that calls eclass_src_configure(). If the ebuild
+	// defines its own src_configure(), it overrides the wrapper. We replicate
+	// this: only use the eclass prefixed version when the ebuild itself does
+	// NOT define the function.
 	eclassName := ""
-	helpers := e.interpreter.GetHelpers()
-	if helpers != nil && helpers.eclassRegistry != nil {
-		if ec, ok := helpers.eclassRegistry.GetExportedFunction(funcName); ok {
-			eclassName = ec
+	ebuildDefinesFunc := e.ParsedEbuild != nil && e.ParsedEbuild.HasFunction(funcName)
+	if !ebuildDefinesFunc {
+		helpers := e.interpreter.GetHelpers()
+		if helpers != nil && helpers.eclassRegistry != nil {
+			if ec, ok := helpers.eclassRegistry.GetExportedFunction(funcName); ok {
+				eclassName = ec
+			}
 		}
-	}
-	// Also check dynamic loader (separate EXPORT_FUNCTIONS state)
-	if eclassName == "" && e.dynamicLoader != nil {
-		if ec, ok := e.dynamicLoader.GetExportedFunction(funcName); ok {
-			eclassName = ec
+		// Also check dynamic loader (separate EXPORT_FUNCTIONS state)
+		if eclassName == "" && e.dynamicLoader != nil {
+			if ec, ok := e.dynamicLoader.GetExportedFunction(funcName); ok {
+				eclassName = ec
+			}
 		}
 	}
 
@@ -901,6 +911,115 @@ func (e *Executor) RunPhaseFunction(phase Phase) (string, error) {
 	combinedScript.WriteString("#!/bin/bash\n")
 	combinedScript.WriteString(fmt.Sprintf("EBUILD_PHASE=%s\n", phase))
 	combinedScript.WriteString(fmt.Sprintf("EBUILD_PHASE_FUNC=%s\n", funcName))
+
+	// Define bash-level inherit() and EXPORT_FUNCTIONS() so that eclasses
+	// are sourced in the CURRENT bash scope. Without this, eclasses loaded
+	// via Go's DynamicEclassLoader define their functions in a separate
+	// executor, making them unavailable to the combined script. Functions
+	// like multilib_foreach_abi need to call ebuild-defined bash functions
+	// (e.g., multilib_src_configure), which only works when everything
+	// runs in the same bash scope.
+	// Embed eclass content directly in the combined script so that all
+	// eclass functions are defined in the same bash scope as the ebuild.
+	// This is critical for eclasses like multilib-minimal that call
+	// ebuild-defined bash functions (e.g., multilib_src_configure).
+	//
+	// mvdan.cc/sh's `. file` (source) does not reliably persist function
+	// definitions from sourced files, so we embed them inline instead.
+	if e.eclassCache != nil {
+		combinedScript.WriteString("\n# --- BEGIN ECLASS SUPPORT ---\n")
+
+		// Set EAPI before eclasses — they check it with `case ${EAPI} in 7|8)`.
+		// Without this, die() is called and no functions get defined.
+		if e.Env != nil && e.Env.EAPI != "" {
+			combinedScript.WriteString(fmt.Sprintf("EAPI=%s\n", e.Env.EAPI))
+		}
+
+		// Initialize multilib arrays to empty to prevent mvdan.cc/sh from
+		// expanding unset "${arr[@]}" to a single empty string (which causes
+		// spurious loop iterations in multilib_prepare_wrappers).
+		combinedScript.WriteString("MULTILIB_CHOST_TOOLS=()\n")
+		combinedScript.WriteString("MULTILIB_WRAPPED_HEADERS=()\n")
+
+		// EXPORT_FUNCTIONS: creates wrapper functions per PMS.
+		// When eclass "cmake" calls EXPORT_FUNCTIONS src_configure,
+		// it creates src_configure() that calls cmake_src_configure().
+		combinedScript.WriteString(`EXPORT_FUNCTIONS() {
+  local func
+  for func in "$@"; do
+    eval "${func}() { ${ECLASS}_${func} \"\$@\"; }"
+  done
+}
+`)
+		// inherit(): no-op since eclass content is embedded directly.
+		combinedScript.WriteString(`inherit() {
+  true
+}
+`)
+
+		// Resolve and embed all eclasses from the ebuild's inherit line.
+		// We pre-resolve the entire chain (including sub-inherits) using
+		// the eclass cache, then embed each eclass in dependency order.
+		if e.ParsedEbuild != nil && len(e.ParsedEbuild.InheritedEclasses) > 0 {
+			resolved := e.resolveEclassChain(e.ParsedEbuild.InheritedEclasses)
+			logging.Debug("[ebuild] resolved %d eclasses for embedding", len(resolved))
+			for _, ec := range resolved {
+				content, err := os.ReadFile(ec.path)
+				if err != nil {
+					logging.Debug("[ebuild] warning: cannot read eclass %s: %v", ec.name, err)
+					continue
+				}
+				// Preprocess eclass content for mvdan.cc/sh compatibility:
+				// 1. Replace 'declare -f' with '__grpm_has_func' (declare -f unsupported)
+				// 2. Replace 'declare -p' with '__grpm_has_var' (declare -p unsupported)
+				processed := bytes.ReplaceAll(content, []byte("declare -f "), []byte("__grpm_has_func "))
+				processed = bytes.ReplaceAll(processed, []byte("declare -p "), []byte("__grpm_has_var "))
+				combinedScript.WriteString(fmt.Sprintf("\n# --- BEGIN ECLASS: %s ---\n", ec.name))
+				combinedScript.WriteString(fmt.Sprintf("ECLASS=%s\n", ec.name))
+				combinedScript.Write(processed)
+				combinedScript.WriteString(fmt.Sprintf("\n# --- END ECLASS: %s ---\n", ec.name))
+			}
+		}
+
+		// Override multibuild_foreach_variant to avoid process substitution
+		// >(exec tee ...) which mvdan.cc/sh doesn't support.
+		// Simplified version: run commands directly without tee.
+		// Uses ${S} as default (matching the original eclass) so BUILD_DIR
+		// resolves to e.g. work/zlib-1.3.1-.amd64 (not work-.amd64).
+		combinedScript.WriteString(`
+multibuild_foreach_variant() {
+  local bdir=${BUILD_DIR:-${S}}
+
+  # Avoid writing outside WORKDIR if S=${WORKDIR}.
+  [[ ${bdir%%/} == ${WORKDIR%%/} ]] && bdir=${WORKDIR}/build
+
+  local prev_id=${MULTIBUILD_ID:+${MULTIBUILD_ID}-}
+  local ret=0 lret=0 v
+
+  for v in "${MULTIBUILD_VARIANTS[@]}"; do
+    local MULTIBUILD_VARIANT=${v}
+    local MULTIBUILD_ID=${prev_id}${v}
+    local BUILD_DIR=${bdir%%/}-${v}
+
+    _multibuild_run() {
+      local i=1
+      while [[ ${!i} == _* ]]; do
+        (( i += 1 ))
+      done
+      [[ ${i} -le ${#} ]] && einfo "${v}: running ${@:${i}}"
+      "${@}"
+    }
+
+    _multibuild_run "${@}" 2>&1
+    lret=${?}
+    [[ ${ret} -eq 0 && ${lret} -ne 0 ]] && ret=${lret}
+  done
+
+  return ${ret}
+}
+`)
+		combinedScript.WriteString("# --- END ECLASS SUPPORT ---\n\n")
+	}
 
 	// Source the ebuild to define all functions
 	if e.EbuildPath != "" {
@@ -947,6 +1066,17 @@ func (e *Executor) RunPhaseFunction(phase Phase) (string, error) {
 	// Call the phase function
 	combinedScript.WriteString(fmt.Sprintf("%s\n", targetFunc))
 
+	// Debug: dump combined script for configure phase
+	if phase == PhaseConfigure {
+		logging.Debug("[ebuild] combined script length: %d bytes", combinedScript.Len())
+		// Write script to temp file for debugging
+		if tmpFile := e.Env.T; tmpFile != "" {
+			debugPath := filepath.Join(tmpFile, "grpm-combined-configure.sh")
+			_ = os.WriteFile(debugPath, combinedScript.Bytes(), 0644)
+			logging.Debug("[ebuild] combined script written to %s", debugPath)
+		}
+	}
+
 	// Ensure exit status 0 if function completed successfully.
 	// This is needed because mvdan.cc/sh may propagate the exit status
 	// from the last command in the function (e.g., `if use flag; then...; fi`
@@ -965,7 +1095,7 @@ func (e *Executor) RunPhaseFunction(phase Phase) (string, error) {
 	// dynamically loaded eclasses (meson, cmake, etc.) and their
 	// EXPORT_FUNCTIONS are available when the ebuild is sourced.
 	logging.Debug("[ebuild] RunPhaseFunction: creating interpreter with S=%s", e.Env.S)
-	interp := NewInterpreter(e.Env, &output, &output)
+	interp := NewInterpreter(e.Env, &output, os.Stderr)
 	if e.interpreter != nil {
 		mainHelpers := e.interpreter.GetHelpers()
 		if mainHelpers != nil {
@@ -982,7 +1112,12 @@ func (e *Executor) RunPhaseFunction(phase Phase) (string, error) {
 
 	// Execute the combined script
 	if err := interp.Run(ctx, combinedScript.String()); err != nil {
+		logging.Debug("[ebuild] RunPhaseFunction error: %v, output: %s", err, output.String())
 		return output.String(), fmt.Errorf("executing %s: %w", funcName, err)
+	}
+
+	if output.Len() > 0 {
+		logging.Debug("[ebuild] RunPhaseFunction output (%d bytes): %s", output.Len(), output.String())
 	}
 
 	return output.String(), nil
@@ -1006,6 +1141,114 @@ func (e *Executor) initInterpreter() error {
 	}
 
 	return nil
+}
+
+// eclassRef holds the name and path of a resolved eclass.
+type eclassRef struct {
+	name string
+	path string
+}
+
+// resolveEclassChain resolves all eclasses needed by the given inherit list,
+// including sub-inherits, and returns them in dependency-first order.
+// This uses the eclass cache to find files and scans each eclass for
+// nested inherit calls and EXPORT_FUNCTIONS declarations.
+//
+// EXPORT_FUNCTIONS found in eclasses are registered in the Go-level
+// eclassRegistry so that HasPhaseFunction() returns true for phases
+// provided by eclasses. Without this, phases like src_install would
+// fall through to the default implementation instead of using the
+// eclass's multilib wrapper.
+func (e *Executor) resolveEclassChain(initial []string) []eclassRef {
+	if e.eclassCache == nil {
+		return nil
+	}
+
+	visited := make(map[string]bool)
+	var result []eclassRef
+
+	var resolve func(names []string)
+	resolve = func(names []string) {
+		for _, name := range names {
+			if visited[name] {
+				continue
+			}
+			visited[name] = true
+
+			// Find eclass in cache
+			ec, err := e.eclassCache.Get(name)
+			if err != nil {
+				logging.Debug("[ebuild] eclass %s not found in cache: %v", name, err)
+				continue
+			}
+
+			// Scan for nested inherit calls
+			content, err := os.ReadFile(ec.Path)
+			if err != nil {
+				continue
+			}
+			subInherits := scanInheritCalls(string(content))
+			if len(subInherits) > 0 {
+				resolve(subInherits) // Resolve dependencies first
+			}
+
+			// Register EXPORT_FUNCTIONS in Go-level registry so
+			// HasPhaseFunction() works correctly for eclass-provided phases.
+			if e.interpreter != nil {
+				helpers := e.interpreter.GetHelpers()
+				if helpers != nil && helpers.eclassRegistry != nil {
+					exports := scanExportFunctions(string(content))
+					if len(exports) > 0 {
+						helpers.eclassRegistry.SetCurrentEclass(name)
+						for _, phase := range exports {
+							_ = helpers.eclassRegistry.ExportFunction(phase)
+						}
+						logging.Debug("[ebuild] registered EXPORT_FUNCTIONS from %s: %v", name, exports)
+					}
+				}
+			}
+
+			result = append(result, eclassRef{name: name, path: ec.Path})
+		}
+	}
+
+	resolve(initial)
+	return result
+}
+
+// scanExportFunctions extracts phase names from EXPORT_FUNCTIONS calls in eclass source.
+// Returns phase names like "src_configure", "src_compile", "src_install".
+func scanExportFunctions(content string) []string {
+	var phases []string
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.HasPrefix(line, "EXPORT_FUNCTIONS ") {
+			parts := strings.Fields(line)
+			phases = append(phases, parts[1:]...)
+		}
+	}
+	return phases
+}
+
+// scanInheritCalls extracts eclass names from `inherit` calls in bash source.
+// Handles both simple `inherit foo bar` and calls inside if blocks.
+func scanInheritCalls(content string) []string {
+	var eclasses []string
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		// Match lines starting with "inherit " (ignoring comments)
+		if strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.HasPrefix(line, "inherit ") {
+			parts := strings.Fields(line)
+			eclasses = append(eclasses, parts[1:]...)
+		}
+	}
+	return eclasses
 }
 
 // GetCurrentPhase returns the currently executing phase.

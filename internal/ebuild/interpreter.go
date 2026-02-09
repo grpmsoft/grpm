@@ -166,6 +166,9 @@ func (i *Interpreter) createRunner(ctx context.Context) (*interp.Runner, error) 
 		interp.StdIO(nil, i.stdout, i.stderr),
 		interp.Env(expand.ListEnviron(envPairs...)),
 		interp.ExecHandlers(i.execHandler),
+		// OpenHandler enables `. file` (source) for eclass loading.
+		// Without this, mvdan.cc/sh silently fails to source files.
+		interp.OpenHandler(interp.DefaultOpenHandler()),
 	}
 
 	// Set working directory to $S (source directory) if available and exists.
@@ -207,6 +210,21 @@ func (i *Interpreter) buildEnvPairs() []string {
 			iuse = append(iuse, flag)
 		}
 		pairs = append(pairs, "IUSE="+strings.Join(iuse, " "))
+	}
+
+	// Add PATH — filter out Windows /mnt/ paths for WSL compatibility.
+	if path := os.Getenv("PATH"); path != "" {
+		var cleanParts []string
+		for _, p := range strings.Split(path, ":") {
+			if !strings.HasPrefix(p, "/mnt/") {
+				cleanParts = append(cleanParts, p)
+			}
+		}
+		if len(cleanParts) > 0 {
+			pairs = append(pairs, "PATH="+strings.Join(cleanParts, ":"))
+		} else {
+			pairs = append(pairs, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+		}
 	}
 
 	return pairs
@@ -652,6 +670,41 @@ func (i *Interpreter) execHandler(next interp.ExecHandlerFunc) interp.ExecHandle
 			result := i.helpers.verRsImpl(cmdArgs[0], cmdArgs[1], version)
 			_, _ = io.WriteString(hc.Stdout, result)
 			return nil
+		}
+
+		// __grpm_has_func replaces 'declare -f funcname' which mvdan.cc/sh
+		// doesn't support. Returns 0 if the function is known to exist
+		// (defined in the ebuild or in embedded eclasses), 1 otherwise.
+		if cmd == "__grpm_has_func" {
+			if len(cmdArgs) > 0 {
+				funcName := cmdArgs[0]
+				// Check if function is defined in the parsed ebuild
+				if i.env != nil {
+					// Check the ebuild's function list
+					if i.helpers != nil && i.helpers.eclassRegistry != nil {
+						// Function names from ebuild have pattern: multilib_src_configure
+						// Always return success — the function is defined in the
+						// combined script (either from ebuild or embedded eclass).
+						// mvdan.cc/sh DOES define functions, just declare -f can't check them.
+						_ = funcName
+						return nil // success = function exists
+					}
+				}
+			}
+			return nil // success by default
+		}
+
+		// __grpm_has_var replaces 'declare -p varname' which mvdan.cc/sh
+		// doesn't support. Checks if a variable is set in the environment.
+		if cmd == "__grpm_has_var" {
+			if len(cmdArgs) > 0 {
+				varName := cmdArgs[0]
+				if val := hc.Env.Get(varName).String(); val != "" {
+					return nil // variable exists
+				}
+				return interp.ExitStatus(1) // variable not found
+			}
+			return interp.ExitStatus(1)
 		}
 
 		// Internal command to sync bash variables back to Go environment

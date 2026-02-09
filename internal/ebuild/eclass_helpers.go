@@ -566,6 +566,7 @@ func (h *Helpers) readKernelConfig(path string) (string, error) {
 //
 // Makes eclass_src_compile be called when src_compile is invoked.
 func (h *Helpers) ExportFunctions(args []string) error {
+	logging.Debug("[ebuild] Go ExportFunctions handler called with args=%v (eclass=%s)", args, h.eclassRegistry.currentEclass)
 	for _, phase := range args {
 		if err := h.eclassRegistry.ExportFunction(phase); err != nil {
 			return &DieError{Message: fmt.Sprintf("EXPORT_FUNCTIONS: %v", err)}
