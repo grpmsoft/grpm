@@ -68,7 +68,7 @@ checksum:
   algorithm: sha256
 
 changelog:
-  use: github
+  use: git
   sort: asc
   abbrev: 7
 

@@ -111,6 +111,60 @@ jobs:
           fi
           echo "Tag ${{ steps.version.outputs.tag }} is available"
 
+      - name: Version sanity check (prevent accidental jumps)
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+
+          # Strip pre-release suffix for comparison (1.0.0-beta.1 → 1.0.0)
+          CLEAN_VERSION="${VERSION%%-*}"
+
+          # Get latest stable tag from remote (ignore pre-releases)
+          LATEST_TAG=$(git ls-remote --tags --sort=-v:refname origin \
+            | grep -oP 'refs/tags/v\K[0-9]+\.[0-9]+\.[0-9]+$' \
+            | head -1)
+
+          if [[ -z "$LATEST_TAG" ]]; then
+            echo "No previous stable tags found, skipping sanity check"
+            exit 0
+          fi
+
+          echo "Latest stable tag: v${LATEST_TAG}"
+          echo "Requested version: v${CLEAN_VERSION}"
+
+          # Parse versions into components
+          IFS='.' read -r CUR_MAJOR CUR_MINOR CUR_PATCH <<< "$LATEST_TAG"
+          IFS='.' read -r NEW_MAJOR NEW_MINOR NEW_PATCH <<< "$CLEAN_VERSION"
+
+          # Check: major can increment by at most 1
+          if (( NEW_MAJOR > CUR_MAJOR + 1 )); then
+            echo "::error::Major version jump too large: ${CUR_MAJOR}.x.x → ${NEW_MAJOR}.x.x (max +1)"
+            echo "Current: v${LATEST_TAG} → Requested: v${CLEAN_VERSION}"
+            exit 1
+          fi
+
+          # Check: if major is same, minor can increment by at most 1
+          if (( NEW_MAJOR == CUR_MAJOR && NEW_MINOR > CUR_MINOR + 1 )); then
+            echo "::error::Minor version jump too large: x.${CUR_MINOR}.x → x.${NEW_MINOR}.x (max +1)"
+            echo "Current: v${LATEST_TAG} → Requested: v${CLEAN_VERSION}"
+            exit 1
+          fi
+
+          # Check: version must not go backwards
+          if (( NEW_MAJOR < CUR_MAJOR )) || \
+             (( NEW_MAJOR == CUR_MAJOR && NEW_MINOR < CUR_MINOR )) || \
+             (( NEW_MAJOR == CUR_MAJOR && NEW_MINOR == CUR_MINOR && NEW_PATCH < CUR_PATCH )); then
+            echo "::error::Version goes backwards: v${LATEST_TAG} → v${CLEAN_VERSION}"
+            exit 1
+          fi
+
+          # Check: version must actually increment
+          if [[ "$CLEAN_VERSION" == "$LATEST_TAG" ]]; then
+            echo "::error::Version is same as latest: v${LATEST_TAG}"
+            exit 1
+          fi
+
+          echo "✅ Version sanity check passed: v${LATEST_TAG} → v${CLEAN_VERSION}"
+
   # ============================================================
   # Stage 2: Unit Tests (REQUIRED)
   # ============================================================
