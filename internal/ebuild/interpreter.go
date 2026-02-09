@@ -606,6 +606,8 @@ func (i *Interpreter) buildCommandMap() map[string]helperFunc {
 //   - meson_*, meson (meson.eclass)
 //
 // Unhandled commands are passed to the next handler (real shell execution).
+//
+//nolint:gocyclo // Command dispatcher: routes 30+ bash builtins/helpers to Go implementations.
 func (i *Interpreter) execHandler(next interp.ExecHandlerFunc) interp.ExecHandlerFunc {
 	// Build command map once
 	commands := i.buildCommandMap()
@@ -706,7 +708,7 @@ func (i *Interpreter) execHandler(next interp.ExecHandlerFunc) interp.ExecHandle
 					// so command substitutions like $(declare -p X) capture it.
 					// Report as array (-a) since eclasses typically check this
 					// for array variables like PYTHON_COMPAT, MULTILIB_COMPAT.
-					fmt.Fprintf(hc.Stdout, "declare -a %s='(%s)'\n", varName, val)
+					_, _ = fmt.Fprintf(hc.Stdout, "declare -a %s='(%s)'\n", varName, val)
 					return nil
 				}
 				return interp.ExitStatus(1) // variable not found

@@ -5,7 +5,7 @@ All notable changes to GRPM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] - Bash Interpreter Hardening
+## [0.9.4] - 2026-02-09 - Bash Interpreter Hardening
 
 ### Ebuild Metadata Extraction & Signature File Filtering
 
@@ -24,10 +24,14 @@ Major hardening of the bash interpreter (mvdan.cc/sh) for reliable ebuild metada
 - **Multilib ABI defaults** — Only enable amd64 ABI in multilib defaults
 
 ### Added
+- **`.tar.lz` (lzip) unpack support** — Uses external decompressor (xz >= 5.4.0 / plzip / lzip), matching Portage unpacker.eclass strategy. Fixes dev-build/make build.
 - **extractRawSrcURI fallback** — When bash evaluation fails, extracts `SRC_URI=` and `SRC_URI+=` directly from ebuild text via regex, preserving USE conditionals for proper filtering
 - **filterSignatureFiles safety net** — All manifest fallback paths filter `.sig`/`.asc`/`.sign` files when verify-sig is disabled
 - **BASH_VERSINFO emulation** — Forces eclasses to use bash 4 code paths, avoiding unsupported bash 5+ features (`${var@a}`)
 - **33 new tests** — Professional test coverage for all new functions (stripFunctionBodies, filterSignatureFiles, extractRawSrcURI, isFunctionDefinition, etc.)
+
+### Improved
+- **golangci-lint clean** — 0 lint issues (removed dead code, fixed errcheck, added nolint directives on inherently complex functions)
 
 ### Verified on Real Gentoo
 - sys-apps/findutils — only `.tar.xz` downloaded (no `.sig`)
@@ -1377,7 +1381,8 @@ GRPM (Go Resource Package Manager) is a modern reimplementation of Gentoo's Port
 - **Issues**: https://github.com/grpmsoft/grpm/issues
 - **License**: [Apache-2.0](LICENSE)
 
-[Unreleased]: https://github.com/grpmsoft/grpm/compare/v0.9.3...HEAD
+[Unreleased]: https://github.com/grpmsoft/grpm/compare/v0.9.4...HEAD
+[0.9.4]: https://github.com/grpmsoft/grpm/compare/v0.9.3...v0.9.4
 [0.9.3]: https://github.com/grpmsoft/grpm/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/grpmsoft/grpm/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/grpmsoft/grpm/compare/v0.9.0...v0.9.1

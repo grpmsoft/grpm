@@ -685,35 +685,6 @@ func (e *Executor) ParseEbuild() error {
 //
 // This method reads the ebuild, extracts S, expands variables and parameter
 // substitutions, and updates e.Env.S if different from default.
-func (e *Executor) parseSVariable() error {
-	if e.EbuildPath == "" {
-		return nil
-	}
-
-	// Read ebuild content
-	content, err := os.ReadFile(e.EbuildPath)
-	if err != nil {
-		return fmt.Errorf("reading ebuild: %w", err)
-	}
-
-	// Build variable map for expansion
-	vars := e.Env.ToMap()
-
-	// Parse S variable with bash parameter expansion
-	sValue := ParseSVariable(string(content), vars)
-	if sValue == "" {
-		return nil // S not defined, use default
-	}
-
-	// Update S if different from default
-	if sValue != e.Env.S {
-		logging.Debug("[ebuild] custom S detected: %s (default was: %s)", sValue, e.Env.S)
-		e.Env.S = sValue
-	}
-
-	return nil
-}
-
 // RunCommand executes a command, optionally within the sandbox.
 //
 // If sandbox is enabled, the command runs with filesystem isolation.
@@ -845,6 +816,8 @@ func (e *Executor) HasPhaseFunction(phase Phase) bool {
 // combined script that sources the ebuild and calls the function in one pass.
 // This is necessary because mvdan.cc/sh doesn't persist function definitions
 // between runs.
+//
+//nolint:gocyclo // Phase orchestrator: builds combined script with eclass workarounds — inherently complex.
 func (e *Executor) RunPhaseFunction(phase Phase) (string, error) {
 	funcName := phaseFunctionName(phase)
 	if funcName == "" {

@@ -36,6 +36,8 @@ import (
 //   - Use --jobs/-j N to build N packages in parallel (default: 1)
 //   - Dependencies are respected: a package only builds after its deps complete
 //   - Use --keep-going to continue building on failure
+//
+//nolint:gocyclo // CLI entry point with many flags and modes — splitting would fragment user-facing logic.
 func (a *App) runEmerge(args []string) error {
 	// Load Portage configuration (make.conf)
 	cfg := a.loadPortageConfig()
@@ -577,6 +579,8 @@ func (a *App) buildAndInstallSingle(name string, p *pkg.Package, installer *inst
 //
 // Returns the image directory (D) where files are installed.
 // If fetcher is provided, source tarballs are downloaded automatically.
+//
+//nolint:gocyclo // Build orchestrator with many setup steps — splitting would hurt readability.
 func (a *App) buildPackageFromSource(p *pkg.Package, repoPath, distDir, tmpDir string, jobs int, keepWork, enableTests bool, fetcher fetch.Fetcher, useExpandVars map[string]string, cfg *config.Config) (string, error) {
 	// Find ebuild file
 	ebuildPath := a.findEbuildFile(p, repoPath)
@@ -594,7 +598,7 @@ func (a *App) buildPackageFromSource(p *pkg.Package, repoPath, distDir, tmpDir s
 	opts.EbuildPath = ebuildPath
 	opts.EnableSandbox = true
 	opts.EnableTests = enableTests
-	opts.KeepWork = true    // Must be true - cleanup after install
+	opts.KeepWork = true     // Must be true - cleanup after install
 	opts.DenyNetwork = false // Must be false - fetcher needs network access
 	opts.Fetcher = fetcher
 

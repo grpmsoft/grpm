@@ -156,9 +156,9 @@ EXPORT_FUNCTIONS src_install`,
 			want: nil,
 		},
 		{
-			name: "EXPORT_FUNCTIONS with single phase",
+			name:    "EXPORT_FUNCTIONS with single phase",
 			content: `EXPORT_FUNCTIONS pkg_setup`,
-			want: []string{"pkg_setup"},
+			want:    []string{"pkg_setup"},
 		},
 	}
 

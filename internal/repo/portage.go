@@ -783,6 +783,8 @@ func (pr *PortageRepository) loadDependenciesWithEclass(ebuildPath string, p *pk
 // IDEPEND, PDEPEND, IUSE, KEYWORDS, SLOT, REQUIRED_USE, INHERIT, etc.
 //
 // Returns nil, nil if cache file does not exist (caller should fall back to regex parsing).
+//
+//nolint:gocyclo // Cache parser with many metadata fields to extract.
 func (pr *PortageRepository) parseFromMetadataCache(name, ebuildPath string) (*pkg.Package, error) {
 	// Extract category, package name, and version
 	category, pkgName, found := strings.Cut(name, "/")

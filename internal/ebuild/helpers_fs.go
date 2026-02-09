@@ -43,6 +43,8 @@ func (h *Helpers) resolvePath(path string) string {
 // Usage: sed -i 's/old/new/g' file.txt
 //
 // Simple Go-based sed replacement for basic substitutions.
+//
+//nolint:gocyclo // sed flag/expression parser — inherently complex due to many options.
 func (h *Helpers) Sed(args []string) error {
 	if len(args) < 1 {
 		return &DieError{Message: "sed: requires arguments"}
@@ -575,6 +577,8 @@ func (h *Helpers) Chmod(args []string) error {
 }
 
 // Ln creates links.
+//
+//nolint:gocyclo // ln flag parser with symlink/hardlink/relative/force logic.
 func (h *Helpers) Ln(args []string) error {
 	symbolic := false
 	force := false

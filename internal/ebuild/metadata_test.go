@@ -770,7 +770,7 @@ func TestIsFunctionDefinition(t *testing.T) {
 		{"_private_func() {", true},
 		{"func123() {", true},
 		{"src_compile()", true},
-		{"# src_compile() {", false},   // comment
+		{"# src_compile() {", false},    // comment
 		{"", false},                     // empty
 		{"EAPI=8", false},               // assignment
 		{"123func() {", false},          // starts with digit

@@ -105,8 +105,8 @@ func TestIsSignatureFile(t *testing.T) {
 		{"sed-4.9.tar.xz.sig", true},
 		{"pkg-1.0.tar.gz.asc", true},
 		{"pkg-1.0.tar.gz.sign", true},
-		{"pkg-1.0.tar.gz.SIG", true},  // case insensitive
-		{"pkg-1.0.tar.gz.ASC", true},  // case insensitive
+		{"pkg-1.0.tar.gz.SIG", true}, // case insensitive
+		{"pkg-1.0.tar.gz.ASC", true}, // case insensitive
 		{"pkg-1.0.tar.gz", false},
 		{"signal-desktop-1.0.tar.gz", false}, // "sig" in name but not extension
 		{"design-1.0.tar.gz", false},         // "sign" in name but not extension
