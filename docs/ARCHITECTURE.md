@@ -11,14 +11,14 @@
 ```mermaid
 flowchart TB
     subgraph Client["Client Layer"]
-        CLI[CLI Commands<br/>resolve, emerge, sync, search, info]
+        CLI[CLI Commands<br>resolve, emerge, sync, search, info]
         GRPC_CLIENT[gRPC Client]
     end
 
     subgraph Daemon["Daemon Layer"]
-        GRPC_SERVER[gRPC Server<br/>unix:///var/run/grpm.sock]
-        REST_API[REST API<br/>unix:///var/run/grpm-rest.sock]
-        JOB_QUEUE[Job Queue<br/>conflict detection]
+        GRPC_SERVER[gRPC Server<br>unix:///var/run/grpm.sock]
+        REST_API[REST API<br>unix:///var/run/grpm-rest.sock]
+        JOB_QUEUE[Job Queue<br>conflict detection]
         WORKERS[Worker Pool]
     end
 
@@ -28,48 +28,48 @@ flowchart TB
 
     subgraph Domain["Domain Layer"]
         RESOLVER[Dependency Resolver]
-        SAT[SAT Solver<br/>gophersat]
-        PKG[Package Model<br/>Version, Slot, Constraint]
-        ATOM[Atom Parser<br/>PMS Section 8.3]
+        SAT[SAT Solver<br>gophersat]
+        PKG[Package Model<br>Version, Slot, Constraint]
+        ATOM[Atom Parser<br>PMS Section 8.3]
         DEP_SERVICE[Dependency Service]
     end
 
     subgraph Build["Build Execution Layer"]
-        EXECUTOR[Ebuild Executor<br/>phase dispatch]
-        INTERPRETER[Bash Interpreter<br/>mvdan.cc/sh]
-        COMMAND_MAP[Command Map<br/>~160 Go helpers]
-        METADATA[Metadata Evaluator<br/>Go + native bash]
-        ECLASS[Eclass System<br/>dynamic loading]
-        DISTFILE[Distfile Service<br/>SRC_URI resolution]
-        SANDBOX[Sandbox<br/>namespace isolation]
-        PRIVILEGE[Privilege Manager<br/>portage user]
+        EXECUTOR[Ebuild Executor<br>phase dispatch]
+        INTERPRETER[Bash Interpreter<br>mvdan.cc/sh]
+        COMMAND_MAP[Command Map<br>~160 Go helpers]
+        METADATA[Metadata Evaluator<br>Go + native bash]
+        ECLASS[Eclass System<br>dynamic loading]
+        DISTFILE[Distfile Service<br>SRC_URI resolution]
+        SANDBOX[Sandbox<br>namespace isolation]
+        PRIVILEGE[Privilege Manager<br>portage user]
     end
 
     subgraph Infrastructure["Infrastructure Layer"]
-        REPO[Repository<br/>Portage / Mock / Cached]
-        SYNC_MOD[Sync Module<br/>rsync / git+GPG]
-        FETCH[Fetch Module<br/>mirror failover]
-        INSTALL[Install Engine<br/>merge / unmerge]
-        BINPKG[Binary Packages<br/>GPKG / TBZ2]
-        STATE[System State<br/>VarDB]
-        SNAPSHOT[Snapshot Manager<br/>Btrfs / ZFS]
-        CACHE[Metadata Cache<br/>SQLite + md5-cache]
+        REPO[Repository<br>Portage / Mock / Cached]
+        SYNC_MOD[Sync Module<br>rsync / git+GPG]
+        FETCH[Fetch Module<br>mirror failover]
+        INSTALL[Install Engine<br>merge / unmerge]
+        BINPKG[Binary Packages<br>GPKG / TBZ2]
+        STATE[System State<br>VarDB]
+        SNAPSHOT[Snapshot Manager<br>Btrfs / ZFS]
+        CACHE[Metadata Cache<br>SQLite + md5-cache]
     end
 
     subgraph Config["Configuration Layer"]
-        MAKE_CONF[Config Loader<br/>make.conf]
-        PROFILE[Profile System<br/>USE defaults, masks]
-        SETS[Package Sets<br/>@world, @system]
-        MASK[Mask Manager<br/>package.mask, keywords]
-        VIRTUAL[Virtual Providers<br/>virtual/* resolution]
+        MAKE_CONF[Config Loader<br>make.conf]
+        PROFILE[Profile System<br>USE defaults, masks]
+        SETS[Package Sets<br>@world, @system]
+        MASK[Mask Manager<br>package.mask, keywords]
+        VIRTUAL[Virtual Providers<br>virtual/* resolution]
     end
 
     subgraph External["External Systems"]
-        PORTAGE_TREE[Portage Tree<br/>/var/db/repos/gentoo]
+        PORTAGE_TREE[Portage Tree<br>/var/db/repos/gentoo]
         MIRRORS[Distfile Mirrors]
         BINHOST[Binary Host]
-        FS[File System<br/>target root]
-        BASH[/bin/bash<br/>native fallback]
+        FS[File System<br>target root]
+        BASH[/bin/bash<br>native fallback]
     end
 
     CLI --> GRPC_CLIENT
