@@ -31,18 +31,19 @@ func TestHelpers_Unpack_NoWorkdir(t *testing.T) {
 	}
 }
 
-func TestHelpers_Unpack_UnsupportedFormat(t *testing.T) {
+func TestHelpers_Unpack_NonArchiveFile(t *testing.T) {
 	helpers, tmpDir, _, _ := createBuildTestHelpers(t)
 
-	// Create unsupported file
-	unsupportedFile := filepath.Join(tmpDir, "file.unknown")
-	if err := os.WriteFile(unsupportedFile, []byte("test"), 0644); err != nil {
+	// Create non-archive file (e.g., .py, .patch)
+	nonArchiveFile := filepath.Join(tmpDir, "script.py")
+	if err := os.WriteFile(nonArchiveFile, []byte("print('hello')"), 0644); err != nil {
 		t.Fatalf("failed to create test file: %v", err)
 	}
 
-	err := helpers.Unpack([]string{unsupportedFile})
-	if err == nil {
-		t.Error("expected error for unsupported format")
+	// Non-archive files should be copied to WORKDIR (per PMS spec)
+	err := helpers.Unpack([]string{nonArchiveFile})
+	if err != nil {
+		t.Errorf("non-archive files should be copied to workdir, got error: %v", err)
 	}
 }
 

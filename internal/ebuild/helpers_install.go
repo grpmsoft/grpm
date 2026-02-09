@@ -610,6 +610,55 @@ func (h *Helpers) Newins(args []string) error {
 	return nil
 }
 
+// NewinsFromStdin installs stdin content as a file (handles "newins - filename").
+// Used when ebuilds pipe content via heredoc: newins - filename <<-EOF
+func (h *Helpers) NewinsFromStdin(stdin io.Reader, destName, cmd string) error {
+	imageDir := h.getImageDir()
+	if imageDir == "" {
+		return &DieError{Message: fmt.Sprintf("%s: D not set", cmd)}
+	}
+
+	mode, err := parseMode(h.insOpts)
+	if err != nil {
+		return &DieError{Message: fmt.Sprintf("%s: %v", cmd, err)}
+	}
+
+	var destDir string
+	switch cmd {
+	case "newdoc":
+		destDir = filepath.Join(imageDir, "usr/share/doc", h.getEnvVar("PF"), h.docDestTree)
+	case "newman":
+		// Man pages go to /usr/share/man/manN/ based on section in filename
+		section := "1"
+		if idx := strings.LastIndex(destName, "."); idx >= 0 {
+			section = destName[idx+1:]
+		}
+		destDir = filepath.Join(imageDir, "usr/share/man", "man"+section)
+	default:
+		destDir = filepath.Join(imageDir, h.insDestTree)
+	}
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		return &DieError{Message: fmt.Sprintf("%s: mkdir %s: %v", cmd, destDir, err)}
+	}
+
+	dst := filepath.Join(destDir, destName)
+
+	// Read from stdin
+	var data []byte
+	if stdin != nil {
+		data, err = io.ReadAll(stdin)
+		if err != nil {
+			return &DieError{Message: fmt.Sprintf("%s: reading stdin: %v", cmd, err)}
+		}
+	}
+
+	if err := os.WriteFile(dst, data, mode); err != nil {
+		return &DieError{Message: fmt.Sprintf("%s: write %s: %v", cmd, dst, err)}
+	}
+
+	return nil
+}
+
 // ============================================================================
 // EAPI 8 Library/Header Installation Functions
 // ============================================================================
@@ -1066,29 +1115,143 @@ func calculateRelativePath(linkPath, targetPath string) string {
 //
 // Usage: fperms 0755 /usr/bin/myapp
 func (h *Helpers) Fperms(args []string) error {
-	if len(args) < 2 {
+	recursive := false
+	startIdx := 0
+
+	// Handle -R flag
+	if len(args) > 0 && args[0] == "-R" {
+		recursive = true
+		startIdx = 1
+	}
+
+	if len(args) < startIdx+2 {
 		return &DieError{Message: "fperms: requires mode and path"}
 	}
 
-	modeStr := args[0]
-	mode, err := strconv.ParseInt(modeStr, 8, 32)
-	if err != nil {
-		return &DieError{Message: fmt.Sprintf("fperms: invalid mode: %s", modeStr)}
-	}
+	modeStr := args[startIdx]
 
 	imageDir := h.getImageDir()
 	if imageDir == "" {
 		return &DieError{Message: "fperms: D not set"}
 	}
 
-	for _, path := range args[1:] {
+	for _, path := range args[startIdx+1:] {
 		fullPath := filepath.Join(imageDir, path)
-		if err := os.Chmod(fullPath, os.FileMode(mode)); err != nil {
-			return &DieError{Message: fmt.Sprintf("fperms: chmod %s: %v", path, err)}
+		if err := applyMode(fullPath, modeStr, recursive); err != nil {
+			return &DieError{Message: fmt.Sprintf("fperms: %s: %v", path, err)}
 		}
 	}
 
 	return nil
+}
+
+// applyMode applies an octal or symbolic mode string to a file.
+// Supports octal (0755, 755) and symbolic (+x, a+rx, u+rw,go+r) modes.
+func applyMode(path, modeStr string, recursive bool) error {
+	// Try octal first
+	if mode, err := strconv.ParseInt(modeStr, 8, 32); err == nil {
+		if recursive {
+			return filepath.WalkDir(path, func(p string, _ fs.DirEntry, err error) error {
+				if err != nil {
+					return nil
+				}
+				return os.Chmod(p, os.FileMode(mode))
+			})
+		}
+		return os.Chmod(path, os.FileMode(mode))
+	}
+
+	// Parse symbolic mode (e.g., +x, a+rx, u+rw,go+r)
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	current := info.Mode()
+
+	newMode, err := parseSymbolicMode(modeStr, current)
+	if err != nil {
+		return err
+	}
+
+	if recursive {
+		return filepath.WalkDir(path, func(p string, _ fs.DirEntry, err error) error {
+			if err != nil {
+				return nil
+			}
+			return os.Chmod(p, newMode)
+		})
+	}
+	return os.Chmod(path, newMode)
+}
+
+// parseSymbolicMode parses a symbolic mode string and applies it to the current mode.
+// Supports: +x, -w, =rw, u+x, go-w, a+rx, u+rw,go+r
+func parseSymbolicMode(modeStr string, current os.FileMode) (os.FileMode, error) {
+	result := current
+	parts := strings.Split(modeStr, ",")
+
+	for _, part := range parts {
+		// Find the operator position
+		opIdx := strings.IndexAny(part, "+-=")
+		if opIdx < 0 {
+			return 0, fmt.Errorf("invalid symbolic mode: %s", modeStr)
+		}
+
+		who := part[:opIdx]
+		op := part[opIdx]
+		perms := part[opIdx+1:]
+
+		// If no who specified, default to "a" (all)
+		if who == "" {
+			who = "a"
+		}
+
+		// Build permission bits
+		var bits os.FileMode
+		for _, p := range perms {
+			switch p {
+			case 'r':
+				bits |= 0444
+			case 'w':
+				bits |= 0222
+			case 'x':
+				bits |= 0111
+			case 's':
+				bits |= os.ModeSetuid | os.ModeSetgid
+			case 't':
+				bits |= os.ModeSticky
+			}
+		}
+
+		// Apply who mask
+		var mask os.FileMode = 0777
+		if who != "a" {
+			mask = 0
+			for _, w := range who {
+				switch w {
+				case 'u':
+					mask |= 0700
+				case 'g':
+					mask |= 0070
+				case 'o':
+					mask |= 0007
+				}
+			}
+		}
+		bits &= mask
+
+		// Apply operator
+		switch op {
+		case '+':
+			result |= bits
+		case '-':
+			result &^= bits
+		case '=':
+			result = (result &^ mask) | bits
+		}
+	}
+
+	return result, nil
 }
 
 // Fowners changes file ownership in ${D}.

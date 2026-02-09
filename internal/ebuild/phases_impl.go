@@ -101,9 +101,26 @@ func (e *Executor) ExecutePhaseReal(phase Phase) PhaseResult {
 //   - If ebuild defines the phase function (src_configure, etc.) -> call it
 //   - If eclass exports the function via EXPORT_FUNCTIONS -> call eclass version
 //   - Otherwise -> call the default implementation
-func (e *Executor) dispatchPhase(phase Phase, defaultImpl func() (string, error)) (string, error) {
+//
+// Panics from the interpreter are caught and converted to descriptive errors.
+func (e *Executor) dispatchPhase(phase Phase, defaultImpl func() (string, error)) (output string, phaseErr error) {
 	funcName := phaseFunctionName(phase)
 	logging.Debug("[ebuild] dispatching phase %s (function: %s)", phase, funcName)
+
+	// Recover from panics during phase execution.
+	// This catches panics from both custom phase functions (via interpreter)
+	// and default implementations that may invoke external tools.
+	defer func() {
+		if r := recover(); r != nil {
+			pkgName := ""
+			if e.Package != nil {
+				pkgName = e.Package.Name
+			}
+			logging.Debug("[ebuild] panic recovered in phase %s for %s: %v", phase, pkgName, r)
+			output = ""
+			phaseErr = fmt.Errorf("phase %s panicked for %s: %v (unsupported bash construct)", phase, pkgName, r)
+		}
+	}()
 
 	// Check if custom phase function exists
 	if e.HasPhaseFunction(phase) {
@@ -165,11 +182,11 @@ func (e *Executor) phaseUnpack() (string, error) {
 	helpers := &Helpers{}
 	var extracted []string
 	for _, archive := range archives {
-		// Skip non-archive files (PGP signatures, patches, etc.)
+		// Skip non-archive files (PGP signatures, attestations, patches, etc.)
 		lower := strings.ToLower(archive)
 		if strings.HasSuffix(lower, ".asc") || strings.HasSuffix(lower, ".sig") ||
 			strings.HasSuffix(lower, ".sign") || strings.HasSuffix(lower, ".patch") ||
-			strings.HasSuffix(lower, ".diff") {
+			strings.HasSuffix(lower, ".diff") || strings.HasSuffix(lower, ".provenance") {
 			logging.Debug("[ebuild] Skipping non-archive file: %s", archive)
 			continue
 		}
@@ -291,11 +308,20 @@ func (e *Executor) phaseTest() (string, error) {
 }
 
 // phaseInstall performs src_install phase - runs make install DESTDIR=${D}.
+//
+// Per PMS Section 9.1.13, the default src_install runs:
+//   - EAPI 4+: emake DESTDIR="${D}" install
+//
+// If no Makefile exists (e.g., virtual packages, acct-* packages),
+// this is not an error — the package simply has nothing to install
+// via make, and eclass-provided src_install handles it instead.
 func (e *Executor) phaseInstall() (string, error) {
-	// Check if Makefile exists
+	// Check if Makefile exists — if not, this is a no-op
+	// (virtual packages, acct-* packages, Python packages use eclass install)
 	makefilePath := filepath.Join(e.Env.S, "Makefile")
 	if _, err := os.Stat(makefilePath); os.IsNotExist(err) {
-		return "", fmt.Errorf("no Makefile found for installation")
+		logging.Debug("[ebuild] no Makefile in %s, skipping default make install", e.Env.S)
+		return "No Makefile found (skipping default install)", nil
 	}
 
 	// Run make install DESTDIR=${D}

@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/grpmsoft/grpm/internal/logging"
 	"github.com/grpmsoft/grpm/internal/pkg"
 	"github.com/grpmsoft/grpm/internal/state"
 )
@@ -565,6 +566,7 @@ func (h *Helpers) readKernelConfig(path string) (string, error) {
 //
 // Makes eclass_src_compile be called when src_compile is invoked.
 func (h *Helpers) ExportFunctions(args []string) error {
+	logging.Debug("[ebuild] Go ExportFunctions handler called with args=%v (eclass=%s)", args, h.eclassRegistry.currentEclass)
 	for _, phase := range args {
 		if err := h.eclassRegistry.ExportFunction(phase); err != nil {
 			return &DieError{Message: fmt.Sprintf("EXPORT_FUNCTIONS: %v", err)}
@@ -839,4 +841,177 @@ func buildConstraint(operator, version string) *pkg.VersionConstraint {
 	default:
 		return nil
 	}
+}
+
+// GetAlternative implements get_alternative() from app-alternatives.eclass.
+// Returns the USE flag name for the selected alternative.
+func (h *Helpers) GetAlternative(_ []string) error {
+	// ALTERNATIVES is an array in bash, but we have it as space-separated string.
+	// Each entry is "flagname:provider" — we check which flag is enabled.
+	alts := h.getEnvVar("ALTERNATIVES")
+	if alts == "" {
+		// Try to find the first enabled USE flag as fallback
+		h.writeStdout("reference")
+		return nil
+	}
+
+	for _, alt := range strings.Fields(alts) {
+		flag := alt
+		if idx := strings.Index(alt, ":"); idx >= 0 {
+			flag = alt[:idx]
+		}
+
+		// Check if this USE flag is enabled
+		if h.isUseEnabled(flag) {
+			h.writeStdout(flag)
+			return nil
+		}
+	}
+
+	// Default: return first alternative
+	first := strings.Fields(alts)[0]
+	if idx := strings.Index(first, ":"); idx >= 0 {
+		first = first[:idx]
+	}
+	h.writeStdout(first)
+	return nil
+}
+
+// ============================================================================
+// Shell Completion Eclass Functions
+// ============================================================================
+
+// GetBashcompdir returns the bash completion directory.
+func (h *Helpers) GetBashcompdir(_ []string) error {
+	h.writeStdout("/usr/share/bash-completion/completions")
+	return nil
+}
+
+// GetZshcompdir returns the zsh completion directory.
+func (h *Helpers) GetZshcompdir(_ []string) error {
+	h.writeStdout("/usr/share/zsh/site-functions")
+	return nil
+}
+
+// GetFishcompdir returns the fish completion directory.
+func (h *Helpers) GetFishcompdir(_ []string) error {
+	h.writeStdout("/usr/share/fish/vendor_completions.d")
+	return nil
+}
+
+// DoBashcomp installs bash completion files.
+func (h *Helpers) DoBashcomp(args []string) error {
+	h.insDestTree = "/usr/share/bash-completion/completions"
+	return h.Doins(args)
+}
+
+// NewBashcomp installs a bash completion file with a new name.
+func (h *Helpers) NewBashcomp(args []string) error {
+	h.insDestTree = "/usr/share/bash-completion/completions"
+	return h.Newins(args)
+}
+
+// ============================================================================
+// Additional Eclass Stubs
+// ============================================================================
+
+// Eautoreconf runs autoreconf -f -i with Portage-compatible options.
+//
+// Supports AT_M4DIR for additional aclocal search paths.
+// Runs in the source directory ($S).
+func (h *Helpers) Eautoreconf(_ []string) error {
+	sourceDir := h.getSourceDir()
+	if sourceDir == "" {
+		return &DieError{Message: "eautoreconf: S not set"}
+	}
+
+	h.writeStdout(fmt.Sprintf(">>> Running eautoreconf in %s\n", sourceDir))
+
+	args := []string{"-f", "-i"}
+
+	// Support AT_M4DIR — additional directories for aclocal to search for m4 files
+	// Portage's autotools.eclass passes these via ACLOCAL_FLAGS
+	if m4dir := h.getEnvVar("AT_M4DIR"); m4dir != "" {
+		for _, dir := range strings.Fields(m4dir) {
+			args = append(args, "-I", dir)
+		}
+	}
+
+	cmd := exec.Command("autoreconf", args...)
+	cmd.Dir = sourceDir
+
+	// Build environment with ACLOCAL_FLAGS if AT_M4DIR is set
+	env := h.env.ToSlice()
+	if m4dir := h.getEnvVar("AT_M4DIR"); m4dir != "" {
+		var aclocalFlags strings.Builder
+		for _, dir := range strings.Fields(m4dir) {
+			aclocalFlags.WriteString("-I ")
+			aclocalFlags.WriteString(dir)
+			aclocalFlags.WriteString(" ")
+		}
+		env = append(env, "ACLOCAL_FLAGS="+aclocalFlags.String())
+	}
+	cmd.Env = env
+
+	output, err := cmd.CombinedOutput()
+	if len(output) > 0 {
+		h.writeStdout(string(output))
+	}
+	if err != nil {
+		return &DieError{Message: fmt.Sprintf("eautoreconf failed: %v", err)}
+	}
+	return nil
+}
+
+// Eprefixify replaces @GENTOO_PORTAGE_EPREFIX@ with the actual prefix.
+func (h *Helpers) Eprefixify(args []string) error {
+	prefix := h.getEnvOrDefault("EPREFIX", "")
+	for _, file := range args {
+		path := h.resolveSourcePath(file)
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return &DieError{Message: fmt.Sprintf("eprefixify: %v", err)}
+		}
+		result := strings.ReplaceAll(string(content), "@GENTOO_PORTAGE_EPREFIX@", prefix)
+		if err := os.WriteFile(path, []byte(result), 0644); err != nil {
+			return &DieError{Message: fmt.Sprintf("eprefixify: %v", err)}
+		}
+	}
+	return nil
+}
+
+// LinuxInfoPkgSetup implements linux-info_pkg_setup.
+func (h *Helpers) LinuxInfoPkgSetup(_ []string) error {
+	// Skip kernel checks in our context — just ensure variables are set
+	logging.Debug("[linux-info] pkg_setup: skipping kernel configuration checks")
+	return nil
+}
+
+// KernelIs checks kernel version (simplified).
+func (h *Helpers) KernelIs(args []string) error {
+	// In our context, assume kernel check passes
+	if len(args) < 2 {
+		return exitFalse()
+	}
+	return nil // Assume condition is met
+}
+
+// DistutilsEnableTests enables test dependencies for distutils packages.
+func (h *Helpers) DistutilsEnableTests(args []string) error {
+	// This is called at global scope to set up IUSE and test deps.
+	// Just set IUSE+=" test" and return.
+	if len(args) >= 1 {
+		h.setEnvVar("_DISTUTILS_TEST_RUNNER", args[0])
+	}
+	return nil
+}
+
+// UnpackerNoOp is a no-op stub for unpacker eclass functions.
+func (h *Helpers) UnpackerNoOp(_ []string) error {
+	return nil
+}
+
+// LlvmOrgNoOp is a no-op stub for llvm.org eclass functions.
+func (h *Helpers) LlvmOrgNoOp(_ []string) error {
+	return nil
 }

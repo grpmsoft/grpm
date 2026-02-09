@@ -42,52 +42,103 @@ func (h *Helpers) VerCut(args []string) error {
 	return nil
 }
 
-// verCutImpl implements version cutting logic.
+// verCutImpl implements version cutting logic matching Portage's ver_cut.
+//
+// Portage's __ver_split stores interleaved [separator, component] pairs:
+//
+//	"1.2.3" → ["", "1", ".", "2", ".", "3"]
+//
+// ver_cut extracts the slice and preserves original separators.
 func (h *Helpers) verCutImpl(rangeSpec, version string) (string, error) {
-	// Split version into components
-	parts := h.splitVersion(version)
-	if len(parts) == 0 {
+	comp := verSplit(version)
+	if len(comp) == 0 {
 		return "", nil
 	}
 
-	// Parse range
-	start, end, err := h.parseVerRange(rangeSpec, len(parts))
+	max := len(comp) / 2
+
+	start, end, err := h.parseVerRange(rangeSpec, max)
 	if err != nil {
 		return "", err
 	}
-
-	// Extract requested parts
-	if start > len(parts) {
+	if start > max {
 		return "", nil
 	}
-	if end > len(parts) {
-		end = len(parts)
+	if end > max {
+		end = max
 	}
 
-	return strings.Join(parts[start-1:end], "."), nil
+	// Portage: echo "${comp[*]:start:end*2-start}"
+	// start is 1-based component index → array index = start*2-1
+	arrStart := start*2 - 1
+	if start == 0 {
+		arrStart = 0
+	}
+	arrLen := end*2 - arrStart
+	if arrStart+arrLen > len(comp) {
+		arrLen = len(comp) - arrStart
+	}
+
+	var sb strings.Builder
+	for i := arrStart; i < arrStart+arrLen; i++ {
+		sb.WriteString(comp[i])
+	}
+	return sb.String(), nil
 }
 
-// splitVersion splits a version string into components.
-func (h *Helpers) splitVersion(version string) []string {
-	// Split on . - _ characters
-	var parts []string
-	var current strings.Builder
+// verSplit splits a version into interleaved [separator, component] pairs,
+// matching Portage's __ver_split exactly.
+//
+// Example: "1.2_alpha3-r1" → ["", "1", ".", "2", "_", "alpha", "", "3", "-", "r", "", "1"]
+func verSplit(version string) []string {
+	var comp []string
+	v := version
 
-	for _, r := range version {
-		if r == '.' || r == '-' || r == '_' {
-			if current.Len() > 0 {
-				parts = append(parts, current.String())
-				current.Reset()
+	for len(v) > 0 {
+		// Cut the separator (non-alphanumeric prefix)
+		sepEnd := 0
+		for sepEnd < len(v) && !isAlphanumeric(v[sepEnd]) {
+			sepEnd++
+		}
+		sep := v[:sepEnd]
+		v = v[sepEnd:]
+
+		// Cut the next component: either all digits or all letters
+		compEnd := 0
+		if len(v) > 0 && v[0] >= '0' && v[0] <= '9' {
+			for compEnd < len(v) && v[compEnd] >= '0' && v[compEnd] <= '9' {
+				compEnd++
 			}
 		} else {
-			current.WriteRune(r)
+			for compEnd < len(v) && isAlpha(v[compEnd]) {
+				compEnd++
+			}
+		}
+		c := v[:compEnd]
+		v = v[compEnd:]
+
+		comp = append(comp, sep, c)
+	}
+	return comp
+}
+
+func isAlphanumeric(b byte) bool {
+	return (b >= '0' && b <= '9') || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
+}
+
+func isAlpha(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
+}
+
+// splitVersion splits a version string into components (legacy, used by parseVerRange).
+func (h *Helpers) splitVersion(version string) []string {
+	comp := verSplit(version)
+	var parts []string
+	for i := 1; i < len(comp); i += 2 {
+		if comp[i] != "" {
+			parts = append(parts, comp[i])
 		}
 	}
-
-	if current.Len() > 0 {
-		parts = append(parts, current.String())
-	}
-
 	return parts
 }
 
@@ -145,34 +196,45 @@ func (h *Helpers) VerRs(args []string) error {
 	return nil
 }
 
-// verRsImpl implements separator replacement logic.
+// verRsImpl implements separator replacement logic matching Portage's ver_rs.
+//
+// Portage ver_rs replaces separators at specified positions (1-indexed).
+// Separator positions correspond to even indices in the verSplit array.
 func (h *Helpers) verRsImpl(rangeSpec, newSep, version string) string {
-	// Find separator positions
-	var sepPositions []int
-	for i, r := range version {
-		if r == '.' || r == '-' || r == '_' {
-			sepPositions = append(sepPositions, i)
-		}
-	}
-
-	if len(sepPositions) == 0 {
+	comp := verSplit(version)
+	if len(comp) == 0 {
 		return version
 	}
 
-	// Parse range
-	start, end, err := h.parseVerRange(rangeSpec, len(sepPositions))
+	// max separator index = number of components - 1
+	max := len(comp)/2 - 1
+	if max < 1 {
+		return version
+	}
+
+	start, end, err := h.parseVerRange(rangeSpec, max)
 	if err != nil {
 		return version
 	}
 
 	// Replace separators at specified positions
-	result := []byte(version)
-	for i := start - 1; i < end && i < len(sepPositions); i++ {
-		pos := sepPositions[i]
-		result[pos] = []byte(newSep)[0]
+	// Separator at position N is at comp[N*2]
+	for i := start; i <= end && i <= max; i++ {
+		idx := i * 2
+		if idx < len(comp) {
+			// Skip position 0 with empty separator
+			if idx == 0 && comp[idx] == "" {
+				continue
+			}
+			comp[idx] = newSep
+		}
 	}
 
-	return string(result)
+	var sb strings.Builder
+	for _, s := range comp {
+		sb.WriteString(s)
+	}
+	return sb.String()
 }
 
 // VerTest compares two version strings per PMS Section 12.3.14.
@@ -190,11 +252,21 @@ func (h *Helpers) verRsImpl(rangeSpec, newSep, version string) string {
 // Returns: exit code 0 (true) or 1 (false) via exitFalse().
 // Available in EAPI 7+.
 func (h *Helpers) VerTest(args []string) error {
-	if len(args) != 3 {
-		return &DieError{Message: "ver_test: requires exactly 3 arguments: <v1> <op> <v2>"}
-	}
+	var v1, op, v2 string
 
-	v1, op, v2 := args[0], args[1], args[2]
+	switch len(args) {
+	case 3:
+		v1, op, v2 = args[0], args[1], args[2]
+	case 2:
+		// 2-arg form: ver_test <op> <v2> — uses $PVR as implicit v1
+		v1 = h.getEnvVar("PVR")
+		if v1 == "" {
+			v1 = h.getEnvVar("PV")
+		}
+		op, v2 = args[0], args[1]
+	default:
+		return &DieError{Message: "ver_test: requires 2 or 3 arguments"}
+	}
 
 	// Use PMS-compliant version comparison from pkg package
 	cmp := pkg.CompareVersions(v1, v2)
@@ -303,30 +375,35 @@ func (h *Helpers) InheritWithEnv(args []string, env expand.Environ) error {
 		return nil
 	}
 
+	// Sync ALL runtime variables from the outer bash script to Environment.
+	// Eclasses run in a nested interpreter that reads from buildEnvPairs(),
+	// which uses Environment.ExtraVars. Variables set in the ebuild script
+	// (e.g., DISTUTILS_USE_PEP517, PYTHON_COMPAT) must be propagated so
+	// eclasses can see them at source time.
+	if env != nil && h.env != nil {
+		env.Each(func(name string, vr expand.Variable) bool {
+			val := vr.String()
+			if val != "" {
+				h.env.SetVar(name, val)
+			}
+			return true
+		})
+	}
+
 	ctx := context.Background()
 
-	// Pass critical environment variables to the eclass executor
-	// EAPI is required by many eclasses (e.g., toolchain.eclass only supports EAPI 8)
+	// For DynamicEclassLoader, pass ALL bash variables through to the eclass
+	// executor. Eclasses rely on variables set before inherit (e.g.,
+	// DISTUTILS_USE_PEP517, PYTHON_COMPAT, CMAKE_MAKEFILE_GENERATOR).
+	// Portage inherits within the same bash scope so all vars are visible.
 	if loader, ok := h.eclassLoader.(*DynamicEclassLoader); ok {
 		envVars := map[string]string{}
-
-		// Get variables from the interpreter's environment
-		for _, varName := range []string{
-			"EAPI", "P", "PN", "PV", "PR", "PVR", "PF",
-			"CATEGORY", "SLOT", "USE", "PORTDIR", "DISTDIR",
-			"WORKDIR", "S", "T", "D", "ROOT", "EROOT", "EPREFIX",
-		} {
-			if val := env.Get(varName).String(); val != "" {
-				envVars[varName] = val
+		env.Each(func(name string, vr expand.Variable) bool {
+			if val := vr.String(); val != "" {
+				envVars[name] = val
 			}
-		}
-
-		// DEBUG: Print extracted variables
-		h.writeStdout(">>> InheritWithEnv: Extracted vars:\n")
-		for k, v := range envVars {
-			h.writeStdout(fmt.Sprintf(">>>   %s=%s\n", k, v))
-		}
-
+			return true
+		})
 		loader.SetEnv(envVars)
 	}
 

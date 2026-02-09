@@ -32,12 +32,12 @@ GRPM (Go Resource Package Manager) is a modern source-based package manager writ
 | **SAT-based Dependency Resolution** | Boolean satisfiability solver for guaranteed conflict-free resolution |
 | **Binary Package Support** | Full GPKG (.gpkg.tar) and legacy TBZ2 (.tbz2) format support |
 | **Transactional Updates** | Btrfs/ZFS snapshot-based rollbacks for safe system updates |
-| **Source Building** | Ebuild execution with autotools; CMake and Meson support (basic) |
+| **Source Building** | Ebuild execution with autotools; CMake and Meson support (basic); hardened bash interpreter |
 | **Build Systems** | toolchain-funcs, flag-o-matic, cmake.eclass, meson.eclass |
 | **Language Ecosystems** | Python (distutils-r1), Rust (cargo.eclass), Go (go-module.eclass) — basic support |
 | **Multilib Support** | 32-bit/64-bit library support with ABI management |
 | **Package Sets** | @world, @system, @selected in ALL commands (resolve, install, emerge, fetch) |
-| **Distfile Fetching** | Automatic source downloading with mirror failover |
+| **Distfile Fetching** | Automatic source downloading with mirror failover and USE-conditional filtering |
 | **Coverage Analysis** | Repository compatibility analysis with `grpm analyze` |
 | **Tool Detection** | External tool checking with `grpm tools` |
 | **Daemon Architecture** | gRPC + REST API for background operations |
@@ -251,6 +251,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidelines and [AGENTS.md
 - ✅ Package sets (@world, @system, @selected) in all commands
 - ✅ Enterprise tool handling (Portage-compatible BDEPEND)
 - ✅ Portage-compatible dependency filtering (installed packages, BDEPEND/DEPEND)
+- ✅ Hardened bash interpreter with function body stripping and USE-conditional distfile filtering
+- ✅ Eclass metadata extraction with BASH_VERSINFO emulation and stdout isolation
 
 **v1.0.0** — Production ready after community validation (no fixed date).
 

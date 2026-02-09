@@ -117,15 +117,13 @@ func (h *Helpers) DefaultSrcConfigure(args []string) error {
 		return err
 	}
 
-	workDir := h.getWorkDir()
-	if workDir == "" {
-		return &DieError{Message: "default_src_configure: working directory not set"}
-	}
-
-	// Check ECONF_SOURCE first, then current directory
-	econfSource := h.env.GetVar("ECONF_SOURCE")
+	// Per Portage: : ${ECONF_SOURCE:=.}
+	econfSource := h.getEnvVar("ECONF_SOURCE")
 	if econfSource == "" {
-		econfSource = workDir
+		econfSource = h.getRuntimeDir()
+	}
+	if econfSource == "" {
+		return &DieError{Message: "default_src_configure: working directory not set"}
 	}
 
 	configurePath := filepath.Join(econfSource, "configure")

@@ -371,7 +371,16 @@ func (h *Helpers) getToolForExport(varName string) string {
 //  1. Environment ExtraVars (ebuild-set variables)
 //  2. OS environment
 func (h *Helpers) getEnvVar(key string) string {
-	// Check Environment ExtraVars first
+	// Check runtime bash environment first (variables set in running script).
+	// This is critical for variables like DISTUTILS_USE_PEP517 that are set
+	// in ebuild scripts but not in the Environment struct.
+	if h.runtimeEnv != nil {
+		if val := h.runtimeEnv.Get(key).String(); val != "" {
+			return val
+		}
+	}
+
+	// Check Environment built-in and ExtraVars
 	if h.env != nil {
 		if val := h.env.GetVar(key); val != "" {
 			return val

@@ -190,9 +190,10 @@ func TestHelpers_Cat(t *testing.T) {
 func TestHelpers_Cat_NoArgs(t *testing.T) {
 	helpers, _, _, _ := createBuildTestHelpers(t)
 
+	// Cat with no args returns success (stdin mode)
 	err := helpers.Cat([]string{})
-	if err == nil {
-		t.Error("expected error with no args")
+	if err != nil {
+		t.Errorf("Cat with no args should succeed (stdin mode): %v", err)
 	}
 }
 

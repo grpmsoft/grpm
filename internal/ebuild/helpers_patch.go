@@ -39,20 +39,34 @@ func (h *Helpers) Eapply(args []string) error {
 	}
 
 	for _, patch := range args[startIdx:] {
-		info, err := os.Stat(patch)
-		if err != nil {
-			return &DieError{Message: fmt.Sprintf("eapply: %s: %v", patch, err)}
+		// Expand glob patterns (bash may pass unexpanded globs when nullglob is off)
+		var paths []string
+		if strings.ContainsAny(patch, "*?[") {
+			matches, err := filepath.Glob(patch)
+			if err != nil || len(matches) == 0 {
+				return &DieError{Message: fmt.Sprintf("eapply: %s: no matching files", patch)}
+			}
+			paths = matches
+		} else {
+			paths = []string{patch}
 		}
 
-		if info.IsDir() {
-			// Apply all patches in directory
-			if err := h.applyPatchDir(patch, stripLevel, workDir); err != nil {
-				return err
+		for _, p := range paths {
+			info, err := os.Stat(p)
+			if err != nil {
+				return &DieError{Message: fmt.Sprintf("eapply: %s: %v", p, err)}
 			}
-		} else {
-			// Apply single patch
-			if err := h.applyPatchFile(patch, stripLevel, workDir); err != nil {
-				return err
+
+			if info.IsDir() {
+				// Apply all patches in directory
+				if err := h.applyPatchDir(p, stripLevel, workDir); err != nil {
+					return err
+				}
+			} else {
+				// Apply single patch
+				if err := h.applyPatchFile(p, stripLevel, workDir); err != nil {
+					return err
+				}
 			}
 		}
 	}

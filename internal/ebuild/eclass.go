@@ -120,6 +120,20 @@ func (r *EclassRegistry) GetInherited() string {
 	return strings.Join(r.inherited, " ")
 }
 
+// GetLoadedPaths returns the inheritance order and a map of eclass name to file path.
+// This is used to embed eclass content directly in combined scripts.
+func (r *EclassRegistry) GetLoadedPaths() (order []string, paths map[string]string) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	order = make([]string, len(r.inherited))
+	copy(order, r.inherited)
+	paths = make(map[string]string, len(r.loaded))
+	for k, v := range r.loaded {
+		paths[k] = v
+	}
+	return order, paths
+}
+
 // FindEclass locates an eclass file in the search paths.
 //
 // Returns the full path to the eclass file or error if not found.
@@ -265,7 +279,11 @@ func (l *EclassLoader) Inherit(ctx context.Context, eclasses []string) error {
 }
 
 // loadEclass loads a single eclass.
-func (l *EclassLoader) loadEclass(ctx context.Context, name string) error {
+//
+// Panics from unsupported bash constructs within eclass code are caught
+// and converted to errors. The eclass is still marked as loaded to prevent
+// repeated failures on the same eclass.
+func (l *EclassLoader) loadEclass(ctx context.Context, name string) (loadErr error) {
 	// Check if already loaded
 	if l.registry.IsLoaded(name) {
 		l.writeStdout(fmt.Sprintf(">>> Eclass %s already inherited (skipping)\n", name))
@@ -274,9 +292,25 @@ func (l *EclassLoader) loadEclass(ctx context.Context, name string) error {
 
 	l.writeStdout(fmt.Sprintf(">>> Inheriting eclass: %s\n", name))
 
-	// Set current eclass for EXPORT_FUNCTIONS
+	// Set current eclass for EXPORT_FUNCTIONS context tracking.
+	// When an eclass calls EXPORT_FUNCTIONS, it needs to know which eclass
+	// is currently being sourced. This field provides that context.
+	//
+	// Save and restore the previous eclass to handle nested inheritance correctly.
+	// For example, cmake.eclass may call `inherit toolchain-funcs`, and after
+	// toolchain-funcs returns, cmake's EXPORT_FUNCTIONS must still work.
+	previousEclass := l.registry.GetCurrentEclass()
 	l.registry.SetCurrentEclass(name)
-	defer l.registry.SetCurrentEclass("")
+	defer l.registry.SetCurrentEclass(previousEclass)
+
+	// Recover from panics in eclass execution (unsupported bash constructs).
+	defer func() {
+		if r := recover(); r != nil {
+			loadErr = fmt.Errorf("eclass %s: interpreter panic: %v (unsupported bash construct)", name, r)
+			// Mark as loaded to prevent retry loops on the same broken eclass
+			l.registry.MarkLoaded(name, "")
+		}
+	}()
 
 	// Find eclass file
 	// NOTE: All eclasses MUST be loaded from repository.

@@ -5,6 +5,42 @@ All notable changes to GRPM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.4] - 2026-02-09 - Bash Interpreter Hardening
+
+### Ebuild Metadata Extraction & Signature File Filtering
+
+Major hardening of the bash interpreter (mvdan.cc/sh) for reliable ebuild metadata extraction. Fixes incorrect download of GPG signature files (.sig, .asc) that should only be fetched when `verify-sig` USE flag is enabled.
+
+### Fixed
+- **Signature file download bug** — Packages with `verify-sig? ( *.sig )` in SRC_URI no longer download signature files when verify-sig is disabled
+- **stripFunctionBodies** — Phase function bodies (src_compile, src_test, etc.) are stripped before metadata extraction. These contain advanced bash unsupported by mvdan.cc/sh (brace expansion in variable names, `${var@a}` parameter attributes) but aren't needed for SRC_URI evaluation
+- **Eclass stdout pollution** — Eclass sourcing now redirects stdout to prevent `usev`/`echo` output from corrupting SRC_URI capture
+- **Silent manifest fallbacks removed** — 4 fallback paths that silently returned unfiltered manifest distfiles now properly filter signature files or propagate errors (aligns with Portage behavior)
+- **ver_cut/ver_rs default to PV** — Eclass version functions now default to `$PV` when version argument is omitted
+- **S variable resolution** — Correct `$S` variable computation, unpack directory detection, and version selection
+- **Econf ECONF_SOURCE** — `econf` now respects `ECONF_SOURCE` and reads `CHOST`/`CBUILD` from environment
+- **Brace expansion propagation** — All bash variables propagated to eclass executor with brace expansion support
+- **Pre-inherit split** — Proper handling of pre-inherit ebuild content for `type -P` workaround and BASH_VERSINFO
+- **Multilib ABI defaults** — Only enable amd64 ABI in multilib defaults
+
+### Added
+- **`.tar.lz` (lzip) unpack support** — Uses external decompressor (xz >= 5.4.0 / plzip / lzip), matching Portage unpacker.eclass strategy. Fixes dev-build/make build.
+- **extractRawSrcURI fallback** — When bash evaluation fails, extracts `SRC_URI=` and `SRC_URI+=` directly from ebuild text via regex, preserving USE conditionals for proper filtering
+- **filterSignatureFiles safety net** — All manifest fallback paths filter `.sig`/`.asc`/`.sign` files when verify-sig is disabled
+- **BASH_VERSINFO emulation** — Forces eclasses to use bash 4 code paths, avoiding unsupported bash 5+ features (`${var@a}`)
+- **33 new tests** — Professional test coverage for all new functions (stripFunctionBodies, filterSignatureFiles, extractRawSrcURI, isFunctionDefinition, etc.)
+
+### Improved
+- **golangci-lint clean** — 0 lint issues (removed dead code, fixed errcheck, added nolint directives on inherently complex functions)
+
+### Verified on Real Gentoo
+- sys-apps/findutils — only `.tar.xz` downloaded (no `.sig`)
+- sys-apps/sed — only `.tar.xz` downloaded (no `.sig`)
+- dev-build/make — only `.tar.lz` downloaded (no `.sig`)
+- 17+ packages tested in previous sessions (zlib, gawk, libffi, bison, m4, etc.)
+
+---
+
 ## [0.9.3] - 2026-01-20
 
 ### Install Helper Path Resolution & Unpack Phase Fix
@@ -1345,7 +1381,8 @@ GRPM (Go Resource Package Manager) is a modern reimplementation of Gentoo's Port
 - **Issues**: https://github.com/grpmsoft/grpm/issues
 - **License**: [Apache-2.0](LICENSE)
 
-[Unreleased]: https://github.com/grpmsoft/grpm/compare/v0.9.3...HEAD
+[Unreleased]: https://github.com/grpmsoft/grpm/compare/v0.9.4...HEAD
+[0.9.4]: https://github.com/grpmsoft/grpm/compare/v0.9.3...v0.9.4
 [0.9.3]: https://github.com/grpmsoft/grpm/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/grpmsoft/grpm/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/grpmsoft/grpm/compare/v0.9.0...v0.9.1

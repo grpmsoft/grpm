@@ -439,7 +439,16 @@ func (h *Helpers) Einstalldocs(args []string) error {
 }
 
 // getSourceDir returns the source directory (S or WORKDIR).
+// Checks the bash runtime environment first for the latest $S.
 func (h *Helpers) getSourceDir() string {
+	if h.runtimeEnv != nil {
+		if s := h.runtimeEnv.Get("S").String(); s != "" {
+			return s
+		}
+		if w := h.runtimeEnv.Get("WORKDIR").String(); w != "" {
+			return w
+		}
+	}
 	if h.env == nil {
 		return ""
 	}

@@ -411,16 +411,123 @@ func buildMetadataExtractionScript(ebuildContent string) string {
 	}
 	script.WriteString("\n")
 
-	// Source the ebuild content inline
-	// This ensures inherit() calls are executed and SRC_URI is evaluated
+	// Source the ebuild content inline (with phase function bodies stripped).
+	// Phase functions (src_compile, src_test, etc.) often contain advanced bash
+	// constructs unsupported by mvdan.cc/sh (e.g., brace expansion in variable
+	// names like RUN_{VERY_,}EXPENSIVE_TESTS). Since metadata extraction only
+	// needs global variable values (SRC_URI, DEPEND, etc.), stripping function
+	// bodies prevents parse errors while preserving all metadata assignments.
 	script.WriteString("# --- BEGIN EBUILD ---\n")
-	script.WriteString(ebuildContent)
+	script.WriteString(stripFunctionBodies(ebuildContent))
 	script.WriteString("\n# --- END EBUILD ---\n\n")
 
 	// Output the evaluated SRC_URI
 	script.WriteString("echo \"$SRC_URI\"\n")
 
 	return script.String()
+}
+
+// stripFunctionBodies removes function bodies from ebuild content.
+//
+// Phase functions (src_compile, src_test, src_install, etc.) often contain
+// advanced bash features that mvdan.cc/sh cannot parse (e.g., brace expansion
+// in variable names: RUN_{VERY_,}EXPENSIVE_TESTS). Since metadata extraction
+// only needs global-scope code (variable assignments, inherit calls), we
+// replace function bodies with no-ops.
+//
+// Handles both formats:
+//
+//	func_name() {
+//	    body
+//	}
+//
+//	func_name() { one-liner; }
+func stripFunctionBodies(content string) string {
+	lines := strings.Split(content, "\n")
+	var result []string
+	depth := 0
+	inFunction := false
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+
+		if !inFunction {
+			// Detect function definition: "name() {" or "name () {"
+			if isFunctionDefinition(trimmed) {
+				// Check if it's a one-liner: "name() { body; }"
+				if strings.Count(trimmed, "{") == strings.Count(trimmed, "}") && strings.Contains(trimmed, "}") {
+					// One-liner function — replace with stub
+					funcName := extractFunctionName(trimmed)
+					result = append(result, funcName+"() { :; }")
+					continue
+				}
+				// Multi-line function — replace opening and skip body
+				funcName := extractFunctionName(trimmed)
+				result = append(result, funcName+"() { :; }")
+				depth = strings.Count(trimmed, "{") - strings.Count(trimmed, "}")
+				inFunction = true
+				continue
+			}
+			result = append(result, line)
+		} else {
+			// Inside function body — count braces to find the end
+			depth += strings.Count(trimmed, "{") - strings.Count(trimmed, "}")
+			if depth <= 0 {
+				inFunction = false
+				depth = 0
+			}
+			// Skip the line (function body)
+		}
+	}
+
+	return strings.Join(result, "\n")
+}
+
+// isFunctionDefinition checks if a line starts a bash function definition.
+// Matches: "name() {", "name ()" with optional leading whitespace.
+func isFunctionDefinition(trimmed string) bool {
+	// Skip comments and empty lines
+	if trimmed == "" || trimmed[0] == '#' {
+		return false
+	}
+
+	// Look for "() {" or "()" pattern
+	parenIdx := strings.Index(trimmed, "()")
+	if parenIdx <= 0 {
+		return false
+	}
+
+	// Extract potential function name (before the parentheses)
+	name := strings.TrimSpace(trimmed[:parenIdx])
+
+	// Validate function name: must be a valid bash identifier
+	// (letters, digits, underscores, hyphens; not starting with digit)
+	if name == "" {
+		return false
+	}
+	for i, ch := range name {
+		if i == 0 && ch >= '0' && ch <= '9' {
+			return false
+		}
+		isAlpha := (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+		isDigit := ch >= '0' && ch <= '9'
+		if !isAlpha && !isDigit && ch != '_' && ch != '-' {
+			return false
+		}
+	}
+
+	// Must have opening brace somewhere on this line or be just "name()"
+	rest := strings.TrimSpace(trimmed[parenIdx+2:])
+	return rest == "" || rest == "{" || strings.HasPrefix(rest, "{")
+}
+
+// extractFunctionName extracts the function name from a function definition line.
+func extractFunctionName(trimmed string) string {
+	parenIdx := strings.Index(trimmed, "()")
+	if parenIdx <= 0 {
+		return ""
+	}
+	return strings.TrimSpace(trimmed[:parenIdx])
 }
 
 // eclassInfrastructure contains bash functions needed for eclass support.
@@ -434,6 +541,10 @@ const eclassInfrastructure = `
 # === ECLASS INFRASTRUCTURE ===
 # These functions implement Portage's eclass system for metadata extraction.
 # Designed for compatibility with mvdan.cc/sh interpreter.
+
+# Force bash 4 mode: eclasses check BASH_VERSINFO to decide between
+# ${var@a} (bash 5+, unsupported by mvdan.cc/sh) and declare -p (bash 4).
+BASH_VERSINFO=(4 4 0 0 release x86_64-pc-linux-gnu)
 
 # INHERITED tracks which eclasses have been loaded
 INHERITED=""
@@ -463,8 +574,11 @@ inherit() {
         ECLASS="${eclass}"
         __ECLASS_DEPTH=$((__ECLASS_DEPTH + 1))
 
-        # Source the eclass (CRITICAL: keeps functions in same context)
-        . "${eclass_file}"
+        # Source the eclass (CRITICAL: keeps functions in same context).
+        # Redirect stdout to /dev/null: eclass top-level code may call
+        # usev/usex/echo which pollutes the stdout used to capture SRC_URI.
+        # Command substitutions ($(...)) capture their own stdout separately.
+        . "${eclass_file}" >/dev/null
 
         # Update INHERITED
         INHERITED="${INHERITED:+${INHERITED} }${eclass}"
@@ -816,9 +930,9 @@ func buildMultiVarExtractionScript(ebuildContent string, varNames []string) stri
 	}
 	script.WriteString("\n")
 
-	// Source ebuild
+	// Source ebuild (with function bodies stripped — same as buildMetadataExtractionScript)
 	script.WriteString("# --- BEGIN EBUILD ---\n")
-	script.WriteString(ebuildContent)
+	script.WriteString(stripFunctionBodies(ebuildContent))
 	script.WriteString("\n# --- END EBUILD ---\n\n")
 
 	// Output each variable

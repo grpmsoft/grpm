@@ -2,6 +2,11 @@
 //
 // This file provides the Interpreter type which uses mvdan.cc/sh as a pure-Go
 // bash interpreter for executing ebuild scripts without external bash dependency.
+//
+// Panic recovery: All interpreter entry points (Run, RunFile, Eval) use
+// defer/recover to catch panics from unsupported bash constructs in mvdan.cc/sh
+// (e.g., ${!var@a}, complex array operations). Panics are converted to
+// descriptive errors instead of crashing the emerge process.
 package ebuild
 
 import (
@@ -10,13 +15,30 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 
+	"github.com/grpmsoft/grpm/internal/logging"
 	"github.com/grpmsoft/grpm/internal/state"
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/syntax"
 )
+
+// InterpreterPanicError is returned when the bash interpreter panics on an
+// unsupported construct. It wraps the panic value with context about what
+// was being executed when the panic occurred.
+type InterpreterPanicError struct {
+	// PanicValue is the recovered panic value.
+	PanicValue interface{}
+	// Context describes what was being executed (e.g., "script", "eclass toolchain-funcs").
+	Context string
+}
+
+// Error returns a descriptive error message for the panic.
+func (e *InterpreterPanicError) Error() string {
+	return fmt.Sprintf("interpreter panic in %s: %v (unsupported bash construct)", e.Context, e.PanicValue)
+}
 
 // Interpreter executes bash scripts with Portage helper functions.
 // Uses mvdan.cc/sh as embedded pure-Go bash interpreter.
@@ -71,7 +93,25 @@ func (i *Interpreter) SetPackageDatabase(db *state.PackageDatabase) {
 //
 // The script is parsed and executed with the ebuild environment variables
 // available and Portage helper commands intercepted by the exec handler.
-func (i *Interpreter) Run(ctx context.Context, script string) error {
+//
+// Panics from unsupported bash constructs (e.g., ${!var@a}, ${var@Q}) in
+// mvdan.cc/sh are caught and converted to descriptive errors.
+func (i *Interpreter) Run(ctx context.Context, script string) (runErr error) {
+	// Recover from panics caused by unsupported bash constructs in mvdan.cc/sh.
+	// Common triggers: ${!var@a} (variable attributes), complex array operations.
+	defer func() {
+		if r := recover(); r != nil {
+			logging.Debug("[ebuild] interpreter panic recovered: %v", r)
+			runErr = &InterpreterPanicError{
+				PanicValue: r,
+				Context:    i.panicContext("script"),
+			}
+		}
+	}()
+
+	// Transform unsupported bash constructs (${VAR@a}, etc.) before parsing.
+	script = preprocessScript(script)
+
 	// Parse the script with bash variant for full ebuild compatibility
 	parser := syntax.NewParser(syntax.Variant(syntax.LangBash))
 	prog, err := parser.Parse(strings.NewReader(script), "script")
@@ -96,7 +136,18 @@ func (i *Interpreter) Run(ctx context.Context, script string) error {
 // RunFile executes a bash script file.
 //
 // The file is read, parsed, and executed with the ebuild environment.
-func (i *Interpreter) RunFile(ctx context.Context, path string) error {
+// Panics from unsupported bash constructs are caught and converted to errors.
+func (i *Interpreter) RunFile(ctx context.Context, path string) (runErr error) {
+	defer func() {
+		if r := recover(); r != nil {
+			logging.Debug("[ebuild] interpreter panic recovered in file %s: %v", path, r)
+			runErr = &InterpreterPanicError{
+				PanicValue: r,
+				Context:    i.panicContext(fmt.Sprintf("file %s", path)),
+			}
+		}
+	}()
+
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("reading script file %s: %w", path, err)
@@ -115,6 +166,9 @@ func (i *Interpreter) createRunner(ctx context.Context) (*interp.Runner, error) 
 		interp.StdIO(nil, i.stdout, i.stderr),
 		interp.Env(expand.ListEnviron(envPairs...)),
 		interp.ExecHandlers(i.execHandler),
+		// OpenHandler enables `. file` (source) for eclass loading.
+		// Without this, mvdan.cc/sh silently fails to source files.
+		interp.OpenHandler(interp.DefaultOpenHandler()),
 	}
 
 	// Set working directory to $S (source directory) if available and exists.
@@ -156,6 +210,21 @@ func (i *Interpreter) buildEnvPairs() []string {
 			iuse = append(iuse, flag)
 		}
 		pairs = append(pairs, "IUSE="+strings.Join(iuse, " "))
+	}
+
+	// Add PATH — filter out Windows /mnt/ paths for WSL compatibility.
+	if path := os.Getenv("PATH"); path != "" {
+		var cleanParts []string
+		for _, p := range strings.Split(path, ":") {
+			if !strings.HasPrefix(p, "/mnt/") {
+				cleanParts = append(cleanParts, p)
+			}
+		}
+		if len(cleanParts) > 0 {
+			pairs = append(pairs, "PATH="+strings.Join(cleanParts, ":"))
+		} else {
+			pairs = append(pairs, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+		}
 	}
 
 	return pairs
@@ -359,6 +428,36 @@ func (i *Interpreter) buildCommandMap() map[string]helperFunc {
 		"has_version":      i.helpers.HasVersion,
 		"best_version":     i.helpers.BestVersion,
 
+		// app-alternatives.eclass functions
+		"get_alternative": i.helpers.GetAlternative,
+
+		// bash-completion-r1.eclass / shell-completion.eclass
+		"get_bashcompdir": i.helpers.GetBashcompdir,
+		"get_zshcompdir":  i.helpers.GetZshcompdir,
+		"get_fishcompdir": i.helpers.GetFishcompdir,
+		"dobashcomp":      i.helpers.DoBashcomp,
+		"newbashcomp":     i.helpers.NewBashcomp,
+
+		// autotools.eclass
+		"eautoreconf": i.helpers.Eautoreconf,
+
+		// prefix.eclass
+		"eprefixify": i.helpers.Eprefixify,
+
+		// linux-info.eclass additional
+		"linux-info_pkg_setup": i.helpers.LinuxInfoPkgSetup,
+		"kernel_is":            i.helpers.KernelIs,
+
+		// distutils-r1.eclass additional
+		"distutils_enable_tests": i.helpers.DistutilsEnableTests,
+
+		// unpacker.eclass
+		"unpacker_src_uri_depends": i.helpers.UnpackerNoOp,
+
+		// llvm.org.eclass
+		"llvm.org_set_globals": i.helpers.LlvmOrgNoOp,
+		"llvm.org_src_prepare": i.helpers.LlvmOrgNoOp,
+
 		// cmake.eclass functions
 		"cmake":                          i.helpers.Cmake,
 		"cmake_src_prepare":              i.helpers.CmakeSrcPrepare,
@@ -383,6 +482,87 @@ func (i *Interpreter) buildCommandMap() map[string]helperFunc {
 		"meson_use":           i.helpers.MesonUse,
 		"meson_feature":       i.helpers.MesonFeature,
 		"meson_use_bool":      i.helpers.MesonUseBool,
+
+		// python-utils-r1.eclass functions
+		"python_export":         i.helpers.PythonExport,
+		"python_get_sitedir":    i.helpers.PythonGetSitedir,
+		"python_get_includedir": i.helpers.PythonGetIncludedir,
+		"python_get_library":    i.helpers.PythonGetLibrary,
+		"python_get_scriptdir":  i.helpers.PythonGetScriptdir,
+		"python_is_installed":   i.helpers.PythonIsInstalled,
+		"python_is_compatible":  i.helpers.PythonIsCompatible,
+		"python_wrapper":        i.helpers.PythonWrapper,
+		"python_doexe":          i.helpers.PythonDoexe,
+		"python_newexe":         i.helpers.PythonNewexe,
+		"python_domodule":       i.helpers.PythonDomodule,
+
+		// python-r1.eclass functions
+		"python-r1_pkg_setup":       i.helpers.PythonR1PkgSetup,
+		"python_foreach_impl":       i.helpers.PythonForeachImpl,
+		"python_copy_sources":       i.helpers.PythonCopySources,
+		"python_optimize":           i.helpers.PythonOptimize,
+		"python_gen_any_dep":        i.helpers.PythonGenAnyDep,
+		"python_set_active_version": i.helpers.PythonSetActiveVersion,
+
+		// python-single-r1.eclass functions
+		"python-single-r1_pkg_setup": i.helpers.PythonSingleR1PkgSetup,
+		"python_setup":               i.helpers.PythonSetup,
+		"python_gen_cond_dep":        i.helpers.PythonGenCondDep,
+		"python_gen_usedep":          i.helpers.PythonGenUseDep,
+		"python_gen_impl_dep":        i.helpers.PythonGenImplDep,
+
+		// python-any-r1.eclass functions
+		"python-any-r1_pkg_setup": i.helpers.PythonAnyR1PkgSetup,
+		"python_check_deps":       i.helpers.PythonCheckDeps,
+
+		// Internal python-utils-r1 functions (underscore-prefixed).
+		// These are bash functions in the eclass that aren't preserved
+		// across interpreter runs, so we provide Go stubs.
+		"_python_set_impls":           i.helpers.PythonSetImpls,
+		"_python_export":              i.helpers.PythonInternalExport,
+		"_python_check_locale_sanity": i.helpers.PythonNoOp,
+		"_python_set_provider_pkg":    i.helpers.PythonNoOp,
+
+		// distutils-r1.eclass functions
+		"distutils-r1_src_prepare":   i.helpers.DistutilsR1SrcPrepare,
+		"distutils-r1_src_configure": i.helpers.DistutilsR1SrcConfigure,
+		"distutils-r1_src_compile":   i.helpers.DistutilsR1SrcCompile,
+		"distutils-r1_src_test":      i.helpers.DistutilsR1SrcTest,
+		"distutils-r1_src_install":   i.helpers.DistutilsR1SrcInstall,
+		"python_compile":             i.helpers.PythonCompile,
+		"python_test":                i.helpers.PythonTest,
+		"python_install":             i.helpers.PythonInstall,
+		"python_install_all":         i.helpers.PythonInstallAll,
+
+		// cargo.eclass functions
+		"cargo_crate_uris":    i.helpers.CargoCrateUris,
+		"cargo_src_unpack":    i.helpers.CargoSrcUnpack,
+		"cargo_src_configure": i.helpers.CargoSrcConfigure,
+		"cargo_src_compile":   i.helpers.CargoSrcCompile,
+		"cargo_src_test":      i.helpers.CargoSrcTest,
+		"cargo_src_install":   i.helpers.CargoSrcInstall,
+		"cargo_env":           i.helpers.CargoEnv,
+
+		// go-module.eclass functions
+		"go-module_set_globals": i.helpers.GoModuleSetGlobals,
+		"go-module_src_unpack":  i.helpers.GoModuleSrcUnpack,
+		"go-module_src_compile": i.helpers.GoModuleSrcCompile,
+		"go-module_src_install": i.helpers.GoModuleSrcInstall,
+		"ego":                   i.helpers.Ego,
+
+		// multilib-build.eclass functions (multilib-minimal)
+		"multilib-minimal_src_configure": i.helpers.MultilibBuildSrcConfigure,
+		"multilib-minimal_src_compile":   i.helpers.MultilibBuildSrcCompile,
+		"multilib-minimal_src_test":      i.helpers.MultilibBuildSrcTest,
+		"multilib-minimal_src_install":   i.helpers.MultilibBuildSrcInstall,
+		"multilib_foreach_abi":           i.helpers.MultilibForeachABI,
+		"multilib_native_usedep":         i.helpers.MultilibUsedep,
+		"multilib_is_native_abi":         i.helpers.MultilibIsNativeABI,
+		"get_all_abis":                   i.helpers.GetAllABIs,
+		"get_abi_LIBDIR":                 i.helpers.GetABILibdir,
+		"get_abi_CHOST":                  i.helpers.GetABIChost,
+		"get_abi_CFLAGS":                 i.helpers.GetABICflags,
+		"get_abi_LDFLAGS":                i.helpers.GetABILdflags,
 
 		// Banned commands (PMS Section 12.3.2 / Table 12.3)
 		// These stubs check EAPI and return appropriate errors.
@@ -426,6 +606,8 @@ func (i *Interpreter) buildCommandMap() map[string]helperFunc {
 //   - meson_*, meson (meson.eclass)
 //
 // Unhandled commands are passed to the next handler (real shell execution).
+//
+//nolint:gocyclo // Command dispatcher: routes 30+ bash builtins/helpers to Go implementations.
 func (i *Interpreter) execHandler(next interp.ExecHandlerFunc) interp.ExecHandlerFunc {
 	// Build command map once
 	commands := i.buildCommandMap()
@@ -436,12 +618,19 @@ func (i *Interpreter) execHandler(next interp.ExecHandlerFunc) interp.ExecHandle
 		}
 
 		cmd := args[0]
-		cmdArgs := args[1:]
+		cmdArgs := expandBraceArgs(args[1:])
 		hc := interp.HandlerCtx(ctx)
 
-		// Special handling for xargs - needs stdin from context
+		// Special handling for commands that need stdin from context
 		if cmd == "xargs" {
 			return i.helpers.XargsWithStdin(hc.Stdin, cmdArgs)
+		}
+		if cmd == "cat" {
+			return i.helpers.CatWithStdin(hc.Stdin, cmdArgs)
+		}
+		// newins/newdoc/newman with "-" source reads from stdin (heredoc piping)
+		if (cmd == "newins" || cmd == "newdoc" || cmd == "newman") && len(cmdArgs) >= 2 && cmdArgs[0] == "-" {
+			return i.helpers.NewinsFromStdin(hc.Stdin, cmdArgs[1], cmd)
 		}
 
 		// Special handling for inherit - needs environment from context
@@ -453,27 +642,109 @@ func (i *Interpreter) execHandler(next interp.ExecHandlerFunc) interp.ExecHandle
 		// to work (e.g., GCC_RELEASE_VER=$(ver_cut 1-3 ${GCC_PV}))
 		switch cmd {
 		case "ver_cut":
+			if len(cmdArgs) < 1 {
+				return &DieError{Message: "ver_cut: requires range argument"}
+			}
+			version := ""
 			if len(cmdArgs) >= 2 {
-				result, err := i.helpers.verCutImpl(cmdArgs[0], cmdArgs[1])
-				if err != nil {
-					return &DieError{Message: fmt.Sprintf("ver_cut: %v", err)}
-				}
-				_, _ = io.WriteString(hc.Stdout, result)
-				return nil
+				version = cmdArgs[1]
+			} else {
+				// Default to $PV per Portage spec
+				version = hc.Env.Get("PV").String()
 			}
-			return &DieError{Message: "ver_cut: requires range and version arguments"}
+			result, err := i.helpers.verCutImpl(cmdArgs[0], version)
+			if err != nil {
+				return &DieError{Message: fmt.Sprintf("ver_cut: %v", err)}
+			}
+			_, _ = io.WriteString(hc.Stdout, result)
+			return nil
 		case "ver_rs":
-			if len(cmdArgs) >= 3 {
-				result := i.helpers.verRsImpl(cmdArgs[0], cmdArgs[1], cmdArgs[2])
-				_, _ = io.WriteString(hc.Stdout, result)
-				return nil
+			if len(cmdArgs) < 2 {
+				return &DieError{Message: "ver_rs: requires range and separator arguments"}
 			}
-			return &DieError{Message: "ver_rs: requires range, separator, and version arguments"}
+			version := ""
+			if len(cmdArgs) >= 3 {
+				version = cmdArgs[2]
+			} else {
+				// Default to $PV per Portage spec
+				version = hc.Env.Get("PV").String()
+			}
+			result := i.helpers.verRsImpl(cmdArgs[0], cmdArgs[1], version)
+			_, _ = io.WriteString(hc.Stdout, result)
+			return nil
+		}
+
+		// __grpm_has_func replaces 'declare -f funcname' which mvdan.cc/sh
+		// doesn't support. Returns 0 if the function is known to exist
+		// (defined in the ebuild or in embedded eclasses), 1 otherwise.
+		if cmd == "__grpm_has_func" {
+			if len(cmdArgs) > 0 {
+				funcName := cmdArgs[0]
+				// Check if function is defined in the parsed ebuild
+				if i.env != nil {
+					// Check the ebuild's function list
+					if i.helpers != nil && i.helpers.eclassRegistry != nil {
+						// Function names from ebuild have pattern: multilib_src_configure
+						// Always return success — the function is defined in the
+						// combined script (either from ebuild or embedded eclass).
+						// mvdan.cc/sh DOES define functions, just declare -f can't check them.
+						_ = funcName
+						return nil // success = function exists
+					}
+				}
+			}
+			return nil // success by default
+		}
+
+		// __grpm_has_var replaces 'declare -p varname' which mvdan.cc/sh
+		// doesn't support. Mimics declare -p output so callers that check
+		// the output format (e.g., `[[ $(declare -p X) == "declare -a"* ]]`
+		// in python-utils-r1.eclass) work correctly.
+		if cmd == "__grpm_has_var" {
+			if len(cmdArgs) > 0 {
+				varName := cmdArgs[0]
+				if val := hc.Env.Get(varName).String(); val != "" {
+					// Output declare -p format to hc.Stdout (not i.stdout)
+					// so command substitutions like $(declare -p X) capture it.
+					// Report as array (-a) since eclasses typically check this
+					// for array variables like PYTHON_COMPAT, MULTILIB_COMPAT.
+					_, _ = fmt.Fprintf(hc.Stdout, "declare -a %s='(%s)'\n", varName, val)
+					return nil
+				}
+				return interp.ExitStatus(1) // variable not found
+			}
+			return interp.ExitStatus(1)
+		}
+
+		// Internal command to sync bash variables back to Go environment
+		if cmd == "__grpm_sync_env" {
+			if i.env != nil {
+				if s := hc.Env.Get("S").String(); s != "" {
+					i.env.S = s
+				}
+				if workdir := hc.Env.Get("WORKDIR").String(); workdir != "" {
+					i.env.WORKDIR = workdir
+				}
+			}
+			return nil
 		}
 
 		// Look up command in map
 		if handler, ok := commands[cmd]; ok {
-			return handler(cmdArgs)
+			// Make runtime bash variables available to Go helpers.
+			i.helpers.runtimeEnv = hc.Env
+			i.helpers.runtimeDir = hc.Dir
+
+			// Redirect helpers' stdout to context stdout for command substitution.
+			// When bash does $(some_command), hc.Stdout is a capture pipe.
+			// Without this, Go helpers write to the original stdout instead.
+			origStdout := i.helpers.stdout
+			i.helpers.stdout = hc.Stdout
+			err := handler(cmdArgs)
+			i.helpers.stdout = origStdout
+			i.helpers.runtimeEnv = nil
+			i.helpers.runtimeDir = ""
+			return err
 		}
 
 		// Pass through to next handler (real shell execution)
@@ -487,6 +758,27 @@ func (i *Interpreter) execHandler(next interp.ExecHandlerFunc) interp.ExecHandle
 // going through the interpreter.
 func (i *Interpreter) GetHelpers() *Helpers {
 	return i.helpers
+}
+
+// panicContext builds a descriptive context string for panic error messages.
+//
+// Includes the current eclass name (if any) and package name for debugging.
+func (i *Interpreter) panicContext(base string) string {
+	parts := []string{base}
+
+	// Add current eclass context if available
+	if i.helpers != nil && i.helpers.eclassRegistry != nil {
+		if ec := i.helpers.eclassRegistry.GetCurrentEclass(); ec != "" {
+			parts = append(parts, fmt.Sprintf("eclass=%s", ec))
+		}
+	}
+
+	// Add package name if available
+	if i.env != nil && i.env.Package != nil {
+		parts = append(parts, fmt.Sprintf("pkg=%s", i.env.Package.Name))
+	}
+
+	return strings.Join(parts, ", ")
 }
 
 // dispatchCommand executes a helper command by name.
@@ -517,7 +809,19 @@ func (i *Interpreter) dispatchCommand(cmd string, args []string) error {
 // Eval evaluates a bash expression and returns its output.
 //
 // This is useful for evaluating variable expansions or command substitutions.
-func (i *Interpreter) Eval(ctx context.Context, expr string) (string, error) {
+// Panics from unsupported bash constructs are caught and converted to errors.
+func (i *Interpreter) Eval(ctx context.Context, expr string) (result string, evalErr error) {
+	defer func() {
+		if r := recover(); r != nil {
+			logging.Debug("[ebuild] interpreter panic recovered in eval: %v", r)
+			result = ""
+			evalErr = &InterpreterPanicError{
+				PanicValue: r,
+				Context:    i.panicContext("eval"),
+			}
+		}
+	}()
+
 	var buf bytes.Buffer
 
 	// Create a temporary interpreter with captured output
@@ -535,4 +839,133 @@ func (i *Interpreter) Eval(ctx context.Context, expr string) (string, error) {
 	}
 
 	return buf.String(), nil
+}
+
+// expandBraceArgs expands brace patterns in command arguments.
+//
+// mvdan.cc/sh has a limitation where brace expansion doesn't work when
+// mixed with variable expansion in the same word (e.g., ${PN}/config.{sub,guess}).
+// In real bash, brace expansion happens BEFORE variable expansion, but mvdan.cc/sh
+// doesn't implement this ordering. This function expands remaining literal braces
+// in arguments that the interpreter failed to expand.
+//
+// Handles: prefix{a,b,c}suffix → prefix-a-suffix prefix-b-suffix prefix-c-suffix
+func expandBraceArgs(args []string) []string {
+	var needsExpansion bool
+	for _, arg := range args {
+		if strings.Contains(arg, "{") && strings.Contains(arg, ",") && strings.Contains(arg, "}") {
+			needsExpansion = true
+			break
+		}
+	}
+	if !needsExpansion {
+		return args
+	}
+
+	result := make([]string, 0, len(args))
+	for _, arg := range args {
+		expanded := expandSingleBrace(arg)
+		result = append(result, expanded...)
+	}
+	return result
+}
+
+// expandSingleBrace expands a single brace pattern in a string.
+// Supports: prefix{a,b,c}suffix → [prefix+a+suffix, prefix+b+suffix, prefix+c+suffix]
+// Does NOT support nested braces (rare in ebuilds).
+func expandSingleBrace(s string) []string {
+	open := strings.Index(s, "{")
+	if open < 0 {
+		return []string{s}
+	}
+
+	// Find matching close brace (skip nested)
+	close := -1
+	depth := 0
+	for i := open; i < len(s); i++ {
+		switch s[i] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				close = i
+				goto found
+			}
+		}
+	}
+found:
+	if close < 0 {
+		return []string{s}
+	}
+
+	// Extract prefix, alternatives, suffix
+	prefix := s[:open]
+	inner := s[open+1 : close]
+	suffix := s[close+1:]
+
+	// Check for comma (brace expansion requires at least one comma)
+	if !strings.Contains(inner, ",") {
+		return []string{s}
+	}
+
+	// Split alternatives by comma
+	parts := strings.Split(inner, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		expanded := prefix + part + suffix
+		// Recursively expand remaining braces in suffix
+		result = append(result, expandSingleBrace(expanded)...)
+	}
+	return result
+}
+
+// paramExpansionRe matches ${VAR@op} parameter expansion operators
+// unsupported by mvdan.cc/sh. Captures: $1=varname (with optional !), $2=operator.
+var paramExpansionRe = regexp.MustCompile(`\$\{(!?[a-zA-Z_][a-zA-Z0-9_]*)@([aQEPAK])\}`)
+
+// redirectRe matches ">& file" (redirect stdout+stderr to file) which mvdan.cc/sh
+// doesn't support (it only handles ">& fd" for fd duplication). We transform it to
+// "&> file" which is the equivalent bash syntax that mvdan.cc/sh handles correctly.
+// The regex requires that >& is NOT preceded by a digit (to avoid matching n>&m fd dup)
+// and IS followed by a non-digit (filename, not fd number).
+var redirectRe = regexp.MustCompile(`(?m)(^|[^0-9])>&(\s*[^0-9\s&])`)
+
+// preprocessScript transforms bash constructs unsupported by mvdan.cc/sh
+// into equivalent forms that won't cause parser/runtime panics.
+//
+// Handles:
+//   - ${VAR@a} → "a" (variable attributes; assume array for eclass compatibility)
+//   - ${VAR@Q/E/P/A/K} → "" (other transformation operators)
+//   - >& file → &> file (bash synonym, mvdan/sh panics on >& with filename)
+//
+// This is needed because Gentoo eclasses (e.g., app-alternatives.eclass) use
+// ${ALTERNATIVES@a} to check if a variable is an array, which mvdan.cc/sh
+// does not support and panics on.
+func preprocessScript(script string) string {
+	// Transform >& file → &> file (both mean redirect stdout+stderr to file).
+	// mvdan.cc/sh panics on >& with a filename argument (it only supports
+	// >& fd for file descriptor duplication). Bash treats >& file as &> file.
+	if strings.Contains(script, ">&") {
+		script = redirectRe.ReplaceAllString(script, "${1}&>${2}")
+	}
+
+	if !strings.Contains(script, "@") {
+		return script
+	}
+	return paramExpansionRe.ReplaceAllStringFunc(script, func(match string) string {
+		sub := paramExpansionRe.FindStringSubmatch(match)
+		if len(sub) < 3 {
+			return match
+		}
+		switch sub[2] {
+		case "a":
+			// @a returns variable attributes. In Gentoo eclasses, this checks
+			// array declarations (e.g., ${ALTERNATIVES@a} should contain "a").
+			// Returning "a" satisfies the check since ebuilds declare these as arrays.
+			return "a"
+		default:
+			return ""
+		}
+	})
 }

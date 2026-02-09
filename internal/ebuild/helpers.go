@@ -24,6 +24,7 @@ import (
 	"runtime"
 
 	"github.com/grpmsoft/grpm/internal/state"
+	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/interp"
 )
 
@@ -90,6 +91,17 @@ type Helpers struct {
 	// Command dispatcher for nonfatal command execution.
 	// Set by the interpreter to allow nonfatal to execute commands.
 	commandDispatcher func(cmd string, args []string) error
+
+	// runtimeEnv holds the current bash runner's environment during command dispatch.
+	// Set by the exec handler before calling Go helpers, cleared after return.
+	// This allows Go helpers to read variables set in the running bash script
+	// (e.g., DISTUTILS_USE_PEP517) that aren't in the Environment struct.
+	runtimeEnv expand.Environ
+
+	// runtimeDir holds the current bash CWD during command dispatch.
+	// Set by the exec handler from hc.Dir, cleared after return.
+	// This is the actual working directory of the bash script (changed by cd).
+	runtimeDir string
 }
 
 // NewHelpers creates helpers instance with default settings.

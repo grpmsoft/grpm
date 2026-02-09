@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 
 	"github.com/grpmsoft/grpm/internal/config"
 	"github.com/grpmsoft/grpm/internal/daemon"
@@ -16,6 +17,7 @@ import (
 	"github.com/grpmsoft/grpm/internal/install"
 	"github.com/grpmsoft/grpm/internal/logging"
 	"github.com/grpmsoft/grpm/internal/pkg"
+	"github.com/grpmsoft/grpm/internal/repo"
 	"github.com/grpmsoft/grpm/internal/solver"
 	"github.com/grpmsoft/grpm/internal/tools"
 )
@@ -34,6 +36,8 @@ import (
 //   - Use --jobs/-j N to build N packages in parallel (default: 1)
 //   - Dependencies are respected: a package only builds after its deps complete
 //   - Use --keep-going to continue building on failure
+//
+//nolint:gocyclo // CLI entry point with many flags and modes — splitting would fragment user-facing logic.
 func (a *App) runEmerge(args []string) error {
 	// Load Portage configuration (make.conf)
 	cfg := a.loadPortageConfig()
@@ -63,6 +67,8 @@ func (a *App) runEmerge(args []string) error {
 	rootPath := fs.String("root", "/", "Installation root directory (like $ROOT in Portage)")
 	onlyDeps := fs.Bool("onlydeps", false, "Build dependencies only, not the target package(s)")
 	fs.BoolVar(onlyDeps, "o", false, "Alias for --onlydeps")
+	noDeps := fs.Bool("nodeps", false, "Skip dependency resolution, build only specified packages")
+	fs.BoolVar(noDeps, "O", false, "Alias for --nodeps")
 	showInfo := fs.Bool("info", false, "Show system environment information")
 
 	// Dependency resolution options (Portage-compatible)
@@ -123,23 +129,45 @@ func (a *App) runEmerge(args []string) error {
 		return err
 	}
 
-	// Resolve dependencies with Portage-compatible filtering
-	logging.Action("Calculating dependencies...")
-	solution, err := a.resolvePackageDependenciesWithOptions(r, packages, solver.ResolveOptions{
-		Deep:      *deep,
-		WithBdeps: *withBdeps,
-		EmptyTree: *emptyTree || *useMock, // Mock mode implies emptytree
-	}, *varDbPath, *useMock)
-	if err != nil {
-		return err
-	}
+	var solution map[string]*pkg.Package
 
-	// Filter out target packages if --onlydeps is specified
-	if *onlyDeps {
-		solution = a.filterTargetPackages(solution, packages)
-		if len(solution) == 0 {
-			logging.Info("No dependencies to build (--onlydeps specified)")
-			return nil
+	if *noDeps {
+		// --nodeps: skip resolution, just find the best acceptable version
+		logging.Action("Skipping dependency resolution (--nodeps)...")
+		acceptKeywords := []string{"amd64", "~amd64"}
+		if cfg != nil && len(cfg.MakeConf.ACCEPT_KEYWORDS) > 0 {
+			acceptKeywords = cfg.MakeConf.ACCEPT_KEYWORDS
+		}
+		solution = make(map[string]*pkg.Package)
+		for _, name := range packages {
+			found, loadErr := a.loadBestAcceptableVersion(r, name, acceptKeywords)
+			if loadErr != nil || found == nil {
+				logging.Warn("Package %s not found: %v", name, loadErr)
+				continue
+			}
+			key := fmt.Sprintf("%s-%s", found.Name, found.Version)
+			solution[key] = found
+		}
+	} else {
+		// Resolve dependencies with Portage-compatible filtering
+		logging.Action("Calculating dependencies...")
+		var resolveErr error
+		solution, resolveErr = a.resolvePackageDependenciesWithOptions(r, packages, solver.ResolveOptions{
+			Deep:      *deep,
+			WithBdeps: *withBdeps,
+			EmptyTree: *emptyTree || *useMock, // Mock mode implies emptytree
+		}, *varDbPath, *useMock)
+		if resolveErr != nil {
+			return resolveErr
+		}
+
+		// Filter out target packages if --onlydeps is specified
+		if *onlyDeps {
+			solution = a.filterTargetPackages(solution, packages)
+			if len(solution) == 0 {
+				logging.Info("No dependencies to build (--onlydeps specified)")
+				return nil
+			}
 		}
 	}
 
@@ -164,9 +192,9 @@ func (a *App) runEmerge(args []string) error {
 		fmt.Printf("*** Parallel builds: %d packages at a time\n", *parallelBuilds)
 	}
 	fmt.Println()
-	for name, p := range solution {
+	for _, p := range solution {
 		useStr := FormatUSEFlags(p, cfg)
-		fmt.Printf("[ebuild  N    ] %s-%s %s\n", name, p.Version, useStr)
+		fmt.Printf("[ebuild  N    ] %s-%s %s\n", p.Name, p.Version, useStr)
 	}
 	fmt.Printf("\nTotal: %d package(s)\n", len(solution))
 
@@ -184,21 +212,32 @@ func (a *App) runEmerge(args []string) error {
 		}
 	}
 
+	// Resolve effective USE flags for each package before building.
+	// This applies make.conf USE, USE_EXPAND variables (PYTHON_TARGETS, etc.),
+	// and per-package USE from package.use to each package's UseFlags map.
+	// Per Portage: USE_EXPAND vars like PYTHON_TARGETS="python3_12" are converted
+	// to USE flags like python_targets_python3_12.
+	for _, p := range solution {
+		ApplyEffectiveUSE(p, cfg)
+	}
+
 	// Create fetcher for downloading sources (with mirrors from config)
 	fetcher := a.createFetcherWithConfig(*distDir, cfg)
 
 	// Build options for the build function
 	buildOpts := &parallelBuildOptions{
-		repoPath:    *repoPath,
-		distDir:     *distDir,
-		tmpDir:      *tmpDir,
-		makeJobs:    *makeJobs,
-		keepWork:    *keepWork,
-		enableTests: *enableTests,
-		replace:     *replace,
-		force:       *force,
-		root:        *rootPath,
-		fetcher:     fetcher,
+		repoPath:      *repoPath,
+		distDir:       *distDir,
+		tmpDir:        *tmpDir,
+		makeJobs:      *makeJobs,
+		keepWork:      *keepWork,
+		enableTests:   *enableTests,
+		replace:       *replace,
+		force:         *force,
+		root:          *rootPath,
+		fetcher:       fetcher,
+		useExpandVars: GetUSEExpandVars(cfg),
+		cfg:           cfg,
 	}
 
 	// Use parallel scheduler if jobs > 1
@@ -207,21 +246,23 @@ func (a *App) runEmerge(args []string) error {
 	}
 
 	// Sequential build (original behavior)
-	return a.buildAndInstallPackages(solution, *repoPath, *distDir, *tmpDir, *makeJobs, *keepWork, *enableTests, *replace, *force, *rootPath, *keepGoing, fetcher)
+	return a.buildAndInstallPackages(solution, *repoPath, *distDir, *tmpDir, *makeJobs, *keepWork, *enableTests, *replace, *force, *rootPath, *keepGoing, fetcher, buildOpts.useExpandVars, cfg)
 }
 
 // parallelBuildOptions holds options for parallel build execution.
 type parallelBuildOptions struct {
-	repoPath    string
-	distDir     string
-	tmpDir      string
-	makeJobs    int
-	keepWork    bool
-	enableTests bool
-	replace     bool
-	force       bool
-	root        string
-	fetcher     fetch.Fetcher
+	repoPath      string
+	distDir       string
+	tmpDir        string
+	makeJobs      int
+	keepWork      bool
+	enableTests   bool
+	replace       bool
+	force         bool
+	root          string
+	fetcher       fetch.Fetcher
+	useExpandVars map[string]string // USE_EXPAND variables (e.g., PYTHON_TARGETS="python3_12")
+	cfg           *config.Config    // Portage configuration for CFLAGS, etc.
 }
 
 // buildPackagesParallel builds packages using the parallel scheduler.
@@ -343,7 +384,7 @@ func (a *App) buildAndInstallSinglePackage(ctx context.Context, p *pkg.Package, 
 	logging.Action("Building %s-%s", p.Name, p.Version)
 
 	// Build from source
-	imageDir, err := a.buildPackageFromSource(p, opts.repoPath, opts.distDir, opts.tmpDir, opts.makeJobs, opts.keepWork, opts.enableTests, opts.fetcher)
+	imageDir, err := a.buildPackageFromSource(p, opts.repoPath, opts.distDir, opts.tmpDir, opts.makeJobs, opts.keepWork, opts.enableTests, opts.fetcher, opts.useExpandVars, opts.cfg)
 	if err != nil {
 		return fmt.Errorf("build failed: %w", err)
 	}
@@ -462,7 +503,7 @@ func (a *App) createFetcher(distDir string) fetch.Fetcher {
 }
 
 // buildAndInstallPackages builds packages from source and installs them.
-func (a *App) buildAndInstallPackages(solution map[string]*pkg.Package, repoPath, distDir, tmpDir string, jobs int, keepWork, enableTests, replace, force bool, root string, keepGoing bool, fetcher fetch.Fetcher) error {
+func (a *App) buildAndInstallPackages(solution map[string]*pkg.Package, repoPath, distDir, tmpDir string, jobs int, keepWork, enableTests, replace, force bool, root string, keepGoing bool, fetcher fetch.Fetcher, useExpandVars map[string]string, cfg *config.Config) error {
 	logging.Action("Starting source build...")
 
 	builtCount := 0
@@ -483,9 +524,9 @@ func (a *App) buildAndInstallPackages(solution map[string]*pkg.Package, repoPath
 	pkgNum := 0
 	for name, p := range solution {
 		pkgNum++
-		logging.Action("(%d/%d) Emerging %s-%s", pkgNum, totalPackages, name, p.Version)
+		logging.Action("(%d/%d) Emerging %s-%s", pkgNum, totalPackages, p.Name, p.Version)
 
-		buildErr := a.buildAndInstallSingle(name, p, installer, repoPath, distDir, tmpDir, jobs, keepWork, enableTests, replace, force, fetcher)
+		buildErr := a.buildAndInstallSingle(name, p, installer, repoPath, distDir, tmpDir, jobs, keepWork, enableTests, replace, force, fetcher, useExpandVars, cfg)
 		if buildErr != nil {
 			if keepGoing {
 				logging.Error("failed to emerge %s: %v", name, buildErr)
@@ -497,7 +538,7 @@ func (a *App) buildAndInstallPackages(solution map[string]*pkg.Package, repoPath
 		}
 
 		builtCount++
-		logging.Action("%s-%s merged successfully (%d/%d)", name, p.Version, builtCount, totalPackages)
+		logging.Action("%s-%s merged successfully (%d/%d)", p.Name, p.Version, builtCount, totalPackages)
 	}
 
 	if failedCount > 0 {
@@ -515,14 +556,14 @@ func (a *App) buildAndInstallPackages(solution map[string]*pkg.Package, repoPath
 // buildAndInstallSingle builds and installs a single package with panic recovery.
 // This prevents interpreter panics (e.g., unsupported bash features) from
 // crashing the entire emerge process when --keep-going is used.
-func (a *App) buildAndInstallSingle(name string, p *pkg.Package, installer *install.Installer, repoPath, distDir, tmpDir string, jobs int, keepWork, enableTests, replace, force bool, fetcher fetch.Fetcher) (buildErr error) {
+func (a *App) buildAndInstallSingle(name string, p *pkg.Package, installer *install.Installer, repoPath, distDir, tmpDir string, jobs int, keepWork, enableTests, replace, force bool, fetcher fetch.Fetcher, useExpandVars map[string]string, cfg *config.Config) (buildErr error) {
 	defer func() {
 		if r := recover(); r != nil {
 			buildErr = fmt.Errorf("internal error (panic): %v", r)
 		}
 	}()
 
-	imageDir, err := a.buildPackageFromSource(p, repoPath, distDir, tmpDir, jobs, keepWork, enableTests, fetcher)
+	imageDir, err := a.buildPackageFromSource(p, repoPath, distDir, tmpDir, jobs, keepWork, enableTests, fetcher, useExpandVars, cfg)
 	if err != nil {
 		return fmt.Errorf("build failed: %w", err)
 	}
@@ -538,7 +579,9 @@ func (a *App) buildAndInstallSingle(name string, p *pkg.Package, installer *inst
 //
 // Returns the image directory (D) where files are installed.
 // If fetcher is provided, source tarballs are downloaded automatically.
-func (a *App) buildPackageFromSource(p *pkg.Package, repoPath, distDir, tmpDir string, jobs int, keepWork, enableTests bool, fetcher fetch.Fetcher) (string, error) {
+//
+//nolint:gocyclo // Build orchestrator with many setup steps — splitting would hurt readability.
+func (a *App) buildPackageFromSource(p *pkg.Package, repoPath, distDir, tmpDir string, jobs int, keepWork, enableTests bool, fetcher fetch.Fetcher, useExpandVars map[string]string, cfg *config.Config) (string, error) {
 	// Find ebuild file
 	ebuildPath := a.findEbuildFile(p, repoPath)
 	if ebuildPath == "" && a.verbose {
@@ -548,16 +591,16 @@ func (a *App) buildPackageFromSource(p *pkg.Package, repoPath, distDir, tmpDir s
 	// Create executor options with fetcher for automatic distfile download
 	// NOTE: KeepWork is always true here because we need the image directory
 	// for installation. Cleanup happens after install in installFromImageDir.
-	opts := ebuild.ExecutorOptions{
-		TmpDir:        tmpDir,
-		PortDir:       repoPath,
-		DistDir:       distDir,
-		EbuildPath:    ebuildPath,
-		EnableSandbox: true,
-		EnableTests:   enableTests,
-		KeepWork:      true, // Must be true - cleanup after install
-		Fetcher:       fetcher,
-	}
+	opts := ebuild.DefaultOptions()
+	opts.TmpDir = tmpDir
+	opts.PortDir = repoPath
+	opts.DistDir = distDir
+	opts.EbuildPath = ebuildPath
+	opts.EnableSandbox = true
+	opts.EnableTests = enableTests
+	opts.KeepWork = true     // Must be true - cleanup after install
+	opts.DenyNetwork = false // Must be false - fetcher needs network access
+	opts.Fetcher = fetcher
 
 	// Create ebuild executor
 	executor, err := ebuild.NewExecutor(p, opts)
@@ -582,6 +625,69 @@ func (a *App) buildPackageFromSource(p *pkg.Package, repoPath, distDir, tmpDir s
 
 	// Set MAKEOPTS for parallel builds
 	executor.Env.MAKEOPTS = fmt.Sprintf("-j%d", jobs)
+
+	// Apply make.conf build variables (CFLAGS, CXXFLAGS, LDFLAGS).
+	// os.Getenv in NewEnvironment may return empty since GRPM runs standalone,
+	// not through a Portage profile that sources make.conf.
+	if cfg != nil && cfg.MakeConf != nil {
+		if executor.Env.CFLAGS == "" && cfg.MakeConf.CFLAGS != "" {
+			executor.Env.CFLAGS = cfg.MakeConf.CFLAGS
+		}
+		if executor.Env.CXXFLAGS == "" && cfg.MakeConf.CXXFLAGS != "" {
+			executor.Env.CXXFLAGS = cfg.MakeConf.CXXFLAGS
+		}
+		if executor.Env.LDFLAGS == "" && cfg.MakeConf.LDFLAGS != "" {
+			executor.Env.LDFLAGS = cfg.MakeConf.LDFLAGS
+		}
+	}
+
+	// Set USE_EXPAND variables as separate environment variables.
+	// Per Portage: PYTHON_TARGETS, PYTHON_SINGLE_TARGET, etc. are set
+	// both as USE flags (python_targets_python3_12 in USE) and as
+	// separate variables (PYTHON_TARGETS="python3_12").
+	if executor.Env.ExtraVars == nil {
+		executor.Env.ExtraVars = make(map[string]string)
+	}
+	for k, v := range useExpandVars {
+		executor.Env.ExtraVars[k] = v
+	}
+
+	// Set multilib/ABI variables from profile defaults.
+	// These come from profiles/arch/amd64/make.defaults in Portage.
+	// Without them, multilib_foreach_abi fails with "no ABIs enabled".
+	// Note: MULTILIB_ABIS only includes "amd64" because ABI_X86="64"
+	// means only 64-bit is enabled. The x86 (32-bit) ABI requires
+	// ABI_X86="64 32" and a 32-bit cross-compiler (i686-pc-linux-gnu-gcc).
+	multilibDefaults := map[string]string{
+		"DEFAULT_ABI":   "amd64",
+		"MULTILIB_ABIS": "amd64",
+		"ABI":           "amd64",
+		"ABI_X86":       "64",
+		"CHOST":         "x86_64-pc-linux-gnu",
+		"CBUILD":        "x86_64-pc-linux-gnu",
+		"CHOST_amd64":   "x86_64-pc-linux-gnu",
+		"LIBDIR_amd64":  "lib64",
+	}
+	for k, v := range multilibDefaults {
+		if _, exists := executor.Env.ExtraVars[k]; !exists {
+			executor.Env.ExtraVars[k] = v
+		}
+	}
+
+	// Pass all make.conf variables to environment (profile variables, etc.)
+	if cfg != nil {
+		for _, varName := range []string{
+			"ARCH", "KERNEL", "USERLAND",
+			"ACCEPT_KEYWORDS", "ACCEPT_LICENSE",
+			"USE_EXPAND", "USE_EXPAND_HIDDEN",
+		} {
+			if v := cfg.GetVariable(varName); v != "" {
+				if _, exists := executor.Env.ExtraVars[varName]; !exists {
+					executor.Env.ExtraVars[varName] = v
+				}
+			}
+		}
+	}
 
 	// Execute build phases (fetch happens automatically before unpack)
 	logging.Action("Fetching sources...")
@@ -693,6 +799,53 @@ func (a *App) filterTargetPackages(solution map[string]*pkg.Package, packages []
 	}
 
 	return filtered
+}
+
+// loadBestAcceptableVersion loads the best non-masked, keyword-accepted version of a package.
+// If the highest version is a live ebuild (9999) or has no acceptable KEYWORDS,
+// it falls back to GetAllVersions and picks the best acceptable one.
+func (a *App) loadBestAcceptableVersion(r repo.Repository, name string, acceptKeywords []string) (*pkg.Package, error) {
+	p, err := r.LoadPackage(name)
+	if err != nil {
+		return nil, err
+	}
+
+	// Check if highest version is acceptable
+	if p.IsKeywordAccepted(acceptKeywords) {
+		return p, nil
+	}
+
+	// Highest version is masked/unkeyworded — try all versions
+	versions, err := r.GetAllVersions(name)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get versions for %s: %w", name, err)
+	}
+
+	// Filter to acceptable versions
+	var acceptable []*pkg.Package
+	for _, v := range versions {
+		if v.IsKeywordAccepted(acceptKeywords) {
+			acceptable = append(acceptable, v)
+		}
+	}
+
+	if len(acceptable) == 0 {
+		// No acceptable versions; fall back to highest (user may have reasons)
+		logging.Warn("No keyword-accepted version found for %s, using %s", name, p.Version)
+		return p, nil
+	}
+
+	// Sort by version (highest first)
+	sort.Slice(acceptable, func(i, j int) bool {
+		return pkg.CompareVersions(acceptable[i].Version, acceptable[j].Version) > 0
+	})
+
+	if acceptable[0].Version != p.Version {
+		logging.Debug("Package %s-%s is unkeyworded, using %s instead",
+			name, p.Version, acceptable[0].Version)
+	}
+
+	return acceptable[0], nil
 }
 
 // checkBuildTools verifies that all required external tools are available.

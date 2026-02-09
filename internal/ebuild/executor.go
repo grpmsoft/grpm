@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/grpmsoft/grpm/internal/distfile"
 	"github.com/grpmsoft/grpm/internal/eclass"
@@ -346,9 +347,7 @@ func (e *Executor) fetchDistfiles(ctx context.Context) error {
 	// Get distfiles with expanded URIs from SRC_URI
 	distfiles, err := e.getDistfilesWithURIs(manifest)
 	if err != nil {
-		// Fallback to manifest-only distfiles if SRC_URI parsing fails
-		logging.Debug("[ebuild] Warning: SRC_URI parsing failed: %v, using manifest-only", err)
-		distfiles = manifest.GetDistfiles()
+		return fmt.Errorf("resolving distfiles: %w", err)
 	}
 
 	if len(distfiles) == 0 {
@@ -386,13 +385,7 @@ func (e *Executor) getDistfilesWithURIs(manifest *fetch.Manifest) ([]fetch.Distf
 	svc := distfile.NewService(e.RepoPath, evaluator)
 	ctx := context.Background()
 
-	distfiles, err := svc.ResolveDistfiles(ctx, e.Package, e.EbuildPath, manifest)
-	if err != nil {
-		logging.Warn("distfile resolution failed: %v, using manifest", err)
-		return manifest.GetDistfiles(), nil
-	}
-
-	return distfiles, nil
+	return svc.ResolveDistfiles(ctx, e.Package, e.EbuildPath, manifest)
 }
 
 // extractEbuildVariable extracts a variable value from ebuild content.
@@ -672,13 +665,13 @@ func (e *Executor) ParseEbuild() error {
 		logging.Debug("[ebuild] inherits: %v", parsed.InheritedEclasses)
 	}
 
-	// Parse and evaluate S variable if defined in ebuild
-	if err := e.parseSVariable(); err != nil {
-		logging.Debug("[ebuild] warning: failed to parse S variable: %v", err)
-	}
-
-	// Debug: Log final S value
-	logging.Debug("[ebuild] final S value: %s", e.Env.S)
+	// S variable handling: Do NOT parse S from ebuild with regex.
+	// Ebuilds often define S conditionally (if [[ ${PV} == *_p* ]]; then S=...),
+	// which regex-based extraction cannot handle correctly. Instead, we rely on:
+	// 1. Default S = WORKDIR/P (set by NewEnvironment)
+	// 2. __grpm_sync_env in the combined script reads $S from bash AFTER
+	//    the ebuild's conditionals have been properly evaluated.
+	logging.Debug("[ebuild] S value (default): %s", e.Env.S)
 
 	return nil
 }
@@ -692,35 +685,6 @@ func (e *Executor) ParseEbuild() error {
 //
 // This method reads the ebuild, extracts S, expands variables and parameter
 // substitutions, and updates e.Env.S if different from default.
-func (e *Executor) parseSVariable() error {
-	if e.EbuildPath == "" {
-		return nil
-	}
-
-	// Read ebuild content
-	content, err := os.ReadFile(e.EbuildPath)
-	if err != nil {
-		return fmt.Errorf("reading ebuild: %w", err)
-	}
-
-	// Build variable map for expansion
-	vars := e.Env.ToMap()
-
-	// Parse S variable with bash parameter expansion
-	sValue := ParseSVariable(string(content), vars)
-	if sValue == "" {
-		return nil // S not defined, use default
-	}
-
-	// Update S if different from default
-	if sValue != e.Env.S {
-		logging.Debug("[ebuild] custom S detected: %s (default was: %s)", sValue, e.Env.S)
-		e.Env.S = sValue
-	}
-
-	return nil
-}
-
 // RunCommand executes a command, optionally within the sandbox.
 //
 // If sandbox is enabled, the command runs with filesystem isolation.
@@ -825,6 +789,13 @@ func (e *Executor) HasPhaseFunction(phase Phase) bool {
 		}
 	}
 
+	// Also check the dynamic eclass loader's executor (separate EXPORT_FUNCTIONS state)
+	if e.dynamicLoader != nil {
+		if _, ok := e.dynamicLoader.GetExportedFunction(funcName); ok {
+			return true
+		}
+	}
+
 	return false
 }
 
@@ -845,6 +816,8 @@ func (e *Executor) HasPhaseFunction(phase Phase) bool {
 // combined script that sources the ebuild and calls the function in one pass.
 // This is necessary because mvdan.cc/sh doesn't persist function definitions
 // between runs.
+//
+//nolint:gocyclo // Phase orchestrator: builds combined script with eclass workarounds — inherently complex.
 func (e *Executor) RunPhaseFunction(phase Phase) (string, error) {
 	funcName := phaseFunctionName(phase)
 	if funcName == "" {
@@ -868,12 +841,27 @@ func (e *Executor) RunPhaseFunction(phase Phase) (string, error) {
 		}
 	}
 
-	// Check if we need to call an eclass function instead of ebuild's own
+	// Determine whether to call the ebuild's own function or an eclass export.
+	// Priority: ebuild's own function > eclass EXPORT_FUNCTIONS.
+	// When an eclass does EXPORT_FUNCTIONS src_configure, Portage creates a
+	// wrapper src_configure() that calls eclass_src_configure(). If the ebuild
+	// defines its own src_configure(), it overrides the wrapper. We replicate
+	// this: only use the eclass prefixed version when the ebuild itself does
+	// NOT define the function.
 	eclassName := ""
-	helpers := e.interpreter.GetHelpers()
-	if helpers != nil && helpers.eclassRegistry != nil {
-		if ec, ok := helpers.eclassRegistry.GetExportedFunction(funcName); ok {
-			eclassName = ec
+	ebuildDefinesFunc := e.ParsedEbuild != nil && e.ParsedEbuild.HasFunction(funcName)
+	if !ebuildDefinesFunc {
+		helpers := e.interpreter.GetHelpers()
+		if helpers != nil && helpers.eclassRegistry != nil {
+			if ec, ok := helpers.eclassRegistry.GetExportedFunction(funcName); ok {
+				eclassName = ec
+			}
+		}
+		// Also check dynamic loader (separate EXPORT_FUNCTIONS state)
+		if eclassName == "" && e.dynamicLoader != nil {
+			if ec, ok := e.dynamicLoader.GetExportedFunction(funcName); ok {
+				eclassName = ec
+			}
 		}
 	}
 
@@ -889,19 +877,178 @@ func (e *Executor) RunPhaseFunction(phase Phase) (string, error) {
 	combinedScript.WriteString(fmt.Sprintf("EBUILD_PHASE=%s\n", phase))
 	combinedScript.WriteString(fmt.Sprintf("EBUILD_PHASE_FUNC=%s\n", funcName))
 
-	// Source the ebuild to define all functions
-	if e.EbuildPath != "" {
+	// Define bash-level inherit() and EXPORT_FUNCTIONS() so that eclasses
+	// are sourced in the CURRENT bash scope. Without this, eclasses loaded
+	// via Go's DynamicEclassLoader define their functions in a separate
+	// executor, making them unavailable to the combined script. Functions
+	// like multilib_foreach_abi need to call ebuild-defined bash functions
+	// (e.g., multilib_src_configure), which only works when everything
+	// runs in the same bash scope.
+	// Embed eclass content directly in the combined script so that all
+	// eclass functions are defined in the same bash scope as the ebuild.
+	// This is critical for eclasses like multilib-minimal that call
+	// ebuild-defined bash functions (e.g., multilib_src_configure).
+	//
+	// mvdan.cc/sh's `. file` (source) does not reliably persist function
+	// definitions from sourced files, so we embed them inline instead.
+	// Split ebuild into pre-inherit and post-inherit parts.
+	// In Portage, variables like PYTHON_COMPAT are set BEFORE `inherit`,
+	// so eclasses can see them in top-level code. We replicate this by
+	// emitting pre-inherit lines before the embedded eclasses.
+	var ebuildPostInherit []byte
+	if e.eclassCache != nil && e.EbuildPath != "" {
+		if ebContent, err := os.ReadFile(e.EbuildPath); err == nil {
+			preInherit, postInherit := splitEbuildAtInherit(ebContent)
+			if len(preInherit) > 0 {
+				combinedScript.WriteString("\n# --- BEGIN EBUILD SOURCE (pre-inherit) ---\n")
+				combinedScript.Write(preInherit)
+				combinedScript.WriteString("\n# --- END EBUILD SOURCE (pre-inherit) ---\n")
+			}
+			ebuildPostInherit = postInherit
+		}
+	}
+
+	if e.eclassCache != nil {
+		combinedScript.WriteString("\n# --- BEGIN ECLASS SUPPORT ---\n")
+
+		// Set EAPI before eclasses — they check it with `case ${EAPI} in 7|8)`.
+		// Without this, die() is called and no functions get defined.
+		if e.Env != nil && e.Env.EAPI != "" {
+			combinedScript.WriteString(fmt.Sprintf("EAPI=%s\n", e.Env.EAPI))
+		}
+
+		// Set BASH_VERSINFO to bash 4 so eclasses that check the version
+		// (e.g., python-utils-r1 `${BASH_VERSINFO[0]} -ge 5`) take the
+		// bash 4 code path which uses `declare -p` (replaced by __grpm_has_var)
+		// instead of bash 5+ parameter attributes (`${var@a}`) that mvdan.cc/sh
+		// doesn't support.
+		combinedScript.WriteString("BASH_VERSINFO=(4 4 0 0 release x86_64-pc-linux-gnu)\n")
+
+		// Initialize multilib arrays to empty to prevent mvdan.cc/sh from
+		// expanding unset "${arr[@]}" to a single empty string (which causes
+		// spurious loop iterations in multilib_prepare_wrappers).
+		combinedScript.WriteString("MULTILIB_CHOST_TOOLS=()\n")
+		combinedScript.WriteString("MULTILIB_WRAPPED_HEADERS=()\n")
+
+		// EXPORT_FUNCTIONS: creates wrapper functions per PMS.
+		// When eclass "cmake" calls EXPORT_FUNCTIONS src_configure,
+		// it creates src_configure() that calls cmake_src_configure().
+		combinedScript.WriteString(`EXPORT_FUNCTIONS() {
+  local func
+  for func in "$@"; do
+    eval "${func}() { ${ECLASS}_${func} \"\$@\"; }"
+  done
+}
+`)
+		// inherit(): no-op since eclass content is embedded directly.
+		combinedScript.WriteString(`inherit() {
+  true
+}
+`)
+
+		// Resolve and embed all eclasses from the ebuild's inherit line.
+		// We pre-resolve the entire chain (including sub-inherits) using
+		// the eclass cache, then embed each eclass in dependency order.
+		if e.ParsedEbuild != nil && len(e.ParsedEbuild.InheritedEclasses) > 0 {
+			resolved := e.resolveEclassChain(e.ParsedEbuild.InheritedEclasses)
+			logging.Debug("[ebuild] resolved %d eclasses for embedding", len(resolved))
+			for _, ec := range resolved {
+				content, err := os.ReadFile(ec.path)
+				if err != nil {
+					logging.Debug("[ebuild] warning: cannot read eclass %s: %v", ec.name, err)
+					continue
+				}
+				// Preprocess eclass content for mvdan.cc/sh compatibility:
+				// 1. Replace 'declare -f' with '__grpm_has_func' (declare -f unsupported)
+				// 2. Replace 'declare -p' with '__grpm_has_var' (declare -p unsupported)
+				processed := bytes.ReplaceAll(content, []byte("declare -f "), []byte("__grpm_has_func "))
+				processed = bytes.ReplaceAll(processed, []byte("declare -p "), []byte("__grpm_has_var "))
+				// mvdan.cc/sh: `type -P` returns "NOT IMPLEMENTED" (exit 3).
+				// `command -v` is functionally equivalent and supported.
+				// See: https://github.com/mvdan/sh/issues/XXX (TODO: file upstream)
+				processed = bytes.ReplaceAll(processed, []byte("type -P "), []byte("command -v "))
+				combinedScript.WriteString(fmt.Sprintf("\n# --- BEGIN ECLASS: %s ---\n", ec.name))
+				combinedScript.WriteString(fmt.Sprintf("ECLASS=%s\n", ec.name))
+				combinedScript.Write(processed)
+				combinedScript.WriteString(fmt.Sprintf("\n# --- END ECLASS: %s ---\n", ec.name))
+			}
+		}
+
+		// Override multibuild_foreach_variant to avoid process substitution
+		// >(exec tee ...) which mvdan.cc/sh doesn't support.
+		// Simplified version: run commands directly without tee.
+		// Uses ${S} as default (matching the original eclass) so BUILD_DIR
+		// resolves to e.g. work/zlib-1.3.1-.amd64 (not work-.amd64).
+		combinedScript.WriteString(`
+multibuild_foreach_variant() {
+  local bdir=${BUILD_DIR:-${S}}
+
+  # Avoid writing outside WORKDIR if S=${WORKDIR}.
+  [[ ${bdir%%/} == ${WORKDIR%%/} ]] && bdir=${WORKDIR}/build
+
+  local prev_id=${MULTIBUILD_ID:+${MULTIBUILD_ID}-}
+  local ret=0 lret=0 v
+
+  for v in "${MULTIBUILD_VARIANTS[@]}"; do
+    local MULTIBUILD_VARIANT=${v}
+    local MULTIBUILD_ID=${prev_id}${v}
+    local BUILD_DIR=${bdir%%/}-${v}
+
+    _multibuild_run() {
+      local i=1
+      while [[ ${!i} == _* ]]; do
+        (( i += 1 ))
+      done
+      [[ ${i} -le ${#} ]] && einfo "${v}: running ${@:${i}}"
+      "${@}"
+    }
+
+    _multibuild_run "${@}" 2>&1
+    lret=${?}
+    [[ ${ret} -eq 0 && ${lret} -ne 0 ]] && ret=${lret}
+  done
+
+  return ${ret}
+}
+`)
+		combinedScript.WriteString("# --- END ECLASS SUPPORT ---\n\n")
+	}
+
+	// Source the ebuild to define all functions.
+	// The post-inherit portion was already split in ebuildPostInherit above;
+	// pre-inherit was emitted before eclasses so variables like PYTHON_COMPAT
+	// are available when eclass top-level code runs.
+	if len(ebuildPostInherit) > 0 {
+		combinedScript.WriteString("\n# --- BEGIN EBUILD SOURCE (post-inherit) ---\n")
+		combinedScript.Write(ebuildPostInherit)
+		combinedScript.WriteString("\n# --- END EBUILD SOURCE ---\n\n")
+	} else if e.EbuildPath != "" {
+		// No eclass support — emit the full ebuild
 		if _, err := os.Stat(e.EbuildPath); err == nil {
 			content, err := os.ReadFile(e.EbuildPath)
 			if err != nil {
 				return "", fmt.Errorf("reading ebuild: %w", err)
 			}
-			// Embed ebuild content directly in the script
-			// This ensures function definitions persist for the function call
 			combinedScript.WriteString("\n# --- BEGIN EBUILD SOURCE ---\n")
 			combinedScript.Write(content)
 			combinedScript.WriteString("\n# --- END EBUILD SOURCE ---\n\n")
 		}
+	}
+
+	// Sync critical variables from bash env to Go struct.
+	// Ebuilds may override S, WORKDIR, etc. in top-level code (e.g., S="${WORKDIR}/${MY_P}").
+	// This command is intercepted by the interpreter to update env.S, env.WORKDIR.
+	combinedScript.WriteString("__grpm_sync_env\n")
+
+	// Set CWD per Portage's phase-functions.sh rules.
+	// src_unpack runs in $WORKDIR; src_prepare through src_install run in $S
+	// (with $WORKDIR fallback if $S doesn't exist, per EAPI 7+).
+	// pkg_* phases don't change directory.
+	switch phase {
+	case PhaseUnpack:
+		combinedScript.WriteString("cd \"${WORKDIR}\" || true\n")
+	case PhasePrepare, PhaseConfigure, PhaseCompile, PhaseTest, PhaseInstall:
+		combinedScript.WriteString("if [[ -d \"${S}\" ]]; then cd \"${S}\"; else cd \"${WORKDIR}\"; fi\n")
 	}
 
 	// Determine which function to call
@@ -918,6 +1065,17 @@ func (e *Executor) RunPhaseFunction(phase Phase) (string, error) {
 	// Call the phase function
 	combinedScript.WriteString(fmt.Sprintf("%s\n", targetFunc))
 
+	// Debug: dump combined script for configure phase
+	if phase == PhaseConfigure {
+		logging.Debug("[ebuild] combined script length: %d bytes", combinedScript.Len())
+		// Write script to temp file for debugging
+		if tmpFile := e.Env.T; tmpFile != "" {
+			debugPath := filepath.Join(tmpFile, "grpm-combined-configure.sh")
+			_ = os.WriteFile(debugPath, combinedScript.Bytes(), 0644)
+			logging.Debug("[ebuild] combined script written to %s", debugPath)
+		}
+	}
+
 	// Ensure exit status 0 if function completed successfully.
 	// This is needed because mvdan.cc/sh may propagate the exit status
 	// from the last command in the function (e.g., `if use flag; then...; fi`
@@ -931,13 +1089,34 @@ func (e *Executor) RunPhaseFunction(phase Phase) (string, error) {
 	var output bytes.Buffer
 	ctx := context.Background()
 
-	// Create interpreter with output capture
+	// Create interpreter with output capture.
+	// Share the eclass loader from the executor's main interpreter so that
+	// dynamically loaded eclasses (meson, cmake, etc.) and their
+	// EXPORT_FUNCTIONS are available when the ebuild is sourced.
 	logging.Debug("[ebuild] RunPhaseFunction: creating interpreter with S=%s", e.Env.S)
-	interp := NewInterpreter(e.Env, &output, &output)
+	interp := NewInterpreter(e.Env, &output, os.Stderr)
+	if e.interpreter != nil {
+		mainHelpers := e.interpreter.GetHelpers()
+		if mainHelpers != nil {
+			// Share the eclass loader so inherit() can load eclasses from repository
+			if loader := mainHelpers.GetEclassLoader(); loader != nil {
+				interp.GetHelpers().SetEclassLoader(loader)
+			}
+			// Share the eclass registry so EXPORT_FUNCTIONS state persists
+			if mainHelpers.eclassRegistry != nil {
+				interp.GetHelpers().eclassRegistry = mainHelpers.eclassRegistry
+			}
+		}
+	}
 
 	// Execute the combined script
 	if err := interp.Run(ctx, combinedScript.String()); err != nil {
+		logging.Debug("[ebuild] RunPhaseFunction error: %v, output: %s", err, output.String())
 		return output.String(), fmt.Errorf("executing %s: %w", funcName, err)
+	}
+
+	if output.Len() > 0 {
+		logging.Debug("[ebuild] RunPhaseFunction output (%d bytes): %s", output.Len(), output.String())
 	}
 
 	return output.String(), nil
@@ -961,6 +1140,142 @@ func (e *Executor) initInterpreter() error {
 	}
 
 	return nil
+}
+
+// eclassRef holds the name and path of a resolved eclass.
+type eclassRef struct {
+	name string
+	path string
+}
+
+// resolveEclassChain resolves all eclasses needed by the given inherit list,
+// including sub-inherits, and returns them in dependency-first order.
+// This uses the eclass cache to find files and scans each eclass for
+// nested inherit calls and EXPORT_FUNCTIONS declarations.
+//
+// EXPORT_FUNCTIONS found in eclasses are registered in the Go-level
+// eclassRegistry so that HasPhaseFunction() returns true for phases
+// provided by eclasses. Without this, phases like src_install would
+// fall through to the default implementation instead of using the
+// eclass's multilib wrapper.
+func (e *Executor) resolveEclassChain(initial []string) []eclassRef {
+	if e.eclassCache == nil {
+		return nil
+	}
+
+	visited := make(map[string]bool)
+	var result []eclassRef
+
+	var resolve func(names []string)
+	resolve = func(names []string) {
+		for _, name := range names {
+			if visited[name] {
+				continue
+			}
+			visited[name] = true
+
+			// Find eclass in cache
+			ec, err := e.eclassCache.Get(name)
+			if err != nil {
+				logging.Debug("[ebuild] eclass %s not found in cache: %v", name, err)
+				continue
+			}
+
+			// Scan for nested inherit calls
+			content, err := os.ReadFile(ec.Path)
+			if err != nil {
+				continue
+			}
+			subInherits := scanInheritCalls(string(content))
+			if len(subInherits) > 0 {
+				resolve(subInherits) // Resolve dependencies first
+			}
+
+			// Register EXPORT_FUNCTIONS in Go-level registry so
+			// HasPhaseFunction() works correctly for eclass-provided phases.
+			if e.interpreter != nil {
+				helpers := e.interpreter.GetHelpers()
+				if helpers != nil && helpers.eclassRegistry != nil {
+					exports := scanExportFunctions(string(content))
+					if len(exports) > 0 {
+						helpers.eclassRegistry.SetCurrentEclass(name)
+						for _, phase := range exports {
+							_ = helpers.eclassRegistry.ExportFunction(phase)
+						}
+						logging.Debug("[ebuild] registered EXPORT_FUNCTIONS from %s: %v", name, exports)
+					}
+				}
+			}
+
+			result = append(result, eclassRef{name: name, path: ec.Path})
+		}
+	}
+
+	resolve(initial)
+	return result
+}
+
+// scanExportFunctions extracts phase names from EXPORT_FUNCTIONS calls in eclass source.
+// Returns phase names like "src_configure", "src_compile", "src_install".
+func scanExportFunctions(content string) []string {
+	var phases []string
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.HasPrefix(line, "EXPORT_FUNCTIONS ") {
+			parts := strings.Fields(line)
+			phases = append(phases, parts[1:]...)
+		}
+	}
+	return phases
+}
+
+// scanInheritCalls extracts eclass names from `inherit` calls in bash source.
+// Handles both simple `inherit foo bar` and calls inside if blocks.
+func scanInheritCalls(content string) []string {
+	var eclasses []string
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		// Match lines starting with "inherit " (ignoring comments)
+		if strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.HasPrefix(line, "inherit ") {
+			parts := strings.Fields(line)
+			eclasses = append(eclasses, parts[1:]...)
+		}
+	}
+	return eclasses
+}
+
+// splitEbuildAtInherit splits ebuild content into pre-inherit and post-inherit
+// parts. In Portage, the ebuild is sourced top-to-bottom, so variables defined
+// before `inherit` (like PYTHON_COMPAT, DISTUTILS_USE_PEP517) are available
+// when eclass top-level code runs. The pre-inherit portion includes everything
+// up to (but not including) the first top-level `inherit` call. The post-inherit
+// portion starts right after. If no `inherit` is found, pre is empty and post
+// is the full content.
+func splitEbuildAtInherit(content []byte) (pre, post []byte) {
+	lines := bytes.Split(content, []byte("\n"))
+	for i, line := range lines {
+		trimmed := bytes.TrimSpace(line)
+		if bytes.HasPrefix(trimmed, []byte("#")) {
+			continue
+		}
+		if bytes.HasPrefix(trimmed, []byte("inherit ")) || bytes.Equal(trimmed, []byte("inherit")) {
+			// Everything up to this line is pre-inherit (skip the inherit line itself)
+			pre = bytes.Join(lines[:i], []byte("\n"))
+			// Post-inherit: everything after the inherit line
+			if i+1 < len(lines) {
+				post = bytes.Join(lines[i+1:], []byte("\n"))
+			}
+			return pre, post
+		}
+	}
+	// No inherit found — everything is post-inherit
+	return nil, content
 }
 
 // GetCurrentPhase returns the currently executing phase.

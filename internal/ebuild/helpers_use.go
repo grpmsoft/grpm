@@ -154,14 +154,28 @@ func (h *Helpers) isUseEnabled(flag string) bool {
 		return false
 	}
 
-	// Check in Package.UseFlags first (preferred)
+	// Check in Package.UseFlags first (preferred — includes USE_EXPAND resolution)
 	if h.env.Package != nil {
 		if enabled, exists := h.env.Package.UseFlags[flag]; exists {
 			return enabled
 		}
 	}
 
-	// Fall back to USE environment variable
+	// Check the runtime bash environment (may have USE modified by eclasses)
+	if h.runtimeEnv != nil {
+		if useStr := h.runtimeEnv.Get("USE").String(); useStr != "" {
+			for _, f := range strings.Fields(useStr) {
+				if f == flag {
+					return true
+				}
+				if f == "-"+flag {
+					return false
+				}
+			}
+		}
+	}
+
+	// Fall back to USE environment variable from the Go struct
 	useFlags := strings.Fields(h.env.USE)
 	for _, f := range useFlags {
 		if f == flag {
@@ -189,8 +203,19 @@ func (h *Helpers) isInIuse(flag string) bool {
 		}
 	}
 
-	// Fall back to IUSE environment variable (not in Environment struct currently)
-	// TODO: Add IUSE field to Environment struct
+	// Check the runtime bash environment for IUSE (eclasses may extend it)
+	if h.runtimeEnv != nil {
+		if iuseStr := h.runtimeEnv.Get("IUSE").String(); iuseStr != "" {
+			for _, f := range strings.Fields(iuseStr) {
+				// Strip +/- prefix from IUSE declarations
+				f = strings.TrimLeft(f, "+-")
+				if f == flag {
+					return true
+				}
+			}
+		}
+	}
+
 	return false
 }
 

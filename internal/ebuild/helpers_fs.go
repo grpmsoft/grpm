@@ -5,6 +5,7 @@ package ebuild
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 	"io/fs"
@@ -13,59 +14,91 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // ============================================================================
 // EAPI 8 Filesystem Utilities
 // ============================================================================
 
+// resolvePath resolves a relative path against the bash CWD.
+// Uses runtimeDir (from hc.Dir) first, then falls back to $S/$WORKDIR.
+// If the path is already absolute, it is returned as-is.
+func (h *Helpers) resolvePath(path string) string {
+	if filepath.IsAbs(path) {
+		return path
+	}
+	// Prefer the runtime CWD from the bash interpreter (tracks cd commands)
+	if h.runtimeDir != "" {
+		return filepath.Join(h.runtimeDir, path)
+	}
+	if workDir := h.getWorkDir(); workDir != "" {
+		return filepath.Join(workDir, path)
+	}
+	return path
+}
+
 // Sed runs sed on files in place.
 //
 // Usage: sed -i 's/old/new/g' file.txt
 //
 // Simple Go-based sed replacement for basic substitutions.
+//
+//nolint:gocyclo // sed flag/expression parser — inherently complex due to many options.
 func (h *Helpers) Sed(args []string) error {
-	if len(args) < 2 {
-		return &DieError{Message: "sed: requires expression and file"}
+	if len(args) < 1 {
+		return &DieError{Message: "sed: requires arguments"}
 	}
 
+	// Check for simple single-expression case: sed -i 's/old/new/g' file
+	// For anything with -e, -n, -E, or complex expressions, delegate to external sed.
+	hasComplexFlags := false
+	for _, arg := range args {
+		if arg == "-e" || arg == "-n" || arg == "-E" || arg == "-r" ||
+			arg == "--regexp-extended" || strings.HasPrefix(arg, "--") {
+			hasComplexFlags = true
+			break
+		}
+	}
+
+	if hasComplexFlags {
+		return h.sedExternal(args)
+	}
+
+	// Try to parse simple case: [-i] 's/old/new/[g]' file...
 	inPlace := false
 	exprIdx := 0
 
-	// Parse -i flag
-	if args[0] == "-i" {
+	// Parse -i flag (with optional suffix like -i.bak)
+	if len(args) > 0 && (args[0] == "-i" || strings.HasPrefix(args[0], "-i")) {
 		inPlace = true
-		exprIdx = 1
+		if args[0] == "-i" {
+			exprIdx = 1
+		} else {
+			// -i.bak style — ignore backup suffix
+			exprIdx = 1
+		}
 	}
 
 	if len(args) < exprIdx+2 {
-		return &DieError{Message: "sed: requires expression and file"}
+		return h.sedExternal(args)
 	}
 
 	expression := args[exprIdx]
 	files := args[exprIdx+1:]
 
-	// Parse s/old/new/[flags] expression
-	if !strings.HasPrefix(expression, "s/") {
-		// Fall back to external sed for complex expressions
-		cmd := exec.Command("sed", args...)
-		if h.env != nil && h.env.S != "" {
-			cmd.Dir = h.env.S
-		}
-		output, err := cmd.CombinedOutput()
-		if len(output) > 0 {
-			h.writeStdout(string(output))
-		}
-		if err != nil {
-			return &DieError{Message: fmt.Sprintf("sed: %v", err)}
-		}
-		return nil
+	// Parse s/old/new/[flags] or s|old|new|[flags] expression
+	if len(expression) < 2 || expression[0] != 's' {
+		return h.sedExternal(args)
 	}
 
-	// Parse simple substitution
-	parts := strings.Split(expression[2:], "/")
+	delim := expression[1]
+	delimStr := string(delim)
+	rest := expression[2:]
+
+	parts := strings.SplitN(rest, delimStr, 3)
 	if len(parts) < 2 {
-		return &DieError{Message: fmt.Sprintf("sed: invalid expression: %s", expression)}
+		return h.sedExternal(args)
 	}
 
 	old := parts[0]
@@ -81,8 +114,35 @@ func (h *Helpers) Sed(args []string) error {
 	return nil
 }
 
+// sedExternal delegates sed to the system's sed command.
+func (h *Helpers) sedExternal(args []string) error {
+	cmd := exec.Command("sed", args...)
+	// Use runtime CWD first (tracks cd in bash), then fall back to $S/$WORKDIR
+	if h.runtimeDir != "" {
+		cmd.Dir = h.runtimeDir
+	} else if workDir := h.getWorkDir(); workDir != "" {
+		cmd.Dir = workDir
+	}
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if stdout.Len() > 0 {
+		h.writeStdout(stdout.String())
+	}
+	if err != nil {
+		errMsg := strings.TrimSpace(stderr.String())
+		if errMsg != "" {
+			return &DieError{Message: fmt.Sprintf("sed: %s", errMsg)}
+		}
+		return &DieError{Message: fmt.Sprintf("sed: %v", err)}
+	}
+	return nil
+}
+
 // sedFile performs sed substitution on a single file.
 func (h *Helpers) sedFile(file, old, newStr string, global, inPlace bool) error {
+	file = h.resolvePath(file)
 	content, err := os.ReadFile(file)
 	if err != nil {
 		return &DieError{Message: fmt.Sprintf("sed: read %s: %v", file, err)}
@@ -113,8 +173,8 @@ func (h *Helpers) sedFile(file, old, newStr string, global, inPlace bool) error 
 // Wrapper for pkg-config command.
 func (h *Helpers) PkgConfig(args []string) error {
 	cmd := exec.Command("pkg-config", args...)
-	if h.env != nil && h.env.S != "" {
-		cmd.Dir = h.env.S
+	if workDir := h.getWorkDir(); workDir != "" {
+		cmd.Dir = workDir
 	}
 
 	// Set PKG_CONFIG_PATH if needed
@@ -136,11 +196,52 @@ func (h *Helpers) PkgConfig(args []string) error {
 // Cat reads and outputs file contents (simple version).
 func (h *Helpers) Cat(args []string) error {
 	if len(args) < 1 {
-		// Read from stdin - not supported in this context
-		return &DieError{Message: "cat: no file specified"}
+		// No args = read from stdin. Since we don't have stdin access in
+		// the command map handler, return success silently. The caller
+		// may pipe through bash-level redirection which mvdan.cc/sh handles.
+		return nil
 	}
 
 	for _, file := range args {
+		if file == "-" {
+			// "-" means stdin, skip silently
+			continue
+		}
+		content, err := os.ReadFile(file)
+		if err != nil {
+			return &DieError{Message: fmt.Sprintf("cat: %s: %v", file, err)}
+		}
+		h.writeStdout(string(content))
+	}
+
+	return nil
+}
+
+// CatWithStdin reads from stdin when cat is called without file arguments.
+func (h *Helpers) CatWithStdin(stdin io.Reader, args []string) error {
+	if len(args) == 0 || (len(args) == 1 && args[0] == "-") {
+		// Read from stdin
+		if stdin != nil {
+			data, err := io.ReadAll(stdin)
+			if err != nil {
+				return &DieError{Message: fmt.Sprintf("cat: reading stdin: %v", err)}
+			}
+			h.writeStdout(string(data))
+		}
+		return nil
+	}
+
+	for _, file := range args {
+		if file == "-" {
+			if stdin != nil {
+				data, err := io.ReadAll(stdin)
+				if err != nil {
+					return &DieError{Message: fmt.Sprintf("cat: reading stdin: %v", err)}
+				}
+				h.writeStdout(string(data))
+			}
+			continue
+		}
 		content, err := os.ReadFile(file)
 		if err != nil {
 			return &DieError{Message: fmt.Sprintf("cat: %s: %v", file, err)}
@@ -193,27 +294,41 @@ func (h *Helpers) Rm(args []string) error {
 	recursive := false
 	force := false
 	var targets []string
+	endOfFlags := false
 
 	for _, arg := range args {
-		switch arg {
-		case "-r", "-R":
-			recursive = true
-		case "-rf", "-fr":
-			recursive = true
-			force = true
-		case "-f":
-			force = true
-		default:
+		if endOfFlags {
 			targets = append(targets, arg)
+			continue
 		}
+		if arg == "--" {
+			endOfFlags = true
+			continue
+		}
+		if strings.HasPrefix(arg, "-") && len(arg) > 1 && arg[1] != '-' {
+			// Parse combined short flags like -rf, -Rf, -rfv
+			for _, ch := range arg[1:] {
+				switch ch {
+				case 'r', 'R':
+					recursive = true
+				case 'f':
+					force = true
+				case 'v':
+					// verbose - ignore
+				}
+			}
+			continue
+		}
+		targets = append(targets, arg)
 	}
 
 	for _, target := range targets {
+		resolved := h.resolvePath(target)
 		var err error
 		if recursive {
-			err = os.RemoveAll(target)
+			err = os.RemoveAll(resolved)
 		} else {
-			err = os.Remove(target)
+			err = os.Remove(resolved)
 		}
 		if err != nil && !force {
 			return &DieError{Message: fmt.Sprintf("rm: %s: %v", target, err)}
@@ -250,13 +365,14 @@ func (h *Helpers) Cp(args []string) error {
 		return &DieError{Message: "cp: requires source and destination"}
 	}
 
-	dest := sources[len(sources)-1]
+	dest := h.resolvePath(sources[len(sources)-1])
 	sources = sources[:len(sources)-1]
 
 	// Unused - would be used for preserving timestamps
 	_ = preserve
 
 	for _, src := range sources {
+		src = h.resolvePath(src)
 		info, err := os.Stat(src)
 		if err != nil {
 			return &DieError{Message: fmt.Sprintf("cp: %s: %v", src, err)}
@@ -334,26 +450,103 @@ func (h *Helpers) copyDir(src, dst string) error {
 
 // Mv moves/renames files.
 func (h *Helpers) Mv(args []string) error {
-	if len(args) < 2 {
+	force := false
+	var targets []string
+	endOfFlags := false
+
+	for _, arg := range args {
+		if endOfFlags {
+			targets = append(targets, arg)
+			continue
+		}
+		if arg == "--" {
+			endOfFlags = true
+			continue
+		}
+		if strings.HasPrefix(arg, "-") && len(arg) > 1 {
+			for _, ch := range arg[1:] {
+				switch ch {
+				case 'f':
+					force = true
+				case 'v', 'n', 'T':
+					// ignore
+				}
+			}
+			continue
+		}
+		targets = append(targets, arg)
+	}
+	_ = force
+
+	if len(targets) < 2 {
 		return &DieError{Message: "mv: requires source and destination"}
 	}
 
-	src := args[len(args)-2]
-	dst := args[len(args)-1]
+	dst := h.resolvePath(targets[len(targets)-1])
+	sources := targets[:len(targets)-1]
 
-	// If destination is a directory, move into it
-	if info, err := os.Stat(dst); err == nil && info.IsDir() {
-		dst = filepath.Join(dst, filepath.Base(src))
-	}
+	for _, src := range sources {
+		src = h.resolvePath(src)
+		dest := dst
+		// If destination is a directory, move into it
+		if info, err := os.Stat(dest); err == nil && info.IsDir() {
+			dest = filepath.Join(dest, filepath.Base(src))
+		}
 
-	if err := os.Rename(src, dst); err != nil {
-		return &DieError{Message: fmt.Sprintf("mv: %v", err)}
+		if err := os.Rename(src, dest); err != nil {
+			// Handle cross-device link: fall back to copy + remove
+			if strings.Contains(err.Error(), "cross-device link") ||
+				strings.Contains(err.Error(), "invalid cross-device link") {
+				if cpErr := h.copyRecursive(src, dest); cpErr != nil {
+					return &DieError{Message: fmt.Sprintf("mv: %v", cpErr)}
+				}
+				if rmErr := os.RemoveAll(src); rmErr != nil {
+					return &DieError{Message: fmt.Sprintf("mv: remove source: %v", rmErr)}
+				}
+			} else {
+				return &DieError{Message: fmt.Sprintf("mv: rename %s: %v", src, err)}
+			}
+		}
 	}
 
 	return nil
 }
 
-// Chmod changes file permissions.
+// copyRecursive copies a file or directory recursively.
+func (h *Helpers) copyRecursive(src, dst string) error {
+	info, err := os.Lstat(src)
+	if err != nil {
+		return err
+	}
+
+	if info.IsDir() {
+		if err := os.MkdirAll(dst, info.Mode()); err != nil {
+			return err
+		}
+		entries, err := os.ReadDir(src)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			if err := h.copyRecursive(
+				filepath.Join(src, entry.Name()),
+				filepath.Join(dst, entry.Name()),
+			); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	// Copy regular file
+	content, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(dst, content, info.Mode())
+}
+
+// Chmod changes file permissions. Supports both octal and symbolic modes.
 func (h *Helpers) Chmod(args []string) error {
 	if len(args) < 2 {
 		return &DieError{Message: "chmod: requires mode and file"}
@@ -372,26 +565,11 @@ func (h *Helpers) Chmod(args []string) error {
 	}
 
 	modeStr := args[modeIdx]
-	mode, err := strconv.ParseInt(modeStr, 8, 32)
-	if err != nil {
-		return &DieError{Message: fmt.Sprintf("chmod: invalid mode: %s", modeStr)}
-	}
 
 	for _, file := range args[modeIdx+1:] {
-		if recursive {
-			err := filepath.WalkDir(file, func(p string, d fs.DirEntry, err error) error {
-				if err != nil {
-					return err
-				}
-				return os.Chmod(p, os.FileMode(mode))
-			})
-			if err != nil {
-				return &DieError{Message: fmt.Sprintf("chmod: %v", err)}
-			}
-		} else {
-			if err := os.Chmod(file, os.FileMode(mode)); err != nil {
-				return &DieError{Message: fmt.Sprintf("chmod: %s: %v", file, err)}
-			}
+		resolved := h.resolvePath(file)
+		if err := applyMode(resolved, modeStr, recursive); err != nil {
+			return &DieError{Message: fmt.Sprintf("chmod: %s: %v", file, err)}
 		}
 	}
 
@@ -399,31 +577,88 @@ func (h *Helpers) Chmod(args []string) error {
 }
 
 // Ln creates links.
+//
+//nolint:gocyclo // ln flag parser with symlink/hardlink/relative/force logic.
 func (h *Helpers) Ln(args []string) error {
 	symbolic := false
 	force := false
-	var sources []string
+	noDereference := false
+	var targets []string
+	endOfFlags := false
 
 	for _, arg := range args {
-		switch arg {
-		case "-s":
-			symbolic = true
-		case "-f":
-			force = true
-		case "-sf", "-fs":
-			symbolic = true
-			force = true
-		default:
-			sources = append(sources, arg)
+		if endOfFlags {
+			targets = append(targets, arg)
+			continue
 		}
+		if arg == "--" {
+			endOfFlags = true
+			continue
+		}
+		if strings.HasPrefix(arg, "-") && len(arg) > 1 && arg[1] != '-' {
+			// Parse combined short flags like -snf, -sf, -fs
+			for _, ch := range arg[1:] {
+				switch ch {
+				case 's':
+					symbolic = true
+				case 'f':
+					force = true
+				case 'n':
+					noDereference = true
+				case 'v':
+					// verbose - ignore
+				case 'r':
+					// relative - ignore
+				}
+			}
+			continue
+		}
+		targets = append(targets, arg)
+	}
+	_ = noDereference // Used for symlink behavior, not critical for our implementation
+
+	if len(targets) < 1 {
+		return &DieError{Message: "ln: requires at least a target"}
 	}
 
-	if len(sources) < 2 {
-		return &DieError{Message: "ln: requires target and link name"}
+	// Single target: ln -s /path/to/file → creates ./basename -> target
+	if len(targets) == 1 {
+		target := targets[0]
+		linkName := h.resolvePath(filepath.Base(target))
+		if force {
+			_ = os.Remove(linkName)
+		}
+		if symbolic {
+			return os.Symlink(target, linkName)
+		}
+		return os.Link(h.resolvePath(target), linkName)
 	}
 
-	target := sources[0]
-	linkName := sources[1]
+	// Multiple targets with directory: ln -s file1 file2 dir/
+	last := h.resolvePath(targets[len(targets)-1])
+	if info, err := os.Stat(last); err == nil && info.IsDir() && len(targets) > 2 {
+		for _, target := range targets[:len(targets)-1] {
+			linkName := filepath.Join(last, filepath.Base(target))
+			if force {
+				_ = os.Remove(linkName)
+			}
+			if symbolic {
+				if err := os.Symlink(target, linkName); err != nil {
+					return &DieError{Message: fmt.Sprintf("ln: %v", err)}
+				}
+			} else {
+				resolvedTarget := h.resolvePath(target)
+				if err := os.Link(resolvedTarget, linkName); err != nil {
+					return &DieError{Message: fmt.Sprintf("ln: %v", err)}
+				}
+			}
+		}
+		return nil
+	}
+
+	// Two targets: ln -s target linkname
+	target := targets[0]
+	linkName := h.resolvePath(targets[1])
 
 	if force {
 		_ = os.Remove(linkName)
@@ -448,7 +683,7 @@ func (h *Helpers) Find(args []string) error {
 		return &DieError{Message: "find: requires path"}
 	}
 
-	path := args[0]
+	path := h.resolvePath(args[0])
 	namePattern := ""
 	typeFilter := ""
 
@@ -880,8 +1115,8 @@ func (h *Helpers) xargsRunCommand(cmd string, initialArgs, inputArgs []string, v
 
 	// Execute command
 	execCmd := exec.Command(cmd, fullArgs...)
-	if h.env != nil && h.env.S != "" {
-		execCmd.Dir = h.env.S
+	if workDir := h.getWorkDir(); workDir != "" {
+		execCmd.Dir = workDir
 	}
 
 	// Set environment if available
@@ -921,6 +1156,15 @@ func (h *Helpers) Which(args []string) error {
 // Touch creates or updates file timestamps.
 func (h *Helpers) Touch(args []string) error {
 	for _, file := range args {
+		if strings.HasPrefix(file, "-") {
+			continue // Skip flags like -r, -t
+		}
+		file = h.resolvePath(file)
+		// Ensure parent directory exists
+		dir := filepath.Dir(file)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return &DieError{Message: fmt.Sprintf("touch: %s: %v", file, err)}
+		}
 		// Check if file exists
 		_, err := os.Stat(file)
 		if os.IsNotExist(err) {
@@ -930,8 +1174,11 @@ func (h *Helpers) Touch(args []string) error {
 				return &DieError{Message: fmt.Sprintf("touch: %s: %v", file, err)}
 			}
 			_ = f.Close()
+		} else {
+			// Update mtime
+			now := time.Now()
+			_ = os.Chtimes(file, now, now)
 		}
-		// Update timestamps would use os.Chtimes but we skip for simplicity
 	}
 
 	return nil

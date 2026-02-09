@@ -9,6 +9,7 @@ package ebuild
 
 import (
 	"fmt"
+	"os/exec"
 	"strings"
 )
 
@@ -53,17 +54,36 @@ func (e *PythonSingleEclass) Variables() map[string]string {
 //
 // Usage (in ebuild): inherit python-single-r1
 // Then pkg_setup automatically calls this function.
-func (h *Helpers) PythonSingleR1PkgSetup(args []string) error {
+func (h *Helpers) PythonSingleR1PkgSetup(_ []string) error {
 	// Get the single target from USE flags
 	target := h.getPythonSingleTarget()
 	if target == "" {
-		return &DieError{Message: "python-single-r1_pkg_setup: No PYTHON_SINGLE_TARGET set"}
-	}
-
-	// Validate target is in PYTHON_COMPAT
-	if !h.isPythonCompatible(target) {
-		return &DieError{Message: fmt.Sprintf(
-			"python-single-r1_pkg_setup: %s not in PYTHON_COMPAT", target)}
+		// Auto-detect: pick the best available Python from PYTHON_COMPAT
+		compat := strings.Fields(h.getEnvOrDefault("PYTHON_COMPAT", ""))
+		for _, candidate := range []string{
+			"python3_12", "python3_13", "python3_11", "python3_14",
+		} {
+			for _, c := range compat {
+				if c == candidate {
+					info, err := ParsePythonImpl(candidate)
+					if err == nil {
+						if _, lookErr := exec.LookPath(info.Executable); lookErr == nil {
+							target = candidate
+							break
+						}
+					}
+				}
+			}
+			if target != "" {
+				break
+			}
+		}
+		if target == "" && len(compat) > 0 {
+			target = compat[len(compat)-1] // Last entry is usually newest
+		}
+		if target == "" {
+			target = "python3_12" // Last resort
+		}
 	}
 
 	// Export Python environment
@@ -81,10 +101,27 @@ func (h *Helpers) PythonSetup(args []string) error {
 		return h.PythonSingleR1PkgSetup(args)
 	}
 
-	// python-r1 mode - EPYTHON should already be set by python_foreach_impl
+	// Try to get current implementation from env
 	impl := h.getPythonImpl()
 	if impl == "" {
-		return &DieError{Message: "python_setup: EPYTHON not set"}
+		// python-any-r1 mode or no impl set: auto-detect available Python.
+		// Try implementations in preference order.
+		for _, candidate := range []string{
+			"python3_12", "python3_13", "python3_11", "python3_14",
+		} {
+			info, err := ParsePythonImpl(candidate)
+			if err != nil {
+				continue
+			}
+			if _, lookErr := exec.LookPath(info.Executable); lookErr == nil {
+				impl = candidate
+				break
+			}
+		}
+	}
+
+	if impl == "" {
+		impl = "python3_12" // Last resort fallback
 	}
 
 	return h.PythonExport([]string{impl})

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -24,21 +25,22 @@ import (
 // Usage: unpack file.tar.gz
 // Usage: unpack ${A}
 //
-// Supported formats: .tar.gz, .tar.bz2, .tar.xz, .tar.zst, .tar, .zip, .gz, .bz2, .xz, .zst
+// Supported formats: .tar.gz, .tar.bz2, .tar.xz, .tar.lz, .tar.zst, .tar, .zip, .gz, .bz2, .xz, .zst
 // Pure Go implementation, no external commands.
 func (h *Helpers) Unpack(args []string) error {
 	if len(args) < 1 {
 		return &DieError{Message: "unpack: no files specified"}
 	}
 
-	workDir := h.getWorkDir()
+	// Per Portage: unpack ALWAYS extracts into WORKDIR, never S.
+	// The tarball typically creates its own subdirectory (e.g., diffutils-3.12/)
+	// inside WORKDIR, and S = WORKDIR/P points to that subdirectory.
+	workDir := h.getEnvVar("WORKDIR")
+	if workDir == "" && h.env != nil {
+		workDir = h.env.WORKDIR
+	}
 	if workDir == "" {
-		if h.env != nil {
-			workDir = h.env.WORKDIR
-		}
-		if workDir == "" {
-			return &DieError{Message: "unpack: WORKDIR not set"}
-		}
+		return &DieError{Message: "unpack: WORKDIR not set"}
 	}
 
 	distDir := ""
@@ -94,6 +96,8 @@ func (h *Helpers) unpackArchive(archivePath, destDir string) error {
 		return h.unpackTarBz2(archivePath, destDir)
 	case strings.HasSuffix(lowerPath, ".tar.xz") || strings.HasSuffix(lowerPath, ".txz"):
 		return h.unpackTarXz(archivePath, destDir)
+	case strings.HasSuffix(lowerPath, ".tar.lz"):
+		return h.unpackTarLz(archivePath, destDir)
 	case strings.HasSuffix(lowerPath, ".tar.zst") || strings.HasSuffix(lowerPath, ".tar.zstd"):
 		return h.unpackTarZst(archivePath, destDir)
 	case strings.HasSuffix(lowerPath, ".tar"):
@@ -109,8 +113,31 @@ func (h *Helpers) unpackArchive(archivePath, destDir string) error {
 	case strings.HasSuffix(lowerPath, ".zst") || strings.HasSuffix(lowerPath, ".zstd"):
 		return h.unpackSingleZst(archivePath, destDir)
 	default:
-		return fmt.Errorf("unsupported archive format: %s", archivePath)
+		// Non-archive files: copy to WORKDIR as-is (per PMS spec)
+		return h.copyFileToDir(archivePath, destDir)
 	}
+}
+
+// copyFileToDir copies a non-archive file to the destination directory.
+// This handles SRC_URI entries that are plain files (e.g., .py, .patch, .conf).
+func (h *Helpers) copyFileToDir(srcPath, destDir string) error {
+	src, err := os.Open(srcPath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = src.Close() }()
+
+	destPath := filepath.Join(destDir, filepath.Base(srcPath))
+	dst, err := os.Create(destPath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = dst.Close() }()
+
+	if _, err := io.Copy(dst, src); err != nil {
+		return err
+	}
+	return nil
 }
 
 // unpackTarGz extracts a .tar.gz archive.
@@ -156,6 +183,47 @@ func (h *Helpers) unpackTarXz(archivePath, destDir string) error {
 	}
 
 	return h.extractTar(tar.NewReader(xzReader), destDir)
+}
+
+// unpackTarLz extracts a .tar.lz (lzip) archive.
+//
+// Lzip uses LZMA compression but with its own container format (not xz).
+// Decompression requires an external tool: xz >= 5.4.0 (can handle lzip),
+// plzip, pdlzip, or lzip — same strategy as Portage's unpacker.eclass.
+func (h *Helpers) unpackTarLz(archivePath, destDir string) error {
+	// Find a decompressor: xz (>= 5.4.0 supports lzip), plzip, pdlzip, lzip
+	decompressor := ""
+	for _, cmd := range []string{"xz", "plzip", "pdlzip", "lzip"} {
+		if _, err := exec.LookPath(cmd); err == nil {
+			decompressor = cmd
+			break
+		}
+	}
+	if decompressor == "" {
+		return fmt.Errorf("no lzip decompressor found (need xz >= 5.4.0, plzip, pdlzip, or lzip)")
+	}
+
+	// Decompress via pipe: <decompressor> -dc file.tar.lz | tar x
+	cmd := exec.Command(decompressor, "-dc", archivePath)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("creating pipe: %w", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("starting %s: %w", decompressor, err)
+	}
+
+	tarErr := h.extractTar(tar.NewReader(stdout), destDir)
+
+	if err := cmd.Wait(); err != nil {
+		if tarErr != nil {
+			return fmt.Errorf("tar extraction: %w (decompressor: %w)", tarErr, err)
+		}
+		return fmt.Errorf("%s decompression failed: %w", decompressor, err)
+	}
+
+	return tarErr
 }
 
 // unpackTarZst extracts a .tar.zst archive.

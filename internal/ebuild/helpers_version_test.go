@@ -99,7 +99,8 @@ func TestHelpers_SplitVersion(t *testing.T) {
 		{"1.2.3", []string{"1", "2", "3"}},
 		{"1_2_3", []string{"1", "2", "3"}},
 		{"1-2-3", []string{"1", "2", "3"}},
-		{"1.2.3_rc1", []string{"1", "2", "3", "rc1"}},
+		// Portage __ver_split separates letters and digits into distinct components
+		{"1.2.3_rc1", []string{"1", "2", "3", "rc", "1"}},
 		{"1", []string{"1"}},
 		{"", []string{}},
 	}

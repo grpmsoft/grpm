@@ -409,9 +409,22 @@ func (env *Environment) ToSlice() []string {
 		result = append(result, fmt.Sprintf("%s=%s", key, value))
 	}
 
-	// Add PATH from current environment
+	// Add PATH from current environment, filtering out Windows paths (WSL compatibility).
+	// Windows paths like /mnt/c/Program Files (x86)/... contain special chars that
+	// can break command lookup. Only keep native Linux paths.
 	if path := os.Getenv("PATH"); path != "" {
-		result = append(result, "PATH="+path)
+		var cleanParts []string
+		for _, p := range strings.Split(path, ":") {
+			if !strings.HasPrefix(p, "/mnt/") {
+				cleanParts = append(cleanParts, p)
+			}
+		}
+		if len(cleanParts) > 0 {
+			result = append(result, "PATH="+strings.Join(cleanParts, ":"))
+		} else {
+			// Fallback: standard Gentoo PATH
+			result = append(result, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+		}
 	}
 
 	return result

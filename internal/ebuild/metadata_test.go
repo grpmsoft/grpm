@@ -557,6 +557,258 @@ SRC_URI="$(get_simple_uri)"
 	}
 }
 
+// --- stripFunctionBodies tests ---
+
+// TestStripFunctionBodies_SimpleFunction verifies that a basic function body
+// is replaced with a no-op stub while preserving surrounding code.
+func TestStripFunctionBodies_SimpleFunction(t *testing.T) {
+	input := `EAPI=8
+SRC_URI="https://example.com/test.tar.gz"
+
+src_compile() {
+	emake
+	emake install
+}
+
+SLOT="0"
+`
+	result := stripFunctionBodies(input)
+
+	if !strings.Contains(result, `SRC_URI="https://example.com/test.tar.gz"`) {
+		t.Error("SRC_URI assignment should be preserved")
+	}
+	if !strings.Contains(result, `SLOT="0"`) {
+		t.Error("SLOT assignment should be preserved")
+	}
+	if strings.Contains(result, "emake") {
+		t.Error("function body should be removed")
+	}
+	if !strings.Contains(result, "src_compile() { :; }") {
+		t.Error("function should be replaced with stub")
+	}
+}
+
+// TestStripFunctionBodies_BraceExpansionInVarName tests the exact pattern that
+// caused findutils metadata extraction to fail. findutils-4.10.0.ebuild line 84:
+//
+//	local -x RUN_{VERY_,}EXPENSIVE_TESTS=$(usex test-full yes no)
+//
+// mvdan.cc/sh cannot parse brace expansion in variable names. Since this is
+// inside src_test(), stripping function bodies prevents the parse error.
+func TestStripFunctionBodies_BraceExpansionInVarName(t *testing.T) {
+	input := `EAPI=8
+SRC_URI="mirror://gnu/${PN}/${P}.tar.xz"
+
+src_test() {
+	local -x RUN_{VERY_,}EXPENSIVE_TESTS=$(usex test-full yes no)
+	emake check
+}
+`
+	result := stripFunctionBodies(input)
+
+	if strings.Contains(result, "RUN_{VERY_,}EXPENSIVE_TESTS") {
+		t.Error("brace expansion in var name should be removed with function body")
+	}
+	if !strings.Contains(result, "src_test() { :; }") {
+		t.Error("src_test should be replaced with stub")
+	}
+	if !strings.Contains(result, "mirror://gnu") {
+		t.Error("SRC_URI should be preserved")
+	}
+}
+
+// TestStripFunctionBodies_OneLineFunction tests one-liner function replacement.
+func TestStripFunctionBodies_OneLineFunction(t *testing.T) {
+	input := `src_compile() { emake; }
+SRC_URI="test"
+`
+	result := stripFunctionBodies(input)
+
+	if !strings.Contains(result, "src_compile() { :; }") {
+		t.Errorf("one-liner function should be stubbed, got: %s", result)
+	}
+	if !strings.Contains(result, `SRC_URI="test"`) {
+		t.Error("SRC_URI should be preserved")
+	}
+}
+
+// TestStripFunctionBodies_NestedBraces verifies correct brace depth tracking.
+func TestStripFunctionBodies_NestedBraces(t *testing.T) {
+	input := `SRC_URI="before"
+
+src_install() {
+	if use doc; then
+		dodoc README
+	fi
+	for f in "${files[@]}"; do
+		dobin "${f}"
+	done
+}
+
+DEPEND="after"
+`
+	result := stripFunctionBodies(input)
+
+	if strings.Contains(result, "dodoc") || strings.Contains(result, "dobin") {
+		t.Error("nested function body content should be removed")
+	}
+	if !strings.Contains(result, `SRC_URI="before"`) {
+		t.Error("code before function should be preserved")
+	}
+	if !strings.Contains(result, `DEPEND="after"`) {
+		t.Error("code after function should be preserved")
+	}
+}
+
+// TestStripFunctionBodies_MultipleFunctions tests stripping of multiple functions.
+func TestStripFunctionBodies_MultipleFunctions(t *testing.T) {
+	input := `EAPI=8
+SRC_URI="test.tar.gz"
+
+src_configure() {
+	econf --enable-foo
+}
+
+src_compile() {
+	emake
+}
+
+src_test() {
+	emake check
+}
+
+src_install() {
+	emake DESTDIR="${D}" install
+}
+`
+	result := stripFunctionBodies(input)
+
+	for _, fn := range []string{"src_configure", "src_compile", "src_test", "src_install"} {
+		if !strings.Contains(result, fn+"() { :; }") {
+			t.Errorf("function %s should be replaced with stub", fn)
+		}
+	}
+
+	// No function body content should remain
+	for _, body := range []string{"econf", "emake", "DESTDIR"} {
+		if strings.Contains(result, body) {
+			t.Errorf("function body content %q should not be in result", body)
+		}
+	}
+}
+
+// TestStripFunctionBodies_PreservesGlobalCode tests that global variable
+// assignments, inherit calls, and other non-function code is preserved.
+func TestStripFunctionBodies_PreservesGlobalCode(t *testing.T) {
+	input := `# Copyright
+EAPI=8
+
+inherit autotools
+
+MY_P="${PN}-v${PV}"
+SRC_URI="https://example.com/${MY_P}.tar.gz"
+
+DEPEND="dev-libs/foo"
+RDEPEND="${DEPEND}"
+BDEPEND="virtual/pkgconfig"
+
+IUSE="doc test"
+SLOT="0"
+KEYWORDS="~amd64"
+
+src_prepare() {
+	default
+	eautoreconf
+}
+`
+	result := stripFunctionBodies(input)
+
+	// All global code should be preserved
+	for _, expected := range []string{
+		"EAPI=8",
+		"inherit autotools",
+		"MY_P=",
+		"SRC_URI=",
+		"DEPEND=",
+		"RDEPEND=",
+		"BDEPEND=",
+		"IUSE=",
+		"SLOT=",
+		"KEYWORDS=",
+	} {
+		if !strings.Contains(result, expected) {
+			t.Errorf("global code %q should be preserved", expected)
+		}
+	}
+}
+
+// TestStripFunctionBodies_HyphenatedFunctionName tests functions with hyphens
+// in their names (common in eclasses: multilib_src_compile, etc.).
+func TestStripFunctionBodies_HyphenatedFunctionName(t *testing.T) {
+	input := `my-func() {
+	do_something
+}
+`
+	result := stripFunctionBodies(input)
+
+	if !strings.Contains(result, "my-func() { :; }") {
+		t.Errorf("hyphenated function should be stubbed, got: %s", result)
+	}
+}
+
+// --- isFunctionDefinition tests ---
+
+func TestIsFunctionDefinition(t *testing.T) {
+	tests := []struct {
+		line string
+		want bool
+	}{
+		{"src_compile() {", true},
+		{"src_compile(){", true},
+		{"src_compile () {", true},
+		{"my-func() {", true},
+		{"_private_func() {", true},
+		{"func123() {", true},
+		{"src_compile()", true},
+		{"# src_compile() {", false},    // comment
+		{"", false},                     // empty
+		{"EAPI=8", false},               // assignment
+		{"123func() {", false},          // starts with digit
+		{"if (( x > 0 )); then", false}, // not a function
+		{"echo $(cmd)", false},          // subshell
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.line, func(t *testing.T) {
+			if got := isFunctionDefinition(tt.line); got != tt.want {
+				t.Errorf("isFunctionDefinition(%q) = %v, want %v", tt.line, got, tt.want)
+			}
+		})
+	}
+}
+
+// --- extractFunctionName tests ---
+
+func TestExtractFunctionName(t *testing.T) {
+	tests := []struct {
+		line string
+		want string
+	}{
+		{"src_compile() {", "src_compile"},
+		{"my-func() {", "my-func"},
+		{"_helper()", "_helper"},
+		{"no_parens", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.line, func(t *testing.T) {
+			if got := extractFunctionName(tt.line); got != tt.want {
+				t.Errorf("extractFunctionName(%q) = %q, want %q", tt.line, got, tt.want)
+			}
+		})
+	}
+}
+
 // TestBuildNativeBashScript tests native bash script generation.
 func TestBuildNativeBashScript(t *testing.T) {
 	ebuildContent := `EAPI=8
