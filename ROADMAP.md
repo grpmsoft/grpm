@@ -1,15 +1,15 @@
 # GRPM Roadmap
 
-> **Pre-Release Testing (v0.9.3)**
+> **v0.10.0 Phase — Audit-Driven Quality & Bash Evolution**
 >
 > Rapid development complete (v0.1.0 → v0.5.0).
-> Infrastructure release complete (v0.6.0).
-> Build quality and security fixes (v0.7.x).
+> Infrastructure & quality complete (v0.6.0).
+> Portage compatibility & security (v0.7.x).
 > Configuration management (v0.8.0-v0.8.4).
-> Enterprise tool handling (v0.9.0-v0.9.1).
-> Emerge filtering fix (v0.9.2).
-> **Install helper path resolution hotfix (v0.9.3).**
-> **98.2% tree coverage verified on real Gentoo WSL2!**
+> Enterprise CLI & emerge filtering (v0.9.0-v0.9.2).
+> Install helpers & bash interpreter hardening (v0.9.3-v0.9.4).
+> **Community code audit completed (2026-02-09): PMS compliance validated at ~60%.**
+> **98.2% tree coverage verified on real Gentoo WSL2.**
 
 ---
 
@@ -17,430 +17,229 @@
 
 GRPM aims to be a modern, reliable package manager for Gentoo Linux with:
 - SAT-based dependency resolution for guaranteed conflict-free solutions
-- Full Portage/ebuild compatibility via dynamic eclass loading
+- Full Portage/ebuild compatibility via advanced bash interpretation
 - Binary package support (GPKG and TBZ2 formats)
 - Modern daemon architecture with gRPC/REST APIs
 - High performance through native Go implementation
 
 ---
 
-## Architecture Breakthrough (v0.5.2)
-
-**Dynamic Eclass Loading via mvdan.cc/sh**
+## Path to v1.0.0
 
 ```
-Eclass (bash) → mvdan.cc/sh interpreter → execHandler → Go helpers OR shell pass-through
+v0.9.4 ← LATEST RELEASE (Bash Interpreter Hardening)
+    │
+    │   ✅ v0.6.0: Distfile fetching, debug helpers, coverage analyzer
+    │   ✅ v0.7.x: Portage compatibility, security fixes
+    │   ✅ v0.8.x: Configuration management, mask/keywords, package sets
+    │   ✅ v0.9.x: Enterprise CLI, emerge filtering, bash hardening
+    │   ✅ Community audit: PMS compliance validated (~60%/~51%)
+    │   ✅ 98.2% tree coverage on real Gentoo WSL2
+    ↓
+v0.10.x ← CURRENT PHASE (Audit-Driven Quality & Bash Evolution)
+    │
+    │   Wave 1: Audit bug fixes (=* glob, phase defaults, dead code)
+    │   Wave 2: Bash interpreter evolution (fix mvdan/sh or custom interpreter)
+    │   Wave 3: @world 90%+ build success, community validation
+    ↓
+v0.11.x — Community Testing & Feedback
+    │
+    │   Alpha/beta testing with community
+    │   Documentation finalization
+    │   Bug fixes from real-world usage
+    ↓
+v1.0.0-rc — Release Candidate
+    │
+    │   API freeze, stability testing
+    ↓
+v1.0.0 — Production Release
+         90%+ @world success, community sign-off
 ```
-
-Key insight: **Eclasses don't need Go implementations.** They are loaded dynamically from the repository and executed by the bash interpreter. Commands are either:
-- Intercepted by Go helpers (100+ implemented)
-- Passed through to real shell execution
-
-**Implication:** Most eclasses (xdg, desktop, systemd, edo, optfeature, etc.) work out-of-box.
 
 ---
 
-## Current Status
+## v0.10.0 — Audit-Driven Quality & Bash Evolution (Current)
 
-### What's Implemented (~98% Tree Coverage)
+Following the community code audit (2026-02-09), development is organized in three waves.
 
-| Category | Features |
-|----------|----------|
-| **Core** | SAT solver, version comparison, slot/subslot, USE flags |
-| **Configuration** | make.conf, repos.conf, package.use/mask/keywords with full Portage compatibility |
-| **Build Systems** | autotools, CMake, Meson |
-| **Languages** | Python (distutils-r1), Rust (cargo.eclass), Go (go-module.eclass) |
-| **Multilib** | 32-bit/64-bit ABI support |
-| **Binary Packages** | GPKG (.gpkg.tar), TBZ2 (.tbz2) read/write |
-| **Sync** | rsync, git with GPG verification |
-| **API** | gRPC + REST daemon architecture |
-| **Eclass Loading** | Dynamic via mvdan.cc/sh (100+ helpers) |
+### Wave 1: Quick Wins from Audit
 
-### What's Blocking 75% → 90%?
+| Task | Priority | Description |
+|------|----------|-------------|
+| Audit bug fixes | P0 | Fix `=*` glob operator, phase defaults routing, dead code removal |
+| Signature file defense | P0 | 3-layer defense against incorrect .sig downloads |
 
-| Blocker | Impact | Status |
-|---------|--------|--------|
-| ~~No distfile fetching~~ | ~4% | ✅ v0.6.0 |
-| ~~Missing debug-print functions~~ | < 1% | ✅ v0.6.0 |
-| ~~Untested eclasses~~ | Unknown | ✅ v0.6.0 (21 tested) |
-| ~~External tools on user's system~~ | Variable | ✅ v0.6.0 (detection) |
-| **Remaining gaps** | ~5% | v0.7.0 (analysis) |
+### Wave 2: Architecture Evolution
+
+| Task | Priority | Blocked By |
+|------|----------|------------|
+| Bash interpreter hardening (Phase 2+) | P0 | — |
+| Bash interpreter evolution (fix mvdan/sh or custom) | P1 | Bash hardening |
+| Reduce Go command map shadowing | P1 | Interpreter evolution |
+| Python/distutils build system | P1 | Interpreter evolution |
+| Top 20 eclass compatibility | P1 | Bash hardening |
+
+**Key architectural decision pending:** Either fix `mvdan.cc/sh` upstream (contribute PRs for needed bash features) or write a custom Go bash interpreter optimized for ebuild/eclass semantics. Additionally, the interpreter backend will be **configurable** — users who prefer real `/bin/bash` can enable it via settings for full compatibility.
+
+### Wave 3: Validation & Community
+
+| Task | Priority | Blocked By |
+|------|----------|------------|
+| @world 90%+ build success | P2 | Python build system, Interpreter evolution |
+| PMS compliance honest baseline | P2 | Audit bug fixes |
+| Community testing preparation | P2 | @world validation |
+
+### Known Bugs (from audit)
+
+| Bug | Location | Status |
+|-----|----------|--------|
+| `=*` glob operator overly permissive | `internal/pkg/atom.go:748` | Tracked |
+| Phase defaults routing | `internal/ebuild/phases_impl.go` | Tracked |
+| Hardcoded `--libdir=/usr/lib64` | `internal/ebuild/phases_impl.go` | Tracked |
+| Dead code in compat | `internal/compat/portage.go` | Tracked |
+
+See [PMS_COMPLIANCE.md](docs/PMS_COMPLIANCE.md) for the full compliance matrix.
 
 ---
 
 ## Release History
 
-### v0.9.3 — Install Helper Path Resolution Hotfix (Current)
+### v0.9.4 — Bash Interpreter Hardening (2026-02-09)
 
-**Hotfix for packages with non-standard archive names and relative paths:**
+- **stripFunctionBodies** — removes phase functions before metadata extraction
+- **3-layer .sig file filtering** — eval → regex fallback → manifest filter
+- **`.tar.lz` unpack support** — xz/plzip/lzip, matching Portage unpacker.eclass
+- **Eclass stdout isolation**, BASH_VERSINFO emulation
+- **ver_cut/ver_rs** default to PV, econf ECONF_SOURCE, S variable resolution
+- **33 new tests**, golangci-lint clean (0 issues)
 
-- **Install helpers path resolution** — All install helpers now resolve relative paths against `$S`
-- **Unpack phase uses $A** — Archive list from Manifest instead of hardcoded pattern
-- **tree package fix** — `app-text/tree` now builds successfully
-- **DRY refactoring** — Centralized `resolveSourcePath()` helper method
+### v0.9.3 — Install Helper Path Resolution (2026-02-08)
 
-### v0.9.2 — Emerge Filtering Fix
+- Install helpers resolve relative paths against `$S`
+- Unpack phase uses `$A` from Manifest
+- Non-standard archive name support
 
-**Fixes emerge ignoring installed packages:**
+### v0.9.2 — Emerge Filtering Fix (2026-01-19)
 
-- **Emerge respects VarDB** — `grpm emerge -p mc` shows 1 package instead of 93
-- **New flags**: `--deep`, `--with-bdeps`, `--emptytree`, `--vardb`
+- Emerge respects installed packages (VarDB filtering)
+- `--deep`, `--with-bdeps`, `--emptytree`, `--vardb` flags
 
-### v0.9.1 — Enterprise CLI & Mirror Fallback
+### v0.9.1 — Enterprise CLI & Mirror Fallback (2026-01-19)
 
-**Major CLI improvements and distfile fetching enhancements:**
+- Enterprise CLI help formatter, shell completion (bash/zsh/fish)
+- Man page generation (`grpm doc man`)
+- "Did you mean?" command suggestions
+- Mirror fallback (GENTOO_MIRRORS → SRC_URI)
 
-- **Enterprise CLI Help Formatter** — Professional help output comparable to Cobra
-- **Shell Completion** — Full bash, zsh, fish support via `grpm completion`
-- **Man Page Generation** — Unix manual pages via `grpm doc man`
-- **"Did You Mean?" Suggestions** — Typo correction using Levenshtein distance
-- **Mirror Fallback** — Portage-compatible GENTOO_MIRRORS → SRC_URI fallback
-- **Type-safe CommandName constants** — Compile-time safety for CLI routing
+### v0.9.0 — Enterprise Tool Check (2026-01-19)
 
-### v0.9.0 — Enterprise Tool Check
+- Portage-compatible tool handling via BDEPEND
+- `--check-tools` opt-in flag
+- Collision detection fixes, VarDB persistence
 
-**Portage-compatible tool handling following enterprise patterns:**
+### v0.8.0-v0.8.4 — Configuration Management (2026-01-17-18)
 
-- **Tool check is now opt-in** — Replaced `--skip-tool-check` (opt-out) with `--check-tools` (opt-in)
-- **BDEPEND handling** — Tool dependencies handled via BDEPEND like Portage, not pre-flight checks
-- **Default behavior** — `grpm emerge @world` works without tool check (2000+ packages resolved instantly)
-- **Breaking change** — `--skip-tool-check` flag removed, use `--check-tools` for optional pre-validation
+- Dynamic make.conf parsing with variable expansion
+- repos.conf with Portage fallback chain
+- package.use atom specificity, package.mask, KEYWORDS filtering
+- Package sets (@world, @system, @selected) in all commands
+- SRC_URI evaluation with eclass support (MetadataEvaluator)
+- UX improvements (emerge --info, fuzzy search, USE flag display)
 
-**Bug fixes:**
-- **Collision detection** — Only files checked, directories skipped
-- **VarDB persistence** — Packages properly tracked in `/var/db/pkg`
-- **Shared file collision** — `/usr/share/info/dir` excluded from collision check
+### v0.7.0-v0.7.11 — Portage Compatibility & Security (2026-01-13-17)
 
-**Tested on real Gentoo WSL2:** `app-misc/hello` builds and installs successfully with full VarDB tracking.
+- Portage-style colored logging
+- Path traversal prevention (CVE-level fix)
+- Docker layer caching (`--onlydeps`)
+- Alternative root installation (`--root`)
+- E2E integration tests
+- mirror:// expansion, rsync fixes
 
-**Migration:**
-```bash
-# Before (v0.8.x):
-grpm emerge --skip-tool-check @world
+### v0.6.0 — Infrastructure & Quality (2026-01-12)
 
-# After (v0.9.0):
-grpm emerge @world                    # No flag needed
-grpm emerge --check-tools @world      # Optional pre-validation
-```
+- `grpm fetch` — automatic source downloading with mirror failover
+- `grpm analyze` — repository coverage analysis
+- `grpm tools` — external tool detection
+- 21 eclass integration tests
 
-### v0.8.4 — Package Set Hotfix
+### v0.5.0-v0.5.2 — Language Ecosystems & Dynamic Loading (2026-01-10-11)
 
-**Fix for package sets not working in resolve/install/emerge/fetch commands:**
+- Dynamic eclass loading via mvdan.cc/sh
+- Python eclasses (distutils-r1, python-r1, python-single-r1, python-any-r1)
+- Rust (cargo.eclass), Go (go-module.eclass)
+- Package sets, multilib, REQUIRED_USE solver
 
-- **SetExpander service** — Unified interface for set expansion across all commands
-- **Set support everywhere** — `grpm resolve @world`, `grpm emerge @system`, `grpm fetch @selected`
-- **@system fix** — Profile symlink properly resolved, multi-parent inheritance working
-- **Profile cycle detection** — Prevents infinite loops in profile chains
-- **Tested on real Gentoo** — 50 system packages correctly found from full profile chain
+### v0.4.0 — Build Systems (2026-01-08)
 
-### v0.8.3 — SRC_URI Evaluation Hotfix
-
-**Critical fix for packages with dynamic SRC_URI generation** ([#50](https://github.com/grpmsoft/grpm/issues/50)):
-
-- **MetadataEvaluator** — Evaluates ebuild metadata via mvdan.cc/sh with eclass support
-- **gcc fix** — Downloads only version-specific files (3) instead of all Manifest files (70+)
-- **ver_cut fix** — PMS-compliant version extraction for correct SNAPSHOT calculation
-
-### v0.8.2 — UX Improvements
-
-**User experience improvements and bug fixes based on community feedback:**
-
-- **`emerge --info`** — Displays system environment like Portage (Go version, platform, memory, repos)
-- **USE flags in pretend** — Shows `USE="flag1 -flag2"` in emerge pretend output
-- **User-friendly errors** — Clear error messages with package suggestions on typos
-- **Similar package search** — Fuzzy matching suggests similar packages (e.g., "neofatch" → "neofetch")
-- **Per-package tool check** — `grpm tools --check` shows which tools are needed by specific eclasses
-- **Search version fix** — Versions now sorted correctly using PMS comparison
-- **Info command filtering** — Respects mask and keyword filtering
-- **Dependency deduplication** — Info output no longer shows duplicate dependencies
-
-### v0.8.1 — Package Mask, Keywords & Atom Parsing
-
-**Solver respects package.mask AND KEYWORDS, plus atom parsing fix** ([#45](https://github.com/grpmsoft/grpm/issues/45), [#46](https://github.com/grpmsoft/grpm/issues/46), [#48](https://github.com/grpmsoft/grpm/issues/48)):
-
-- **MaskManager** — Loads masks from repo, profile cascade, and user config
-- **KEYWORDS filtering** — Filters packages by `KEYWORDS` vs `ACCEPT_KEYWORDS`
-- **Architecture detection** — Auto-detects system arch for default `ACCEPT_KEYWORDS`
-- **Solver integration** — Masked and unkeyworded packages excluded from candidates
-- **User unmask** — `/etc/portage/package.unmask` overrides all masks
-- **Atom parsing fix (#45)** — Versioned atoms correctly parse to `category/package` for paths
-- **Verified** — GRPM now selects same versions as Portage (gcc-15.x)
-
-### v0.8.0 — Configuration Management
-
-**Full Portage configuration compatibility** ([#40](https://github.com/grpmsoft/grpm/issues/40), [#41](https://github.com/grpmsoft/grpm/issues/41), [#42](https://github.com/grpmsoft/grpm/issues/42)):
-
-- **make.conf** — Dynamic parser with variable expansion, `source` directive
-- **repos.conf** — INI format, Portage fallback chain for repository detection
-- **package.use** — Full atom syntax, priority-based resolution, USE_EXPAND
-
-### v0.7.11 — Security Release
-
-**Critical security fix: Path traversal prevention ([#36](https://github.com/grpmsoft/grpm/issues/36))**
-
-- **Input validation** — Category/package names validated against PMS format
-- **Path containment** — Defense-in-depth check prevents directory escape
-- **New utilities** — `ValidateCategoryPackageName()`, `ValidatePathContainment()`, `SafeJoinPath()`
-- **86+ security tests** — Comprehensive coverage of attack vectors
-- **Upgrade immediately** — All users should update to prevent potential file access
-
-### v0.7.10 — Docker Layer Caching
-
-**Build dependencies separately for optimized Docker builds:**
-
-- **`--onlydeps` / `-o` flag** — Build dependencies only, skip target package(s) ([#33](https://github.com/grpmsoft/grpm/issues/33))
-- **Docker optimization** — Pre-build dependencies in a separate layer for better caching
-- **Portage compatible** — Same behavior as `emerge --onlydeps`
-- **Fix: Versioned atom version selection** — `=sys-devel/gcc-13.4.1` now correctly selects specified version ([#32](https://github.com/grpmsoft/grpm/issues/32))
-
-### v0.7.9 — Versioned Atom Support
-
-**Fix for Issue #30: emerge now correctly handles versioned atoms:**
-
-- **Atom parsing** — `=sys-devel/gcc-13.4.1_p20250807`, `>=dev-libs/openssl-3.0` now work correctly
-- **PMS compliance** — Full support for version operators (`=`, `>=`, `>`, `<=`, `<`, `~`, `=*`)
-- **Regression tests** — Comprehensive test coverage for atom parsing edge cases
-
-### v0.7.8 — Alternative Root Installation
-
-**Install packages to chroot, stage tarballs, or cross-compilation targets:**
-
-- **`--root` flag** — Equivalent to `$ROOT` in Portage
-- **VarDB isolation** — Package database at `{root}/var/db/pkg`
-- **Use case** — Building stage tarballs, chroots, cross-compilation
-
-### v0.7.7 — E2E Integration Tests
-
-**Professional E2E test suite with CI integration:**
-
-- **6 E2E tests** — Version selection, resolve workflow, dependency chains, atom matching
-- **CI integration** — Tests run in Gentoo container on every release
-- **Regression prevention** — Would have caught v0.7.6 version selection bug automatically
-
-### v0.7.5/v0.7.6 — Build Quality & Bug Fixes
-
-- **v0.7.6** — Critical version selection bug fix, --replace/--force flags
-- **v0.7.5** — Unified logging, debug output suppressed, source build fixes
-
-### v0.7.4 — Critical Hotfix
-
-**Fixes for real-world Gentoo usage:**
-
-- **mirror:// URL expansion** — Third-party mirror URLs now properly expanded
-- **rsync sync hanging** — Native Go rsync no longer hangs, fallback to system rsync
-
-### v0.7.2/v0.7.3 — Portage Compatibility Hotfix
-
-**Critical fixes for real-world Portage compatibility:**
-
-- **package.mask directory** — EAPI 7+ supports directories, not just files
-- **SRC_URI parsing for fetch** — Explicit upstream URLs for .asc signatures
-- **USE conditional handling** — `nil` activeFlags includes ALL conditionals
-
-### v0.7.0 — Portage-Style Logging
-
-**Professional terminal output:**
-
-- **Portage-style prefixes** — `>>>`, `***`, `!!!` for different message types
-- **Colored output** — Green (success), Yellow (warning), Red (error)
-- **Phase headers** — Clear separation of build phases
-
-### v0.6.0 — Infrastructure & Quality
-
-**Production readiness infrastructure:**
-
-- **Distfile Fetching** — `grpm fetch` command, automatic source downloading
-- **Debug Helpers** — debug-print family (PMS 12.3.16 compliant)
-- **Eclass Testing** — 21 eclasses with integration tests
-- **Coverage Analyzer** — `grpm analyze` command with text/json/markdown output
-- **Tool Detection** — `grpm tools` command, 50+ tools registered
-
-### v0.5.2 — Dynamic Eclass Loading
-
-**Architecture overhaul** enabling universal eclass support:
-
-- **Dynamic eclass loading** via mvdan.cc/sh bash interpreter
-- **HybridLoader** with Go fallback implementations
-- New `internal/eclass/` package (3300+ lines)
-- Addresses community feedback about hardcoded eclasses
-
-### v0.5.1 — Hotfix: Multilib ABI Lookup
-
-- Fix deterministic ABI lookup in multilib functions
-
-### v0.5.0 — Language Ecosystems
-
-**Final release of rapid development phase** with Python, Rust, and Go support:
-
-- **Python Eclasses** — python-utils-r1, python-single-r1, python-r1, python-any-r1, distutils-r1
-- **Package Sets** — @world, @system, @selected, @preserved-rebuild
-- **Multilib Eclass** — 32-bit/64-bit ABI support
-- **REQUIRED_USE Solver** — Automatic USE flag resolution
-- **cargo.eclass** — Rust packages with crate vendoring
-- **go-module.eclass** — Go packages with EGO_SUM support
-
-### v0.4.0 — Build Systems
-
-**Major release** with CMake and Meson build system support (~60% tree coverage):
-
-- **CMake Build System** — Full cmake.eclass with Ninja/Makefiles generators
-- **Meson Build System** — Full meson.eclass with ninja backend
-- **toolchain-funcs Eclass** — tc-getCC, tc-getCXX, tc-export, tc-arch, cross-compilation
-- **flag-o-matic Eclass** — append-flags, filter-flags, strip-flags with glob patterns
-- **Repository Cache** — SQLite-backed metadata cache (modernc.org/sqlite, pure Go)
-- **Integration Tests** — 2768 lines covering autotools, cmake, meson packages
+- CMake and Meson build system support
+- toolchain-funcs, flag-o-matic eclasses
+- SQLite-backed metadata cache
 
 ### Earlier Releases
 
-- **v0.3.0** — PMS Compliance (EAPI 0-8, ver_* commands, mvdan.cc/sh)
-- **v0.2.x** — Parser improvements, version comparison hotfixes
+- **v0.3.0** — PMS compliance (EAPI 0-8, ver_* commands, mvdan.cc/sh)
+- **v0.2.x** — Parser improvements, version comparison
 - **v0.1.x** — Foundation, module architecture, initial release
 
 ---
 
-## Roadmap to v1.0.0
+## Current Capabilities
 
-```
-v0.9.3 ← CURRENT (Pre-Release Testing)
-    │   ✅ v0.6.0: Distfile fetching, debug helpers, coverage analyzer
-    │   ✅ v0.7.x: Portage compatibility, security fixes
-    │   ✅ v0.8.0: Configuration management (make.conf, repos.conf, package.use)
-    │   ✅ v0.8.1: Package mask, KEYWORDS filtering, atom parsing
-    │   ✅ v0.8.2: UX improvements (emerge --info, errors)
-    │   ✅ v0.8.3: SRC_URI evaluation hotfix
-    │   ✅ v0.8.4: Package set hotfix (@world, @system, @selected)
-    │   ✅ v0.9.0: Enterprise tool check (Portage-compatible BDEPEND)
-    │   ✅ 98.2% tree coverage on real Gentoo WSL2!
-    ↓
-v0.9.x — Pre-Release Testing
-    │   • Community testing program
-    │   • Documentation finalization
-    │   • Bug fixes from testing
-    ↓
-v1.0.0 — Production Release
-         90%+ coverage verified, community sign-off
-```
+### What Works (~98% Tree Coverage)
 
----
+| Category | Features |
+|----------|----------|
+| **Core** | SAT solver, version comparison, slot/subslot, USE flags |
+| **Configuration** | make.conf, repos.conf, package.use/mask/keywords — full Portage compatibility |
+| **Build Systems** | Autotools (full), CMake (partial), Meson (partial) |
+| **Languages** | Python, Rust, Go — basic support via eclasses |
+| **Multilib** | 32-bit/64-bit ABI management |
+| **Binary Packages** | GPKG (.gpkg.tar), TBZ2 (.tbz2) read/write |
+| **Sync** | rsync, Git with GPG verification |
+| **Eclass Loading** | Dynamic via mvdan.cc/sh (~160 Go helpers) |
 
-## v0.6.0 — Infrastructure & Quality ✅ COMPLETE
+### Known Limitations
 
-**Focus:** Enable actual package building and verify coverage claims
-
-| ID | Task | Priority | Status |
-|----|------|----------|--------|
-| v0.6.0-001 | **Distfile Fetching** | P0 | ✅ Done |
-| v0.6.0-002 | Missing Helpers | P1 | ✅ Done |
-| v0.6.0-003 | Eclass Integration Testing | P1 | ✅ Done |
-| v0.6.0-004 | Coverage Analyzer | P2 | ✅ Done |
-| v0.6.0-005 | External Tool Detection | P2 | ✅ Done |
-
-**Delivered:**
-- `grpm fetch` — Automatic source downloading with mirror failover
-- `debug-print`, `debug-print-function`, `debug-print-section` helpers
-- 21 eclass integration tests (toolchain-funcs, cmake, meson, python-*, etc.)
-- `grpm analyze` — Repository coverage analysis (text/json/markdown)
-- `grpm tools` — External tool detection with install suggestions
+| Limitation | Impact | Planned Resolution |
+|------------|--------|-------------------|
+| mvdan.cc/sh interpreter | ~10% bash features unsupported | Fix upstream or custom interpreter (v0.10.0) |
+| ~160 Go command map entries shadow eclass functions | Correctness concern for custom overlays | Reduce shadowing (v0.10.0) |
+| PMS compliance ~60% (simple) / ~51% (weighted) | Complex eclasses may fail | Interpreter evolution + audit fixes (v0.10.0) |
+| @world build success ~20% | Only autotools packages pass | Interpreter evolution + build system improvements |
+| Daemon scaffolding | Functional but not production-hardened | Production hardening (v0.11.0) |
 
 ---
 
-## v0.7.0 — Validation & Documentation
+## v1.0.0 Release Criteria
 
-**Focus:** Document what works, identify remaining gaps
-
-| Task | Priority |
-|------|----------|
-| Eclass Compatibility Matrix | P1 |
-| Helper Function Gap Analysis | P1 |
-| Error Handling Improvements | P2 |
-
-Key deliverables:
-- docs/eclass-compatibility.md (machine + human readable)
-- Complete helper function catalog
-- Production-ready error messages
-
----
-
-## v0.8.0 — Production Hardening
-
-**Focus:** Performance and operational quality
-
-| Task | Priority |
-|------|----------|
-| Performance Optimization | P1 |
-| Error Handling Improvements | P2 |
-
-Key deliverables:
-- 2x faster dependency resolution
-- Better error messages and recovery
-- Per-package build logs
-
----
-
-## v0.9.0 — Pre-Release ✅ COMPLETE
-
-**Focus:** Enterprise-grade features and Portage compatibility
-
-| Task | Priority | Status |
-|------|----------|--------|
-| Enterprise Tool Check | P1 | ✅ Done |
-| Portage-compatible BDEPEND | P1 | ✅ Done |
-| Package Sets in All Commands | P0 | ✅ Done (v0.8.4) |
-
-Key deliverables:
-- `--check-tools` flag for optional pre-build validation
-- Tool dependencies via BDEPEND (like Portage)
-- `grpm emerge @world` works without tool errors
-- Breaking change: `--skip-tool-check` removed
-
----
-
-## v0.9.x — Pre-Release Testing
-
-**Focus:** Community validation
-
-| Task | Priority |
-|------|----------|
-| Community Testing Program | P0 |
-| Documentation Finalization | P1 |
-| Bug Fixes from Testing | P1 |
-
-Key deliverables:
-- Alpha/beta testing with 50+ testers
-- 1,000+ packages tested on real systems
-- Complete user documentation and migration guide
-
----
-
-## v1.0.0 — Production Release
-
-**Release Criteria:**
-- ✅ 90%+ tree coverage verified by community
-- ✅ 0 critical bugs, < 5 high bugs
-- ✅ API stable and documented
-- ✅ User guide and migration guide complete
-- ✅ Ebuild in GURU overlay
-- ✅ Community sign-off
+| Criterion | Target | Current |
+|-----------|--------|---------|
+| @world build success | 90%+ | ~20% |
+| PMS compliance | 80%+ for common packages | ~60% |
+| Tree coverage | 98%+ | 98.2% |
+| Critical bugs | 0 | 6 tracked |
+| API stability | Frozen | Evolving |
+| Community validation | Gentoo developer sign-off | Audit completed |
+| Documentation | Complete user/dev guides | In progress |
 
 ---
 
 ## Quality Targets
 
-| Metric | Target |
-|--------|--------|
-| Test Coverage | 70%+ overall, 90%+ for domain logic |
-| Performance | Competitive with emerge |
-| Documentation | Complete API docs + user guides |
-| Stability | Zero critical bugs |
-| Tree Coverage | 90%+ of Gentoo packages |
+| Metric | Target | Current |
+|--------|--------|---------|
+| Test functions | Comprehensive | 1,971 passing |
+| Lint issues | 0 | 0 |
+| Test coverage | 70%+ overall, 90%+ domain | Achieved |
+| Tree coverage | 98%+ packages | 98.2% |
 
 ---
 
 ## How to Contribute
 
-1. **Try GRPM** and report issues
-2. **Test eclasses** and report what works/doesn't
-3. Submit feature requests via GitHub Issues
+1. **Try GRPM** on real Gentoo and report issues
+2. **Test eclasses** — report what works and what doesn't
+3. Submit feature requests via [GitHub Issues](https://github.com/grpmsoft/grpm/issues)
 4. Contribute code following [CONTRIBUTING.md](CONTRIBUTING.md)
 5. Help with documentation and testing
 
@@ -450,10 +249,12 @@ Key deliverables:
 
 - **Repository:** https://github.com/grpmsoft/grpm
 - **Issues:** https://github.com/grpmsoft/grpm/issues
-- **Kanban Board:** [docs/dev/kanban/BOARD.md](docs/dev/kanban/BOARD.md)
-- **Documentation:** [docs/](docs/)
+- **Discussions:** https://github.com/grpmsoft/grpm/discussions
+- **PMS Compliance:** [docs/PMS_COMPLIANCE.md](docs/PMS_COMPLIANCE.md)
+- **Architecture:** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+- **Changelog:** [CHANGELOG.md](CHANGELOG.md)
 
 ---
 
 *This roadmap evolves based on community feedback and project needs.*
-*Last updated: 2026-02-08 (v0.9.3 documentation audit)*
+*Last updated: 2026-02-09 (post-audit roadmap restructuring)*

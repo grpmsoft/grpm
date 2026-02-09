@@ -95,14 +95,25 @@ GRPM follows **Domain-Driven Design (DDD)** with a layered architecture:
 
 ```
 internal/
-├── pkg/          # Domain layer (entities, value objects)
-├── solver/       # Dependency resolution (SAT solver)
-├── repo/         # Repository abstraction
-├── daemon/       # gRPC daemon
-├── cli/          # CLI commands
-├── install/      # Package installation
-├── ebuild/       # Ebuild execution
-└── state/        # System state management
+├── pkg/          # Domain layer (entities, value objects, version comparison)
+├── solver/       # SAT-based dependency resolution
+├── repo/         # Repository abstraction (Portage tree, ebuild parsing, SRC_URI)
+├── ebuild/       # Ebuild execution (~160 helpers, 12 eclass modules, phase runner)
+├── eclass/       # Dynamic eclass loading and caching
+├── distfile/     # Distfile resolution with USE-conditional filtering
+├── fetch/        # Download engine (mirrors, checksums, Manifest parsing)
+├── config/       # Configuration (make.conf, repos.conf with variable expansion)
+├── profile/      # Profile system (inheritance, masks, USE defaults)
+├── mask/         # Package masking (package.mask, KEYWORDS filtering)
+├── sets/         # Package sets (@world, @system, @selected)
+├── install/      # Package installation (merge, unmerge, collision detection)
+├── binpkg/       # Binary packages (GPKG, TBZ2 read/write, signing)
+├── sync/         # Repository sync (rsync, Git with GPG)
+├── state/        # System state (VarDB, Btrfs/ZFS snapshots)
+├── cli/          # CLI commands (Cobra-based)
+├── daemon/       # gRPC + REST daemon
+├── application/  # Application layer (use case orchestration, DTOs)
+└── compat/       # Portage compatibility layer
 ```
 
 ### Key Principles
@@ -120,11 +131,20 @@ Look for issues labeled `good first issue` or `help wanted`.
 
 ### Areas Needing Help
 
+- **Bash interpreter evolution** — fix mvdan/sh upstream or help design a custom Go interpreter for ebuilds
 - Complex eclass support (kernel, LLVM, Java)
 - CMake/Meson build system edge cases
-- Real-world package testing and bug reports
+- Real-world package testing and bug reports on Gentoo
+- Audit bug fixes (see [PMS_COMPLIANCE.md Known Bugs](docs/PMS_COMPLIANCE.md#known-bugs))
 - Test coverage improvements
 - Documentation
+
+## Useful References
+
+- [Architecture](docs/ARCHITECTURE.md) — system diagram and package descriptions
+- [PMS Compliance](docs/PMS_COMPLIANCE.md) — implementation status per PMS specification
+- [CLI Reference](docs/CLI_REFERENCE.md) — complete command documentation
+- [Roadmap](ROADMAP.md) — current phase and planned work
 
 ## Getting Help
 

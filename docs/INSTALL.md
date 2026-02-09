@@ -45,7 +45,7 @@ This guide covers installation of GRPM on Gentoo Linux and compatible distributi
 
 ```bash
 # Set version and architecture
-VERSION="0.9.3"
+VERSION="0.9.4"
 ARCH="x86_64"  # Options: x86_64, arm64, armv7, armv6, i386
 
 # Download binary
@@ -187,6 +187,8 @@ sudo chmod 775 /var/cache/distfiles
 ## Daemon Configuration
 
 GRPM includes a daemon mode for background operations and API access.
+
+> **Note:** The daemon is functional scaffolding. Production hardening (health checks, graceful shutdown, connection pooling) is planned for v0.11.0. For production use, monitor the process externally.
 
 ### Manual Start
 
