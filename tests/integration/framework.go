@@ -464,7 +464,7 @@ func ebuildHasFunction(t *testing.T, atom, function string) bool {
 	ebuildPath := filepath.Join(tc.RepoPath, category, pkgName,
 		fmt.Sprintf("%s-%s.ebuild", pkgName, loadedPkg.Version))
 
-	parsed, err := ebuild.ParseEbuildScript(ebuildPath)
+	parsed, err := ebuild.ParseEbuildScript(ebuildPath, nil)
 	if err != nil {
 		return false
 	}
@@ -495,7 +495,7 @@ func getEbuildInherits(t *testing.T, atom string) []string {
 	ebuildPath := filepath.Join(tc.RepoPath, category, pkgName,
 		fmt.Sprintf("%s-%s.ebuild", pkgName, loadedPkg.Version))
 
-	parsed, err := ebuild.ParseEbuildScript(ebuildPath)
+	parsed, err := ebuild.ParseEbuildScript(ebuildPath, nil)
 	if err != nil {
 		return nil
 	}
@@ -558,7 +558,7 @@ func validatePackageParsing(t *testing.T, atom string) *ParseResult {
 	ebuildPath := filepath.Join(tc.RepoPath, category, pkgName,
 		fmt.Sprintf("%s-%s.ebuild", pkgName, loadedPkg.Version))
 
-	parsed, err := ebuild.ParseEbuildScript(ebuildPath)
+	parsed, err := ebuild.ParseEbuildScript(ebuildPath, nil)
 	if err != nil {
 		result.Error = fmt.Errorf("parsing ebuild: %w", err)
 		return result

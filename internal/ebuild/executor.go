@@ -619,8 +619,17 @@ func (e *Executor) ParseEbuild() error {
 		return fmt.Errorf("checking ebuild file: %w", err)
 	}
 
-	// Parse the ebuild script
-	parsed, err := ParseEbuildScript(e.EbuildPath)
+	// Parse the ebuild script with known variables for conditional evaluation.
+	// This ensures inherit calls inside "if [[ ${PV} == 9999 ]]" blocks
+	// are skipped when PV doesn't match (e.g., git-r3 for non-live ebuilds).
+	ebuildVars := map[string]string{
+		"PV":  e.Env.PV,
+		"PVR": e.Env.PVR,
+		"PN":  e.Env.PN,
+		"P":   e.Env.P,
+		"PF":  e.Env.PF,
+	}
+	parsed, err := ParseEbuildScript(e.EbuildPath, ebuildVars)
 	if err != nil {
 		return fmt.Errorf("parsing ebuild: %w", err)
 	}

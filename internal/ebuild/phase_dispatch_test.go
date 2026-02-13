@@ -47,7 +47,7 @@ src_configure() {
 	}
 
 	// Parse ebuild to detect functions
-	script, err := ParseEbuildScript(ebuildPath)
+	script, err := ParseEbuildScript(ebuildPath, nil)
 	if err != nil {
 		t.Fatalf("failed to parse ebuild: %v", err)
 	}
@@ -98,7 +98,7 @@ SLOT="0"
 	}
 
 	// Parse ebuild
-	script, err := ParseEbuildScript(ebuildPath)
+	script, err := ParseEbuildScript(ebuildPath, nil)
 	if err != nil {
 		t.Fatalf("failed to parse ebuild: %v", err)
 	}
@@ -131,7 +131,7 @@ SLOT="0"
 	}
 
 	// Parse ebuild
-	script, err := ParseEbuildScript(ebuildPath)
+	script, err := ParseEbuildScript(ebuildPath, nil)
 	if err != nil {
 		t.Fatalf("failed to parse ebuild: %v", err)
 	}
@@ -237,7 +237,7 @@ src_configure() {
 	}
 
 	// Parse ebuild
-	script, parseErr := ParseEbuildScript(ebuildPath)
+	script, parseErr := ParseEbuildScript(ebuildPath, nil)
 	if parseErr != nil {
 		t.Fatalf("failed to parse ebuild: %v", parseErr)
 	}
@@ -295,7 +295,7 @@ src_prepare() {
 	}
 
 	// Parse ebuild
-	script, parseErr := ParseEbuildScript(ebuildPath)
+	script, parseErr := ParseEbuildScript(ebuildPath, nil)
 	if parseErr != nil {
 		t.Fatalf("failed to parse ebuild: %v", parseErr)
 	}
@@ -370,7 +370,7 @@ pkg_prerm() { :; }
 pkg_postrm() { :; }
 `
 
-	script, err := ParseEbuildScriptFromString(content)
+	script, err := ParseEbuildScriptFromString(content, nil)
 	if err != nil {
 		t.Fatalf("ParseEbuildScriptFromString failed: %v", err)
 	}
@@ -407,7 +407,7 @@ src_compile() { emake; }
 pkg_postinst() { einfo "Done"; }
 `
 
-	script, err := ParseEbuildScriptFromString(content)
+	script, err := ParseEbuildScriptFromString(content, nil)
 	if err != nil {
 		t.Fatalf("ParseEbuildScriptFromString failed: %v", err)
 	}
@@ -501,7 +501,7 @@ src_configure() {
 		EbuildPath: ebuildPath,
 	}
 
-	script, parseErr := ParseEbuildScript(ebuildPath)
+	script, parseErr := ParseEbuildScript(ebuildPath, nil)
 	if parseErr != nil {
 		t.Fatalf("failed to parse ebuild: %v", parseErr)
 	}
@@ -549,7 +549,7 @@ src_install() {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _ = ParseEbuildScriptFromString(content)
+		_, _ = ParseEbuildScriptFromString(content, nil)
 	}
 }
 
@@ -561,7 +561,7 @@ src_configure() { econf; }
 src_compile() { emake; }
 src_install() { emake install; }
 `
-	script, err := ParseEbuildScriptFromString(content)
+	script, err := ParseEbuildScriptFromString(content, nil)
 	if err != nil {
 		b.Fatalf("ParseEbuildScriptFromString failed: %v", err)
 	}
