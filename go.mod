@@ -7,6 +7,7 @@ require (
 	github.com/crillab/gophersat v1.4.0
 	github.com/dsnet/compress v0.0.1
 	github.com/google/uuid v1.6.0
+	github.com/klauspost/compress v1.18.3
 	github.com/ulikunitz/xz v0.5.15
 	golang.org/x/crypto v0.47.0
 	golang.org/x/term v0.39.0
@@ -19,7 +20,6 @@ require (
 require (
 	github.com/coregx/ahocorasick v0.1.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/klauspost/compress v1.18.3 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
@@ -32,3 +32,5 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
+
+replace mvdan.cc/sh/v3 => ../reference/mvdan-sh

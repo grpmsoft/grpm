@@ -112,7 +112,7 @@ function src_compile {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			script, err := ParseEbuildScriptFromString(tt.content)
+			script, err := ParseEbuildScriptFromString(tt.content, nil)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ParseEbuildScriptFromString() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -157,13 +157,139 @@ function src_compile {
 	}
 }
 
+func TestParseEbuildScript_ConditionalInherit(t *testing.T) {
+	// Reproduces the make-4.4.1 pattern: inherit git-r3 inside if [[ ${PV} == 9999 ]]
+	makeEbuild := `
+EAPI=8
+inherit flag-o-matic unpacker verify-sig
+
+if [[ ${PV} == 9999 ]] ; then
+	EGIT_REPO_URI="https://git.savannah.gnu.org/git/make.git"
+	inherit autotools git-r3
+elif [[ $(ver_cut 3) -ge 90 ]] ; then
+	SRC_URI="https://alpha.gnu.org/gnu/make/${P}.tar.lz"
+else
+	SRC_URI="mirror://gnu/make/${P}.tar.lz"
+	KEYWORDS="amd64 x86"
+fi
+`
+	tests := []struct {
+		name        string
+		vars        map[string]string
+		wantInherit []string
+	}{
+		{
+			name:        "PV=4.4.1 should skip git-r3",
+			vars:        map[string]string{"PV": "4.4.1"},
+			wantInherit: []string{"flag-o-matic", "unpacker", "verify-sig"},
+		},
+		{
+			name:        "PV=9999 should include git-r3",
+			vars:        map[string]string{"PV": "9999"},
+			wantInherit: []string{"flag-o-matic", "unpacker", "verify-sig", "autotools", "git-r3"},
+		},
+		{
+			name: "nil vars infers PV from filename (conservative for string parse)",
+			vars: nil,
+			// Without vars, condition can't be evaluated → all branches included
+			wantInherit: []string{"flag-o-matic", "unpacker", "verify-sig", "autotools", "git-r3"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			script, err := ParseEbuildScriptFromString(makeEbuild, tt.vars)
+			if err != nil {
+				t.Fatalf("ParseEbuildScriptFromString() error = %v", err)
+			}
+			if len(script.InheritedEclasses) != len(tt.wantInherit) {
+				t.Errorf("InheritedEclasses = %v, want %v", script.InheritedEclasses, tt.wantInherit)
+				return
+			}
+			for i, ec := range tt.wantInherit {
+				if script.InheritedEclasses[i] != ec {
+					t.Errorf("InheritedEclasses[%d] = %s, want %s", i, script.InheritedEclasses[i], ec)
+				}
+			}
+		})
+	}
+}
+
+func TestParseEbuildScript_ConditionalPatternMatch(t *testing.T) {
+	// Test glob patterns in conditions
+	content := `
+EAPI=8
+inherit base-eclass
+
+if [[ ${PV} == *_p* ]] ; then
+	inherit snapshot-eclass
+fi
+`
+	tests := []struct {
+		name        string
+		vars        map[string]string
+		wantInherit []string
+	}{
+		{
+			name:        "PV without _p skips snapshot eclass",
+			vars:        map[string]string{"PV": "1.2.3"},
+			wantInherit: []string{"base-eclass"},
+		},
+		{
+			name:        "PV with _p includes snapshot eclass",
+			vars:        map[string]string{"PV": "1.2.3_p20250101"},
+			wantInherit: []string{"base-eclass", "snapshot-eclass"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			script, err := ParseEbuildScriptFromString(content, tt.vars)
+			if err != nil {
+				t.Fatalf("ParseEbuildScriptFromString() error = %v", err)
+			}
+			if len(script.InheritedEclasses) != len(tt.wantInherit) {
+				t.Errorf("InheritedEclasses = %v, want %v", script.InheritedEclasses, tt.wantInherit)
+				return
+			}
+			for i, ec := range tt.wantInherit {
+				if script.InheritedEclasses[i] != ec {
+					t.Errorf("InheritedEclasses[%d] = %s, want %s", i, script.InheritedEclasses[i], ec)
+				}
+			}
+		})
+	}
+}
+
+func TestParseEbuildScript_PVFromFilename(t *testing.T) {
+	tests := []struct {
+		path string
+		want string
+	}{
+		{"make-4.4.1-r102.ebuild", "4.4.1"},
+		{"make-4.4.1.ebuild", "4.4.1"},
+		{"zlib-1.3.1.ebuild", "1.3.1"},
+		{"python-3.12.0_beta1.ebuild", "3.12.0_beta1"},
+		{"make-9999.ebuild", "9999"},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			got := pvFromPath(tt.path)
+			if got != tt.want {
+				t.Errorf("pvFromPath(%q) = %q, want %q", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestEbuildScriptHasPhaseFunction(t *testing.T) {
 	content := `
 EAPI=8
 src_configure() { econf; }
 src_compile() { emake; }
 `
-	script, err := ParseEbuildScriptFromString(content)
+	script, err := ParseEbuildScriptFromString(content, nil)
 	if err != nil {
 		t.Fatalf("ParseEbuildScriptFromString() error = %v", err)
 	}
@@ -197,7 +323,7 @@ src_configure() { econf; }
 src_install() { emake install DESTDIR="${D}"; }
 pkg_postinst() { einfo "Done"; }
 `
-	script, err := ParseEbuildScriptFromString(content)
+	script, err := ParseEbuildScriptFromString(content, nil)
 	if err != nil {
 		t.Fatalf("ParseEbuildScriptFromString() error = %v", err)
 	}
@@ -293,7 +419,7 @@ src_install() {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _ = ParseEbuildScriptFromString(content)
+		_, _ = ParseEbuildScriptFromString(content, nil)
 	}
 }
 
@@ -350,7 +476,7 @@ src_prepare() {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := ParseEbuildScriptFromString(tt.content)
+			_, err := ParseEbuildScriptFromString(tt.content, nil)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ParseEbuildScriptFromString() error = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -383,7 +509,7 @@ func TestParseEbuildScript_UnsupportedSyntax(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := ParseEbuildScriptFromString(tt.content)
+			_, err := ParseEbuildScriptFromString(tt.content, nil)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ParseEbuildScriptFromString() error = %v, wantErr %v\nNote: %s",
 					err, tt.wantErr, tt.description)
@@ -468,7 +594,7 @@ src_install() {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := ParseEbuildScriptFromString(tt.content)
+			_, err := ParseEbuildScriptFromString(tt.content, nil)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ParseEbuildScriptFromString() error = %v, wantErr %v", err, tt.wantErr)
 			}
