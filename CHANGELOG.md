@@ -27,6 +27,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **PMS_COMPLIANCE.md** — "Fundamental Limitation" section → "Upstream Contributions" with 6 merged PRs
 - **README.md** — Updated interpreter description to reflect bash 5.2 compatibility
 
+## [Unreleased] - Multilib & Phase Dispatch Fixes
+
+### Fixed
+- **EXPORT_FUNCTIONS chicken-and-egg** — Eclass phase functions (e.g., `multilib-minimal_src_configure`) were never dispatched because `EXPORT_FUNCTIONS` registration only ran inside `RunPhaseFunction()`, which required `HasPhaseFunction()` to be true first. Pre-resolve eclass chain at start of `ExecutePhases()` before the phase loop.
+- **Out-of-tree build directory detection** — `DefaultSrcInstall`, `DefaultSrcCompile`, and `DefaultSrcTest` used `getWorkDir()` (returns `$S`) to find Makefile, but multilib out-of-tree builds place Makefile in `BUILD_DIR`. Switched to `getRuntimeDir()` which reads the bash CWD from the interpreter context (correct after `pushd "${BUILD_DIR}"`).
+- **Go handlers bypassing ebuild bash functions** — Multilib phase handlers hardcoded `econf`/`emake` instead of calling the ebuild's own `multilib_src_configure()`. Added `functionCaller`/`functionChecker` to prefer bash-defined functions over Go fallbacks.
+
+### Added
+- **`CallFunction()` / `HasFunction()` on Interpreter** — Allows Go code to check for and call bash functions defined by eclasses in the main interpreter context
+- **Bash function priority in exec handler** — Ebuild-defined functions (in `runner.Funcs`) now take priority over Go command map entries, matching Portage's behavior where eclasses can override default phase implementations
+- **Eclass sourcing in main interpreter** — `InheritWithEnv()` now sources eclass content in both the metadata executor AND the main interpreter, so bash functions are visible to `runner.Funcs` for phase dispatch
+- **10 new multilib tests** — Coverage for `callMultilibPhase`, `callBashFunction`, `MultilibForeachABI`, `CallFunction`, `HasFunction`
+
+### Verified on Real Gentoo (WSL2)
+- app-arch/xz-utils (multilib, out-of-tree build) ✅
+- dev-libs/pkgconf (multilib) ✅
+
 ---
 
 ## [0.9.4] - 2026-02-09 - Bash Interpreter Hardening

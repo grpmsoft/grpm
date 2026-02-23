@@ -165,7 +165,9 @@ func (h *Helpers) DefaultSrcCompile(args []string) error {
 		return err
 	}
 
-	workDir := h.getWorkDir()
+	// Use runtime CWD for the same reason as DefaultSrcInstall:
+	// multilib out-of-tree builds place the Makefile in BUILD_DIR.
+	workDir := h.getRuntimeDir()
 	if workDir == "" {
 		return &DieError{Message: "default_src_compile: working directory not set"}
 	}
@@ -195,7 +197,8 @@ func (h *Helpers) DefaultSrcTest(args []string) error {
 		return err
 	}
 
-	workDir := h.getWorkDir()
+	// Use runtime CWD for the same reason as DefaultSrcInstall.
+	workDir := h.getRuntimeDir()
 	if workDir == "" {
 		return &DieError{Message: "default_src_test: working directory not set"}
 	}
@@ -233,7 +236,11 @@ func (h *Helpers) DefaultSrcInstall(args []string) error {
 		return &DieError{Message: "default_src_install: environment not set"}
 	}
 
-	workDir := h.getWorkDir()
+	// Use runtime CWD (from bash pushd/cd) when available, because
+	// multilib out-of-tree builds have the Makefile in BUILD_DIR, not S.
+	// Portage's default_src_install runs `make install` in the current
+	// directory, which is BUILD_DIR after eclass pushd.
+	workDir := h.getRuntimeDir()
 	if workDir == "" {
 		return &DieError{Message: "default_src_install: working directory not set"}
 	}

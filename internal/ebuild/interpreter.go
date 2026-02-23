@@ -52,6 +52,11 @@ type Interpreter struct {
 	stdout  io.Writer
 	stderr  io.Writer
 	helpers *Helpers
+
+	// runner holds the active runner during script execution.
+	// This allows Go helpers to call bash-defined functions via CallFunction.
+	runner *interp.Runner
+	runCtx context.Context
 }
 
 // NewInterpreter creates a new bash interpreter for ebuild execution.
@@ -76,6 +81,11 @@ func NewInterpreter(env *Environment, stdout, stderr io.Writer) *Interpreter {
 	// Wire up the command dispatcher for nonfatal support.
 	// This allows nonfatal to execute helper commands through the interpreter.
 	i.helpers.SetCommandDispatcher(i.dispatchCommand)
+
+	// Wire up the function caller for bash function invocation.
+	// This allows Go helpers (e.g., multilib) to call bash-defined functions.
+	i.helpers.SetFunctionCaller(i.CallFunction)
+	i.helpers.SetFunctionChecker(i.HasFunction)
 
 	return i
 }
@@ -121,6 +131,17 @@ func (i *Interpreter) Run(ctx context.Context, script string) (runErr error) {
 	runner, err := i.createRunner(ctx)
 	if err != nil {
 		return fmt.Errorf("creating runner: %w", err)
+	}
+
+	// Store runner so Go helpers can call bash functions via CallFunction.
+	// Only store if not already set (avoid overwriting during nested calls).
+	if i.runner == nil {
+		i.runner = runner
+		i.runCtx = ctx
+		defer func() {
+			i.runner = nil
+			i.runCtx = nil
+		}()
 	}
 
 	// Execute the program
@@ -685,8 +706,18 @@ func (i *Interpreter) execHandler(next interp.ExecHandlerFunc) interp.ExecHandle
 			return nil
 		}
 
-		// Look up command in map
+		// Look up command in map.
+		// If a bash function with the same name exists (e.g., from an
+		// inherited eclass), prefer it over the Go handler. Eclass bash
+		// functions may have intermediate dispatch logic (_abi_ functions)
+		// that the Go handler doesn't replicate.
 		if handler, ok := commands[cmd]; ok {
+			if i.runner != nil {
+				if _, hasBashFunc := i.runner.Funcs[cmd]; hasBashFunc {
+					return next(ctx, args)
+				}
+			}
+
 			// Make runtime bash variables available to Go helpers.
 			i.helpers.runtimeEnv = hc.Env
 			i.helpers.runtimeDir = hc.Dir
@@ -760,6 +791,42 @@ func (i *Interpreter) dispatchCommand(cmd string, args []string) error {
 
 	// Execute the command
 	return handler(args)
+}
+
+// CallFunction executes bash code on the active runner.
+//
+// This allows Go helpers to call bash-defined functions from ebuilds.
+// For example, multilib-minimal helpers use this to call the ebuild's
+// multilib_src_configure() function during ABI iteration.
+//
+// Returns error if no runner is active (not inside Run()) or if the
+// bash code fails.
+func (i *Interpreter) CallFunction(code string) error {
+	if i.runner == nil || i.runCtx == nil {
+		return fmt.Errorf("CallFunction: no active runner")
+	}
+
+	parser := syntax.NewParser(syntax.Variant(syntax.LangBash))
+	prog, err := parser.Parse(strings.NewReader(code), "call")
+	if err != nil {
+		return fmt.Errorf("CallFunction: parsing %q: %w", code, err)
+	}
+
+	if err := i.runner.Run(i.runCtx, prog); err != nil {
+		return fmt.Errorf("CallFunction %q: %w", code, err)
+	}
+
+	return nil
+}
+
+// HasFunction returns true if a bash function with the given name is
+// defined in the running interpreter.
+func (i *Interpreter) HasFunction(name string) bool {
+	if i.runner == nil {
+		return false
+	}
+	_, ok := i.runner.Funcs[name]
+	return ok
 }
 
 // Eval evaluates a bash expression and returns its output.

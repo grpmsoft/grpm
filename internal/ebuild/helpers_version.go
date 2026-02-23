@@ -407,9 +407,29 @@ func (h *Helpers) InheritWithEnv(args []string, env expand.Environ) error {
 		loader.SetEnv(envVars)
 	}
 
-	// Load all requested eclasses
+	// Load all requested eclasses (metadata extraction in eclass executor).
 	if err := h.eclassLoader.Inherit(ctx, args); err != nil {
 		return &DieError{Message: fmt.Sprintf("inherit failed: %v", err)}
+	}
+
+	// Source eclass content in the MAIN interpreter so bash functions
+	// (e.g., multilib-minimal_src_configure) are available in runner.Funcs.
+	// The eclass loader above runs in a separate executor for metadata;
+	// functions defined there are NOT visible to the main runner.
+	// Portage sources eclasses in the same shell context — we replicate that.
+	if h.functionCaller != nil {
+		if loader, ok := h.eclassLoader.(*DynamicEclassLoader); ok {
+			for _, name := range args {
+				content := loader.GetEclassContent(name)
+				if content != "" {
+					if err := h.functionCaller(content); err != nil {
+						// Non-fatal: eclass may have unsupported constructs.
+						// Functions that DID parse will still be registered.
+						h.writeStderr(fmt.Sprintf(">>> Warning: sourcing eclass %s in main interpreter: %v\n", name, err))
+					}
+				}
+			}
+		}
 	}
 
 	return nil

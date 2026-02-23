@@ -213,7 +213,8 @@ Core business logic. Inner layers never depend on outer layers.
 | `eclass_python_any.go` | python-any-r1 | `python-any-r1_pkg_setup`, `python_check_deps` |
 | `eclass_python_utils.go` | python-utils-r1 | `python_get_sitedir`, `python_domodule`, `python_optimize` |
 | `eclass_helpers.go` | multiple | `eshopts_push`/`pop`, `multilib`, `flag-o-matic`, `linux-info`, `toolchain-funcs` |
-| `eclass_multilib.go` | multilib-minimal | `multilib_foreach_abi`, `multilib_src_configure` |
+| `eclass_multilib.go` | multilib-minimal | `multilib_foreach_abi`, `multilib_src_configure` (bash function priority) |
+| `eclass_multilib_build.go` | multilib-build | `multilib_foreach_abi`, `multilib_native_use_build`, `callMultilibPhase` (delegates to ebuild bash functions) |
 | `eclass_flag_o_matic.go` | flag-o-matic | `append-flags`, `replace-flags`, `strip-flags`, `filter-flags` |
 
 ### Infrastructure Layer
@@ -453,16 +454,17 @@ The ~160 Go helper functions in the command map intercept commands before dynami
 
 ### PMS Compliance
 
-As of v0.9.4 (validated by 4-agent audit, 2026-02-09):
+As of v0.9.4+ (validated by 4-agent audit, 2026-02-09; multilib fixes 2026-02-23):
 
 | Scenario | Compliance |
 |----------|-----------|
 | Simple autotools (configure/make/make install) | ~80% |
 | Packages using `default` command | ~70% |
+| Multilib autotools packages (xz-utils, pkgconf) | ~70% |
 | Packages with complex eclasses | ~40% |
 | **Weighted average across Portage tree** | **~51%** |
 
-The gap is primarily due to phase dispatch routing and missing build system support (Python/CMake/Meson), not interpreter limitations. The correct PMS implementations exist in `helpers_default.go` but are not always dispatched correctly. See `docs/dev/research/audit-validated-2026-02-09.md` for the full audit report.
+Phase dispatch routing for EXPORT_FUNCTIONS has been fixed — eclass phase functions are now correctly resolved before the phase loop. Multilib out-of-tree builds work with correct BUILD_DIR detection. The remaining gap is missing build system support (Python/CMake/Meson). See `docs/dev/research/audit-validated-2026-02-09.md` for the full audit report.
 
 ---
 

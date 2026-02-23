@@ -37,7 +37,7 @@
 | Ch. 11: Environment | **Full** | All core variables, CHOST/CBUILD, USE_EXPAND |
 | Ch. 12: Commands | **Partial** | ~160 helper functions, ~55 command map entries |
 
-**Overall Estimate:** ~60% PMS compliance for simple autotools packages, ~51% weighted across all package types. Primary gaps: phase dispatch routing and missing build system support (Python/CMake/Meson). The bash interpreter (mvdan.cc/sh) is now fully bash 5.2 compatible after 6 upstream PRs merged. See [Known Bugs](#known-bugs) below.
+**Overall Estimate:** ~65% PMS compliance for simple autotools packages, ~51% weighted across all package types. Phase dispatch routing for EXPORT_FUNCTIONS has been fixed (2026-02-23). Primary remaining gap: missing build system support (Python/CMake/Meson). The bash interpreter (mvdan.cc/sh) is fully bash 5.2 compatible after 6 upstream PRs merged. See [Known Bugs](#known-bugs) below.
 
 ---
 
@@ -326,11 +326,11 @@ internal/solver/gophersat_adapter.go  # SAT encoding
 | pkg_pretend | Partial | Called but limited checks |
 | pkg_setup | Full | |
 | src_unpack | Full | 11 archive formats including .tar.lz |
-| src_prepare | Partial | eapply_user exists in `helpers_default.go` but phase dispatch routing in `phases_impl.go` may not invoke it in all code paths |
-| src_configure | Full | econf with ECONF_SOURCE, CHOST, CBUILD |
-| src_compile | Partial | Simple builds work |
+| src_prepare | Full | eapply_user via EXPORT_FUNCTIONS routing (fixed 2026-02-23) |
+| src_configure | Full | econf with ECONF_SOURCE, CHOST, CBUILD; multilib out-of-tree builds |
+| src_compile | Full | Autotools builds; `getRuntimeDir()` for correct BUILD_DIR detection |
 | src_test | Partial | When --test flag used |
-| src_install | Partial | einstalldocs exists in `helpers_default.go` but phase dispatch routing needs verification |
+| src_install | Full | einstalldocs via EXPORT_FUNCTIONS routing; correct BUILD_DIR for multilib |
 | pkg_preinst | Full | |
 | pkg_postinst | Full | |
 | pkg_prerm | Full | |
@@ -405,7 +405,7 @@ internal/ebuild/helpers_unpack.go  # 11 archive formats
 | go-module | `eclass_go_module.go` | Partial | go-module_set_globals, src_unpack |
 | meson | `eclass_meson.go` + `build_meson.go` | Partial | Cross-file generation, feature flags |
 | multilib | `eclass_multilib.go` | Partial | ABI handling, get_libdir |
-| multilib-build | `eclass_multilib_build.go` | Partial | foreach_abi, native_abi checks |
+| multilib-build | `eclass_multilib_build.go` | Full | foreach_abi, native_abi checks, bash function delegation via `callMultilibPhase` |
 | python-any-r1 | `eclass_python_any.go` | Partial | pkg_setup, version detection |
 | python-r1 | `eclass_python_r1.go` | Partial | foreach_impl, pkg_setup |
 | python-single-r1 | `eclass_python_single.go` | Partial | Single implementation setup |
@@ -796,14 +796,14 @@ EAPI 7+ cross-compilation variables (SYSROOT, ESYSROOT, BROOT) are defined but n
 
 Issues identified during community code audit (2026-02-09) and tracked for resolution:
 
-| Bug | Location | Impact | Planned Fix |
-|-----|----------|--------|-------------|
-| `=*` glob operator overly permissive | `internal/pkg/atom.go:748` | `strings.HasPrefix` matches at any position; PMS requires component boundary match | v0.10.0 |
-| Phase defaults routing | `internal/ebuild/phases_impl.go` | Dispatch may call incomplete defaults instead of correct implementations in `helpers_default.go` | v0.10.0 |
-| `phasePrepare()` eapply_user dispatch | `internal/ebuild/phases_impl.go` | Implementation exists but may not be invoked in all phase entry points | v0.10.0 |
-| `phaseInstall()` einstalldocs dispatch | `internal/ebuild/phases_impl.go` | Implementation exists but may not be invoked in all phase entry points | v0.10.0 |
-| Hardcoded `--libdir=/usr/lib64` | `internal/ebuild/phases_impl.go` | `phaseConfigure()` always uses lib64 instead of detecting from ABI/profile | v0.10.0 |
-| Dead code in compat | `internal/compat/portage.go` | 17 lines with "not yet implemented" placeholder | v0.10.0 |
+| Bug | Location | Impact | Status |
+|-----|----------|--------|--------|
+| `=*` glob operator overly permissive | `internal/pkg/atom.go:748` | `strings.HasPrefix` matches at any position; PMS requires component boundary match | Open (v0.10.0) |
+| ~~Phase defaults routing~~ | ~~`internal/ebuild/phases_impl.go`~~ | ~~Dispatch may call incomplete defaults~~ | **Fixed** (2026-02-23): pre-resolve eclass chain + EXPORT_FUNCTIONS before phase loop |
+| ~~`phasePrepare()` eapply_user dispatch~~ | ~~`internal/ebuild/phases_impl.go`~~ | ~~May not be invoked in all entry points~~ | **Fixed** (2026-02-23): EXPORT_FUNCTIONS routing now works |
+| ~~`phaseInstall()` einstalldocs dispatch~~ | ~~`internal/ebuild/phases_impl.go`~~ | ~~May not be invoked in all entry points~~ | **Fixed** (2026-02-23): EXPORT_FUNCTIONS routing now works |
+| Hardcoded `--libdir=/usr/lib64` | `internal/ebuild/phases_impl.go` | `phaseConfigure()` always uses lib64 instead of detecting from ABI/profile | Open (v0.10.0) |
+| Dead code in compat | `internal/compat/portage.go` | 17 lines with "not yet implemented" placeholder | Open (v0.10.0) |
 
 ---
 

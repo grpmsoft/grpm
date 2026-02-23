@@ -90,6 +90,11 @@ type Executor struct {
 
 	// currentPhase tracks the currently executing phase for EBUILD_PHASE
 	currentPhase Phase
+
+	// resolvedEclasses caches the resolved eclass chain from resolveEclassChain.
+	// Pre-resolved at the start of ExecutePhases so that HasPhaseFunction can
+	// detect phases exported by eclasses (e.g., multilib-minimal's src_configure).
+	resolvedEclasses []eclassRef
 }
 
 // ExecutorOptions configures ebuild execution.
@@ -264,6 +269,20 @@ func (e *Executor) ExecutePhases(phases []Phase) ([]PhaseResult, error) {
 				}
 			}
 		}()
+	}
+
+	// Pre-resolve eclass chain so that EXPORT_FUNCTIONS are registered
+	// BEFORE the phase dispatch loop. Without this, HasPhaseFunction()
+	// cannot detect phases exported by eclasses (e.g., multilib-minimal's
+	// src_configure), and all phases fall through to Go defaults.
+	if e.ParsedEbuild != nil && len(e.ParsedEbuild.InheritedEclasses) > 0 && e.eclassCache != nil {
+		if e.interpreter == nil {
+			if err := e.initInterpreter(); err != nil {
+				return nil, fmt.Errorf("initializing interpreter for eclass resolution: %w", err)
+			}
+		}
+		e.resolvedEclasses = e.resolveEclassChain(e.ParsedEbuild.InheritedEclasses)
+		logging.Debug("[ebuild] pre-resolved %d eclasses for phase dispatch", len(e.resolvedEclasses))
 	}
 
 	results := make([]PhaseResult, 0, len(phases))
@@ -947,12 +966,15 @@ func (e *Executor) RunPhaseFunction(phase Phase) (string, error) {
 }
 `)
 
-		// Resolve and embed all eclasses from the ebuild's inherit line.
-		// We pre-resolve the entire chain (including sub-inherits) using
-		// the eclass cache, then embed each eclass in dependency order.
+		// Embed all eclasses from the ebuild's inherit line.
+		// Use pre-resolved chain if available (from ExecutePhases pre-resolution),
+		// otherwise resolve now (for standalone RunPhaseFunction calls).
 		if e.ParsedEbuild != nil && len(e.ParsedEbuild.InheritedEclasses) > 0 {
-			resolved := e.resolveEclassChain(e.ParsedEbuild.InheritedEclasses)
-			logging.Debug("[ebuild] resolved %d eclasses for embedding", len(resolved))
+			resolved := e.resolvedEclasses
+			if len(resolved) == 0 {
+				resolved = e.resolveEclassChain(e.ParsedEbuild.InheritedEclasses)
+			}
+			logging.Debug("[ebuild] embedding %d eclasses", len(resolved))
 			for _, ec := range resolved {
 				content, err := os.ReadFile(ec.path)
 				if err != nil {

@@ -92,6 +92,17 @@ type Helpers struct {
 	// Set by the interpreter to allow nonfatal to execute commands.
 	commandDispatcher func(cmd string, args []string) error
 
+	// Function caller for invoking bash functions defined in ebuilds.
+	// Unlike commandDispatcher (which only resolves Go-mapped commands),
+	// this executes code on the running bash interpreter, resolving
+	// bash-defined functions like multilib_src_configure.
+	functionCaller func(code string) error
+
+	// Function checker returns true if a bash function is defined in the
+	// running interpreter. Used by callMultilibPhase to avoid calling
+	// undefined functions (which would modify runner exit status).
+	functionChecker func(name string) bool
+
 	// runtimeEnv holds the current bash runner's environment during command dispatch.
 	// Set by the exec handler before calling Go helpers, cleared after return.
 	// This allows Go helpers to read variables set in the running bash script
@@ -234,4 +245,47 @@ func (h *Helpers) IsNonfatalMode() bool {
 // interpreter's command dispatch mechanism.
 func (h *Helpers) SetCommandDispatcher(dispatcher func(cmd string, args []string) error) {
 	h.commandDispatcher = dispatcher
+}
+
+// SetFunctionCaller sets the function used to call bash-defined functions.
+//
+// This is called by the interpreter to allow Go helpers to invoke bash
+// functions defined in ebuilds (e.g., multilib_src_configure). Unlike
+// the command dispatcher, this executes code through the running bash
+// interpreter, which can resolve shell-defined functions.
+func (h *Helpers) SetFunctionCaller(caller func(code string) error) {
+	h.functionCaller = caller
+}
+
+// SetFunctionChecker sets the function used to check if a bash function exists.
+//
+// This avoids calling undefined functions through the interpreter (which
+// would modify the runner's exit status and cause spurious failures).
+func (h *Helpers) SetFunctionChecker(checker func(name string) bool) {
+	h.functionChecker = checker
+}
+
+// hasBashFunction returns true if the named bash function is defined.
+func (h *Helpers) hasBashFunction(name string) bool {
+	if h.functionChecker == nil {
+		return false
+	}
+	return h.functionChecker(name)
+}
+
+// callBashFunction invokes a bash function by name through the interpreter.
+//
+// Returns error if the function caller is not set or the function fails.
+func (h *Helpers) callBashFunction(name string, args []string) error {
+	if h.functionCaller == nil {
+		return fmt.Errorf("cannot call bash function %s: no interpreter available", name)
+	}
+
+	// Build the command string
+	cmd := name
+	for _, arg := range args {
+		cmd += " " + arg
+	}
+
+	return h.functionCaller(cmd)
 }
