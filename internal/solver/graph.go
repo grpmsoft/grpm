@@ -191,18 +191,18 @@ func (g *DependencyGraph) ResetVisited() {
 func (g *DependencyGraph) String() string {
 	var sb strings.Builder
 
-	sb.WriteString(fmt.Sprintf("Dependency Graph: %d packages, %d edges\n", len(g.nodes), len(g.edges)))
-	sb.WriteString(fmt.Sprintf("Root packages: %v\n", g.roots))
+	fmt.Fprintf(&sb, "Dependency Graph: %d packages, %d edges\n", len(g.nodes), len(g.edges))
+	fmt.Fprintf(&sb, "Root packages: %v\n", g.roots)
 
 	// Group by depth
 	byDepth := g.GetPackagesByDepth()
 	for depth := 0; depth <= 10; depth++ { // Max depth 10 for display
 		if packages, ok := byDepth[depth]; ok {
-			sb.WriteString(fmt.Sprintf("\nDepth %d: %d packages\n", depth, len(packages)))
+			fmt.Fprintf(&sb, "\nDepth %d: %d packages\n", depth, len(packages))
 			for _, name := range packages {
 				node := g.nodes[name]
-				sb.WriteString(fmt.Sprintf("  - %s-%s (deps: %d, dependents: %d)\n",
-					name, node.Package.Version, len(node.Dependencies), len(node.Dependents)))
+				fmt.Fprintf(&sb, "  - %s-%s (deps: %d, dependents: %d)\n",
+					name, node.Package.Version, len(node.Dependencies), len(node.Dependents))
 			}
 		}
 	}
@@ -225,8 +225,8 @@ func (g *DependencyGraph) ToDOT() string {
 			color = "lightblue" // Root packages
 		}
 
-		sb.WriteString(fmt.Sprintf("  \"%s\" [label=\"%s\\n%s\", style=filled, fillcolor=%s];\n",
-			name, name, node.Package.Version, color))
+		fmt.Fprintf(&sb, "  \"%s\" [label=\"%s\\n%s\", style=filled, fillcolor=%s];\n",
+			name, name, node.Package.Version, color)
 	}
 
 	sb.WriteString("\n")
@@ -246,8 +246,8 @@ func (g *DependencyGraph) ToDOT() string {
 			label = edge.Constraint.Version.String()
 		}
 
-		sb.WriteString(fmt.Sprintf("  \"%s\" -> \"%s\" [label=\"%s\", style=%s];\n",
-			edge.From, edge.To, label, style))
+		fmt.Fprintf(&sb, "  \"%s\" -> \"%s\" [label=\"%s\", style=%s];\n",
+			edge.From, edge.To, label, style)
 	}
 
 	sb.WriteString("}\n")

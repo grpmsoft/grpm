@@ -65,7 +65,7 @@ func (s Severity) String() string {
 func (c *ConflictError) Error() string {
 	var sb strings.Builder
 
-	sb.WriteString(fmt.Sprintf("%s (%s): ", c.Type, c.Severity))
+	fmt.Fprintf(&sb, "%s (%s): ", c.Type, c.Severity)
 
 	if len(c.Packages) > 0 {
 		sb.WriteString(strings.Join(c.Packages, ", "))
@@ -274,7 +274,7 @@ func (g *DependencyGraph) ConflictReport() string {
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Detected %d conflicts:\n\n", len(conflicts)))
+	fmt.Fprintf(&sb, "Detected %d conflicts:\n\n", len(conflicts))
 
 	// Group by severity
 	bySeverity := make(map[Severity][]*ConflictError)
@@ -290,9 +290,9 @@ func (g *DependencyGraph) ConflictReport() string {
 			continue
 		}
 
-		sb.WriteString(fmt.Sprintf("=== %s (%d) ===\n", strings.ToUpper(severity.String()), len(conflicts)))
+		fmt.Fprintf(&sb, "=== %s (%d) ===\n", strings.ToUpper(severity.String()), len(conflicts))
 		for i, conflict := range conflicts {
-			sb.WriteString(fmt.Sprintf("%d. %s\n", i+1, conflict.Error()))
+			fmt.Fprintf(&sb, "%d. %s\n", i+1, conflict.Error())
 		}
 		sb.WriteString("\n")
 	}

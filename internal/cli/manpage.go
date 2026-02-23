@@ -97,8 +97,8 @@ func (g *ManPageGenerator) GenerateMain() string {
 	commands := g.registry.All()
 	for _, cmd := range commands {
 		sb.WriteString(".TP\n")
-		sb.WriteString(fmt.Sprintf(".B %s\n", cmd.Name))
-		sb.WriteString(fmt.Sprintf("%s\n", escapeManPage(cmd.Short)))
+		fmt.Fprintf(&sb, ".B %s\n", cmd.Name)
+		fmt.Fprintf(&sb, "%s\n", escapeManPage(cmd.Short))
 	}
 	sb.WriteString(".PP\n")
 	sb.WriteString("Run\n")
@@ -201,19 +201,19 @@ func (g *ManPageGenerator) GenerateCommand(cmdName string) string {
 
 	// NAME section
 	sb.WriteString(".SH NAME\n")
-	sb.WriteString(fmt.Sprintf("grpm-%s \\- %s\n", cmdName, escapeManPage(strings.ToLower(meta.Short))))
+	fmt.Fprintf(&sb, "grpm-%s \\- %s\n", cmdName, escapeManPage(strings.ToLower(meta.Short)))
 
 	// SYNOPSIS section
 	sb.WriteString(".SH SYNOPSIS\n")
 	sb.WriteString(".B grpm\n")
-	sb.WriteString(fmt.Sprintf("%s\n", formatSynopsis(meta.Usage)))
+	fmt.Fprintf(&sb, "%s\n", formatSynopsis(meta.Usage))
 
 	// DESCRIPTION section
 	sb.WriteString(".SH DESCRIPTION\n")
 	if meta.Long != "" {
 		sb.WriteString(formatDescription(meta.Long))
 	} else {
-		sb.WriteString(fmt.Sprintf("%s\n", escapeManPage(meta.Short)))
+		fmt.Fprintf(&sb, "%s\n", escapeManPage(meta.Short))
 	}
 
 	// OPTIONS section
@@ -233,7 +233,7 @@ func (g *ManPageGenerator) GenerateCommand(cmdName string) string {
 		sb.WriteString("This command can also be invoked as:\n")
 		for _, alias := range meta.Aliases {
 			sb.WriteString(".TP\n")
-			sb.WriteString(fmt.Sprintf(".B grpm %s\n", alias))
+			fmt.Fprintf(&sb, ".B grpm %s\n", alias)
 		}
 	}
 
@@ -252,7 +252,7 @@ func (g *ManPageGenerator) GenerateCommand(cmdName string) string {
 	// Add related commands from metadata
 	if len(meta.SeeAlso) > 0 {
 		for _, related := range meta.SeeAlso {
-			sb.WriteString(fmt.Sprintf(",\n.BR grpm-%s (1)", related))
+			fmt.Fprintf(&sb, ",\n.BR grpm-%s (1)", related)
 		}
 	}
 	sb.WriteString("\n")
@@ -305,14 +305,14 @@ func (g *ManPageGenerator) formatFlag(flag FlagMeta) string {
 
 	// Format flag names
 	if flag.Short != "" && flag.Long != "" {
-		sb.WriteString(fmt.Sprintf(".BR \\-%s \", \" \\-\\-%s", flag.Short, escapeDashes(flag.Long)))
+		fmt.Fprintf(&sb, ".BR \\-%s \", \" \\-\\-%s", flag.Short, escapeDashes(flag.Long))
 	} else if flag.Long != "" {
-		sb.WriteString(fmt.Sprintf(".BR \\-\\-%s", escapeDashes(flag.Long)))
+		fmt.Fprintf(&sb, ".BR \\-\\-%s", escapeDashes(flag.Long))
 	}
 
 	// Add type indicator for non-bool flags
 	if flag.Type != "bool" && flag.Type != "" {
-		sb.WriteString(fmt.Sprintf(" \" \" \\fI%s\\fR", flag.Type))
+		fmt.Fprintf(&sb, " \" \" \\fI%s\\fR", flag.Type)
 	}
 	sb.WriteString("\n")
 
@@ -321,7 +321,7 @@ func (g *ManPageGenerator) formatFlag(flag FlagMeta) string {
 
 	// Default value for non-bool flags
 	if flag.Type != "bool" && flag.Default != "" {
-		sb.WriteString(fmt.Sprintf(" Default: \\fI%s\\fR.", escapeManPage(flag.Default)))
+		fmt.Fprintf(&sb, " Default: \\fI%s\\fR.", escapeManPage(flag.Default))
 	}
 	sb.WriteString("\n")
 
@@ -383,12 +383,12 @@ func formatExample(example string) string {
 
 	// Command part (bold)
 	cmd := strings.TrimSpace(parts[0])
-	sb.WriteString(fmt.Sprintf("\\fB%s\\fR", escapeManPage(cmd)))
+	fmt.Fprintf(&sb, "\\fB%s\\fR", escapeManPage(cmd))
 
 	// Comment part (if present)
 	if len(parts) > 1 {
 		comment := strings.TrimSpace(parts[1])
-		sb.WriteString(fmt.Sprintf("  # %s", escapeManPage(comment)))
+		fmt.Fprintf(&sb, "  # %s", escapeManPage(comment))
 	}
 
 	sb.WriteString("\n.fi\n") // End no-fill mode

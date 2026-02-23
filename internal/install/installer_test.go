@@ -442,58 +442,9 @@ func TestFindInstalledVersionNilDB(t *testing.T) {
 	}
 }
 
-// TestInstallRequiresReplaceWhenAlreadyInstalled tests that install requires
-// --replace flag when package is already installed.
-func TestInstallRequiresReplaceWhenAlreadyInstalled(t *testing.T) {
-	tmpDir := t.TempDir()
-	db := state.NewPackageDatabase(tmpDir)
-	installer := NewInstaller(tmpDir, db)
-
-	// Install hello-2.10
-	helloPkg := &state.InstalledPackage{
-		Package: &pkg.Package{
-			Name:    "app-misc/hello",
-			Version: "2.10",
-			Slot:    pkg.Slot{Name: "0"},
-		},
-		InstallTime: time.Now(),
-		Files:       []state.InstalledFile{},
-	}
-	if err := db.Add(helloPkg); err != nil {
-		t.Fatal(err)
-	}
-
-	// Create work directory
-	workDir := filepath.Join(tmpDir, "work")
-	if err := os.MkdirAll(workDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-
-	// Try to install hello-2.12 without Replace flag
-	newPkg := &pkg.Package{
-		Name:    "app-misc/hello",
-		Version: "2.12",
-		Slot:    pkg.Slot{Name: "0"},
-	}
-
-	opts := InstallOptions{
-		WorkDir: workDir,
-		Replace: false, // No replace!
-	}
-
-	err := installer.Install(newPkg, opts)
-	if err == nil {
-		t.Error("expected error when installing already-installed package without --replace")
-	}
-
-	// Error should mention --replace
-	if err != nil && !contains(err.Error(), "replace") && !contains(err.Error(), "-R") {
-		t.Errorf("error should mention --replace, got: %v", err)
-	}
-}
-
-// TestInstallPretendModeShowsReplace tests pretend mode shows replacement.
-func TestInstallPretendModeShowsReplace(t *testing.T) {
+// TestInstallSkipsSameVersion tests that installing the same version
+// without --replace skips gracefully (Portage-compatible behavior).
+func TestInstallSkipsSameVersion(t *testing.T) {
 	tmpDir := t.TempDir()
 	db := state.NewPackageDatabase(tmpDir)
 	installer := NewInstaller(tmpDir, db)
@@ -523,10 +474,196 @@ func TestInstallPretendModeShowsReplace(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Pretend to install hello-2.12 with Replace
+	// Install same version without Replace — should skip
+	samePkg := &pkg.Package{
+		Name:    "app-misc/hello",
+		Version: "2.10",
+		Slot:    pkg.Slot{Name: "0"},
+	}
+
+	opts := InstallOptions{
+		WorkDir: workDir,
+		Replace: false,
+	}
+
+	err := installer.Install(samePkg, opts)
+	if err != nil {
+		t.Errorf("expected nil error for same version skip, got: %v", err)
+	}
+
+	// Should show "Already installed" message
+	found := false
+	for _, msg := range progressMessages {
+		if contains(msg, "Already installed") && contains(msg, "skipping") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected 'Already installed' skip message, got: %v", progressMessages)
+	}
+}
+
+// TestInstallAutoUpgradesDifferentVersion tests that installing a different
+// version auto-upgrades without requiring --replace (Portage-compatible).
+func TestInstallAutoUpgradesDifferentVersion(t *testing.T) {
+	tmpDir := t.TempDir()
+	db := state.NewPackageDatabase(tmpDir)
+	installer := NewInstaller(tmpDir, db)
+	installer.DryRun = true // avoid actual merge
+
+	var progressMessages []string
+	installer.OnProgress = func(status string) {
+		progressMessages = append(progressMessages, status)
+	}
+
+	// Install hello-2.10
+	helloPkg := &state.InstalledPackage{
+		Package: &pkg.Package{
+			Name:    "app-misc/hello",
+			Version: "2.10",
+			Slot:    pkg.Slot{Name: "0"},
+		},
+		InstallTime: time.Now(),
+		Files:       []state.InstalledFile{},
+	}
+	if err := db.Add(helloPkg); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create work directory
+	workDir := filepath.Join(tmpDir, "work")
+	if err := os.MkdirAll(workDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Install hello-2.12 without Replace — should auto-upgrade
 	newPkg := &pkg.Package{
 		Name:    "app-misc/hello",
 		Version: "2.12",
+		Slot:    pkg.Slot{Name: "0"},
+	}
+
+	opts := InstallOptions{
+		WorkDir: workDir,
+		Replace: false,
+	}
+
+	err := installer.Install(newPkg, opts)
+	if err != nil {
+		t.Errorf("expected auto-upgrade, got error: %v", err)
+	}
+
+	// Should show upgrade message
+	found := false
+	for _, msg := range progressMessages {
+		if contains(msg, "upgrade") || contains(msg, "Upgrade") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected upgrade message, got: %v", progressMessages)
+	}
+}
+
+// TestInstallPretendModeShowsUpgrade tests pretend mode shows upgrade message.
+func TestInstallPretendModeShowsUpgrade(t *testing.T) {
+	tmpDir := t.TempDir()
+	db := state.NewPackageDatabase(tmpDir)
+	installer := NewInstaller(tmpDir, db)
+
+	var progressMessages []string
+	installer.OnProgress = func(status string) {
+		progressMessages = append(progressMessages, status)
+	}
+
+	// Install hello-2.10
+	helloPkg := &state.InstalledPackage{
+		Package: &pkg.Package{
+			Name:    "app-misc/hello",
+			Version: "2.10",
+			Slot:    pkg.Slot{Name: "0"},
+		},
+		InstallTime: time.Now(),
+		Files:       []state.InstalledFile{},
+	}
+	if err := db.Add(helloPkg); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create work directory
+	workDir := filepath.Join(tmpDir, "work")
+	if err := os.MkdirAll(workDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Pretend to install hello-2.12 (different version — shows upgrade)
+	newPkg := &pkg.Package{
+		Name:    "app-misc/hello",
+		Version: "2.12",
+		Slot:    pkg.Slot{Name: "0"},
+	}
+
+	opts := InstallOptions{
+		WorkDir: workDir,
+		Pretend: true,
+	}
+
+	err := installer.Install(newPkg, opts)
+	if err != nil {
+		t.Fatalf("pretend install failed: %v", err)
+	}
+
+	// Should show upgrade message
+	found := false
+	for _, msg := range progressMessages {
+		if contains(msg, "upgrade") || contains(msg, "Upgrade") {
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		t.Errorf("expected upgrade message in progress, got: %v", progressMessages)
+	}
+}
+
+// TestInstallPretendModeShowsReinstall tests pretend mode with --replace on same version.
+func TestInstallPretendModeShowsReinstall(t *testing.T) {
+	tmpDir := t.TempDir()
+	db := state.NewPackageDatabase(tmpDir)
+	installer := NewInstaller(tmpDir, db)
+
+	var progressMessages []string
+	installer.OnProgress = func(status string) {
+		progressMessages = append(progressMessages, status)
+	}
+
+	// Install hello-2.10
+	helloPkg := &state.InstalledPackage{
+		Package: &pkg.Package{
+			Name:    "app-misc/hello",
+			Version: "2.10",
+			Slot:    pkg.Slot{Name: "0"},
+		},
+		InstallTime: time.Now(),
+		Files:       []state.InstalledFile{},
+	}
+	if err := db.Add(helloPkg); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create work directory
+	workDir := filepath.Join(tmpDir, "work")
+	if err := os.MkdirAll(workDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Pretend to reinstall hello-2.10 with Replace
+	samePkg := &pkg.Package{
+		Name:    "app-misc/hello",
+		Version: "2.10",
 		Slot:    pkg.Slot{Name: "0"},
 	}
 
@@ -536,22 +673,22 @@ func TestInstallPretendModeShowsReplace(t *testing.T) {
 		Pretend: true,
 	}
 
-	err := installer.Install(newPkg, opts)
+	err := installer.Install(samePkg, opts)
 	if err != nil {
-		t.Fatalf("pretend install failed: %v", err)
+		t.Fatalf("pretend reinstall failed: %v", err)
 	}
 
-	// Should show replacement message
+	// Should show reinstall message
 	found := false
 	for _, msg := range progressMessages {
-		if contains(msg, "replace") || contains(msg, "Replace") {
+		if contains(msg, "reinstall") || contains(msg, "Reinstall") {
 			found = true
 			break
 		}
 	}
 
 	if !found {
-		t.Errorf("expected replacement message in progress, got: %v", progressMessages)
+		t.Errorf("expected reinstall message in progress, got: %v", progressMessages)
 	}
 }
 

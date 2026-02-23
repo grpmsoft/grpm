@@ -69,7 +69,7 @@ func (g *CompletionGenerator) GenerateBash() string {
 
 	// Command completion
 	sb.WriteString("    # Commands\n")
-	sb.WriteString(fmt.Sprintf("    local commands=\"%s\"\n", strings.Join(cmdNames, " ")))
+	fmt.Fprintf(&sb, "    local commands=\"%s\"\n", strings.Join(cmdNames, " "))
 	sb.WriteString("\n")
 
 	// Global flags
@@ -82,7 +82,7 @@ func (g *CompletionGenerator) GenerateBash() string {
 	for _, cmd := range commands {
 		flags := g.collectBashFlags(cmd.Flags)
 		if len(flags) > 0 {
-			sb.WriteString(fmt.Sprintf("    local %s_flags=\"%s\"\n", bashSafeName(cmd.Name), strings.Join(flags, " ")))
+			fmt.Fprintf(&sb, "    local %s_flags=\"%s\"\n", bashSafeName(cmd.Name), strings.Join(flags, " "))
 		}
 	}
 	sb.WriteString("\n")
@@ -94,8 +94,8 @@ func (g *CompletionGenerator) GenerateBash() string {
 	sb.WriteString("        case \"${words[i]}\" in\n")
 	for _, cmd := range commands {
 		names := append([]string{cmd.Name}, cmd.Aliases...)
-		sb.WriteString(fmt.Sprintf("            %s)\n", strings.Join(names, "|")))
-		sb.WriteString(fmt.Sprintf("                cmd=\"%s\"\n", cmd.Name))
+		fmt.Fprintf(&sb, "            %s)\n", strings.Join(names, "|"))
+		fmt.Fprintf(&sb, "                cmd=\"%s\"\n", cmd.Name)
 		sb.WriteString("                break\n")
 		sb.WriteString("                ;;\n")
 	}
@@ -123,8 +123,8 @@ func (g *CompletionGenerator) GenerateBash() string {
 	for _, cmd := range commands {
 		flags := g.collectBashFlags(cmd.Flags)
 		if len(flags) > 0 {
-			sb.WriteString(fmt.Sprintf("            %s)\n", cmd.Name))
-			sb.WriteString(fmt.Sprintf("                COMPREPLY=($(compgen -W \"$%s_flags\" -- \"$cur\"))\n", bashSafeName(cmd.Name)))
+			fmt.Fprintf(&sb, "            %s)\n", cmd.Name)
+			fmt.Fprintf(&sb, "                COMPREPLY=($(compgen -W \"$%s_flags\" -- \"$cur\"))\n", bashSafeName(cmd.Name))
 			sb.WriteString("                ;;\n")
 		}
 	}
@@ -196,8 +196,8 @@ func (g *CompletionGenerator) GenerateZsh() string {
 	commands := g.registry.All()
 	for _, cmd := range commands {
 		names := append([]string{cmd.Name}, cmd.Aliases...)
-		sb.WriteString(fmt.Sprintf("                %s)\n", strings.Join(names, "|")))
-		sb.WriteString(fmt.Sprintf("                    _grpm_%s\n", zshSafeName(cmd.Name)))
+		fmt.Fprintf(&sb, "                %s)\n", strings.Join(names, "|"))
+		fmt.Fprintf(&sb, "                    _grpm_%s\n", zshSafeName(cmd.Name))
 		sb.WriteString("                    ;;\n")
 	}
 
@@ -214,7 +214,7 @@ func (g *CompletionGenerator) GenerateZsh() string {
 	for _, cmd := range commands {
 		// Escape single quotes in description
 		desc := strings.ReplaceAll(cmd.Short, "'", "'\\''")
-		sb.WriteString(fmt.Sprintf("        '%s:%s'\n", cmd.Name, desc))
+		fmt.Fprintf(&sb, "        '%s:%s'\n", cmd.Name, desc)
 	}
 	sb.WriteString("    )\n")
 	sb.WriteString("    _describe -t commands 'grpm command' commands\n")
@@ -267,11 +267,11 @@ func (g *CompletionGenerator) GenerateFish() string {
 	for _, cmd := range commands {
 		// Escape single quotes in description
 		desc := strings.ReplaceAll(cmd.Short, "'", "\\'")
-		sb.WriteString(fmt.Sprintf("complete -c grpm -n '__fish_use_subcommand' -a '%s' -d '%s'\n", cmd.Name, desc))
+		fmt.Fprintf(&sb, "complete -c grpm -n '__fish_use_subcommand' -a '%s' -d '%s'\n", cmd.Name, desc)
 
 		// Add aliases
 		for _, alias := range cmd.Aliases {
-			sb.WriteString(fmt.Sprintf("complete -c grpm -n '__fish_use_subcommand' -a '%s' -d 'Alias for %s'\n", alias, cmd.Name))
+			fmt.Fprintf(&sb, "complete -c grpm -n '__fish_use_subcommand' -a '%s' -d 'Alias for %s'\n", alias, cmd.Name)
 		}
 	}
 	sb.WriteString("\n")
@@ -291,7 +291,7 @@ func (g *CompletionGenerator) GenerateFish() string {
 		}
 		condition := strings.Join(conditions, "; or ")
 
-		sb.WriteString(fmt.Sprintf("# %s flags\n", cmd.Name))
+		fmt.Fprintf(&sb, "# %s flags\n", cmd.Name)
 		for _, f := range cmd.Flags {
 			if f.Hidden {
 				continue
@@ -365,7 +365,7 @@ func (g *CompletionGenerator) collectBashFlags(flags []FlagMeta) []string {
 func (g *CompletionGenerator) generateZshCommandFunction(cmd CommandMeta) string {
 	var sb strings.Builder
 
-	sb.WriteString(fmt.Sprintf("_grpm_%s() {\n", zshSafeName(cmd.Name)))
+	fmt.Fprintf(&sb, "_grpm_%s() {\n", zshSafeName(cmd.Name))
 	sb.WriteString("    _arguments -s \\\n")
 
 	for i, f := range cmd.Flags {
@@ -395,9 +395,9 @@ func (g *CompletionGenerator) generateZshCommandFunction(cmd CommandMeta) string
 
 		// Add line continuation for all but last
 		if i < len(cmd.Flags)-1 {
-			sb.WriteString(fmt.Sprintf("        %s \\\n", spec))
+			fmt.Fprintf(&sb, "        %s \\\n", spec)
 		} else {
-			sb.WriteString(fmt.Sprintf("        %s \\\n", spec))
+			fmt.Fprintf(&sb, "        %s \\\n", spec)
 		}
 	}
 

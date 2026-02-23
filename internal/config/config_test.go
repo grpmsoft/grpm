@@ -1984,7 +1984,7 @@ func BenchmarkGetPackageUSEForPackage(b *testing.B) {
 	content.WriteString("dev-*/* debug\n")
 	content.WriteString("sys-libs/* hardened\n")
 	for i := 0; i < 100; i++ {
-		content.WriteString(fmt.Sprintf("app-misc/pkg%d ssl\n", i))
+		fmt.Fprintf(&content, "app-misc/pkg%d ssl\n", i)
 	}
 	content.WriteString("app-misc/hello test\n")
 	content.WriteString(">=app-misc/hello-2.0 ssl\n")

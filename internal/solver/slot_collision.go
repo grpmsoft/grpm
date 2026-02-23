@@ -492,10 +492,10 @@ func GenerateConflictReport(collisions []*SlotCollision) string {
 	sb.WriteString("!!! into the dependency graph, resulting in a slot conflict:\n\n")
 
 	for _, collision := range collisions {
-		sb.WriteString(fmt.Sprintf("%s\n\n", collision.SlotAtom))
+		fmt.Fprintf(&sb, "%s\n\n", collision.SlotAtom)
 
 		for _, p := range collision.Packages {
-			sb.WriteString(fmt.Sprintf("  %s", p.FullName()))
+			fmt.Fprintf(&sb, "  %s", p.FullName())
 
 			// Show USE flags if any
 			if len(p.UseFlags) > 0 {
@@ -508,7 +508,7 @@ func GenerateConflictReport(collisions []*SlotCollision) string {
 					}
 				}
 				sort.Strings(flags)
-				sb.WriteString(fmt.Sprintf(" USE=\"%s\"", strings.Join(flags, " ")))
+				fmt.Fprintf(&sb, " USE=\"%s\"", strings.Join(flags, " "))
 			}
 			sb.WriteString("\n")
 
@@ -518,10 +518,10 @@ func GenerateConflictReport(collisions []*SlotCollision) string {
 				sb.WriteString("    pulled in by\n")
 				for _, parent := range parents {
 					if parent.IsCommandLine {
-						sb.WriteString(fmt.Sprintf("      %s (Argument)\n", parent.Atom))
+						fmt.Fprintf(&sb, "      %s (Argument)\n", parent.Atom)
 					} else if parent.Parent != nil {
-						sb.WriteString(fmt.Sprintf("      %s required by %s\n",
-							parent.Atom, parent.Parent.FullName()))
+						fmt.Fprintf(&sb, "      %s required by %s\n",
+							parent.Atom, parent.Parent.FullName())
 					}
 				}
 			} else {
@@ -552,14 +552,14 @@ func GenerateSolutionReport(solutions []*CollisionSolution) string {
 
 	for i, solution := range solutions {
 		if len(solutions) > 1 {
-			sb.WriteString(fmt.Sprintf("  Solution %d:\n", i+1))
+			fmt.Fprintf(&sb, "  Solution %d:\n", i+1)
 		}
 
 		if len(solution.UseChanges) == 0 {
 			sb.WriteString("    No USE changes required.\n")
 		} else {
 			for _, change := range solution.UseChanges {
-				sb.WriteString(fmt.Sprintf("    - %s\n", change.String()))
+				fmt.Fprintf(&sb, "    - %s\n", change.String())
 			}
 		}
 		sb.WriteString("\n")
