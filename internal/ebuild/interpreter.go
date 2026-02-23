@@ -231,6 +231,10 @@ func (i *Interpreter) buildEnvPairs() []string {
 		pairs = append(pairs, "IUSE="+strings.Join(iuse, " "))
 	}
 
+	// FORCE_UNSAFE_CONFIGURE=1 — required for packages like tar and coreutils
+	// whose configure scripts refuse to run as root. Portage sets this in ebuild.sh.
+	pairs = append(pairs, "FORCE_UNSAFE_CONFIGURE=1")
+
 	// Add PATH — filter out Windows /mnt/ paths for WSL compatibility.
 	if path := os.Getenv("PATH"); path != "" {
 		var cleanParts []string
