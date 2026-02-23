@@ -25,7 +25,7 @@ type EvalMode int
 const (
 	// EvalModeGo uses pure Go mvdan.cc/sh interpreter (default).
 	// Cross-platform, no external dependencies.
-	// Limitation: Some advanced bash features not supported.
+	// Supports all bash features used by Gentoo eclasses.
 	EvalModeGo EvalMode = iota
 
 	// EvalModeNativeBash uses system's /bin/bash.
@@ -213,7 +213,7 @@ func buildNativeBashScript(ebuildContent string) string {
 		"pkg_config", "pkg_info",
 	}
 	for _, fn := range phaseFuncs {
-		script.WriteString(fmt.Sprintf("%s() { :; }\n", fn))
+		fmt.Fprintf(&script, "%s() { :; }\n", fn)
 	}
 	script.WriteString("\n")
 
@@ -407,18 +407,15 @@ func buildMetadataExtractionScript(ebuildContent string) string {
 		"pkg_config", "pkg_info",
 	}
 	for _, fn := range phaseFuncs {
-		script.WriteString(fmt.Sprintf("%s() { :; }\n", fn))
+		fmt.Fprintf(&script, "%s() { :; }\n", fn)
 	}
 	script.WriteString("\n")
 
-	// Source the ebuild content inline (with phase function bodies stripped).
-	// Phase functions (src_compile, src_test, etc.) often contain advanced bash
-	// constructs unsupported by mvdan.cc/sh (e.g., brace expansion in variable
-	// names like RUN_{VERY_,}EXPENSIVE_TESTS). Since metadata extraction only
-	// needs global variable values (SRC_URI, DEPEND, etc.), stripping function
-	// bodies prevents parse errors while preserving all metadata assignments.
+	// Source the ebuild content inline. mvdan.cc/sh now supports all bash
+	// features used in ebuild phase functions (brace expansion, ${var@a},
+	// declare -f/-p, type -P, etc.), so no preprocessing is needed.
 	script.WriteString("# --- BEGIN EBUILD ---\n")
-	script.WriteString(stripFunctionBodies(ebuildContent))
+	script.WriteString(ebuildContent)
 	script.WriteString("\n# --- END EBUILD ---\n\n")
 
 	// Output the evaluated SRC_URI
@@ -427,129 +424,24 @@ func buildMetadataExtractionScript(ebuildContent string) string {
 	return script.String()
 }
 
-// stripFunctionBodies removes function bodies from ebuild content.
-//
-// Phase functions (src_compile, src_test, src_install, etc.) often contain
-// advanced bash features that mvdan.cc/sh cannot parse (e.g., brace expansion
-// in variable names: RUN_{VERY_,}EXPENSIVE_TESTS). Since metadata extraction
-// only needs global-scope code (variable assignments, inherit calls), we
-// replace function bodies with no-ops.
-//
-// Handles both formats:
-//
-//	func_name() {
-//	    body
-//	}
-//
-//	func_name() { one-liner; }
-func stripFunctionBodies(content string) string {
-	lines := strings.Split(content, "\n")
-	var result []string
-	depth := 0
-	inFunction := false
-
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-
-		if !inFunction {
-			// Detect function definition: "name() {" or "name () {"
-			if isFunctionDefinition(trimmed) {
-				// Check if it's a one-liner: "name() { body; }"
-				if strings.Count(trimmed, "{") == strings.Count(trimmed, "}") && strings.Contains(trimmed, "}") {
-					// One-liner function — replace with stub
-					funcName := extractFunctionName(trimmed)
-					result = append(result, funcName+"() { :; }")
-					continue
-				}
-				// Multi-line function — replace opening and skip body
-				funcName := extractFunctionName(trimmed)
-				result = append(result, funcName+"() { :; }")
-				depth = strings.Count(trimmed, "{") - strings.Count(trimmed, "}")
-				inFunction = true
-				continue
-			}
-			result = append(result, line)
-		} else {
-			// Inside function body — count braces to find the end
-			depth += strings.Count(trimmed, "{") - strings.Count(trimmed, "}")
-			if depth <= 0 {
-				inFunction = false
-				depth = 0
-			}
-			// Skip the line (function body)
-		}
-	}
-
-	return strings.Join(result, "\n")
-}
-
-// isFunctionDefinition checks if a line starts a bash function definition.
-// Matches: "name() {", "name ()" with optional leading whitespace.
-func isFunctionDefinition(trimmed string) bool {
-	// Skip comments and empty lines
-	if trimmed == "" || trimmed[0] == '#' {
-		return false
-	}
-
-	// Look for "() {" or "()" pattern
-	parenIdx := strings.Index(trimmed, "()")
-	if parenIdx <= 0 {
-		return false
-	}
-
-	// Extract potential function name (before the parentheses)
-	name := strings.TrimSpace(trimmed[:parenIdx])
-
-	// Validate function name: must be a valid bash identifier
-	// (letters, digits, underscores, hyphens; not starting with digit)
-	if name == "" {
-		return false
-	}
-	for i, ch := range name {
-		if i == 0 && ch >= '0' && ch <= '9' {
-			return false
-		}
-		isAlpha := (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
-		isDigit := ch >= '0' && ch <= '9'
-		if !isAlpha && !isDigit && ch != '_' && ch != '-' {
-			return false
-		}
-	}
-
-	// Must have opening brace somewhere on this line or be just "name()"
-	rest := strings.TrimSpace(trimmed[parenIdx+2:])
-	return rest == "" || rest == "{" || strings.HasPrefix(rest, "{")
-}
-
-// extractFunctionName extracts the function name from a function definition line.
-func extractFunctionName(trimmed string) string {
-	parenIdx := strings.Index(trimmed, "()")
-	if parenIdx <= 0 {
-		return ""
-	}
-	return strings.TrimSpace(trimmed[:parenIdx])
-}
-
 // eclassInfrastructure contains bash functions needed for eclass support.
 // These run WITHIN the same bash context, preserving function definitions.
 //
-// NOTE: This is designed for mvdan.cc/sh which has limitations:
-// - No negative array indices (${arr[-1]})
-// - No "declare -p" option
-// - Limited extglob support
+// NOTE: Designed for mvdan.cc/sh v3.12+ which supports most bash 5 features
+// including ${var@a}, declare -f/-p, type -P, extglob, brace expansion, etc.
 const eclassInfrastructure = `
 # === ECLASS INFRASTRUCTURE ===
 # These functions implement Portage's eclass system for metadata extraction.
 # Designed for compatibility with mvdan.cc/sh interpreter.
 
-# Force bash 4 mode: eclasses check BASH_VERSINFO to decide between
-# ${var@a} (bash 5+, unsupported by mvdan.cc/sh) and declare -p (bash 4).
-BASH_VERSINFO=(4 4 0 0 release x86_64-pc-linux-gnu)
+# Report bash 5.2: mvdan.cc/sh now supports ${var@a} parameter attributes,
+# declare -f/-p, type -P, and other bash 5 features eclasses rely on.
+BASH_VERSINFO=(5 2 0 0 release x86_64-pc-linux-gnu)
 
 # INHERITED tracks which eclasses have been loaded
 INHERITED=""
 
-# Eclass depth counter (simple integer, avoids array limitations)
+# Eclass depth counter (simple integer for tracking nesting)
 __ECLASS_DEPTH=0
 
 # inherit() - Load one or more eclasses by sourcing them directly.
@@ -760,7 +652,7 @@ multilib_native_usex() { usex "$@"; }
 
 # === PYTHON ECLASS STUBS ===
 # These stub out python-r1.eclass, python-single-r1.eclass, python-any-r1.eclass
-# since mvdan.cc/sh doesn't support all bash features they use.
+# for metadata extraction (not needed for SRC_URI evaluation).
 
 # Stub: Pretend python is available
 _python_check_PYTHON_COMPAT() { :; }
@@ -926,18 +818,18 @@ func buildMultiVarExtractionScript(ebuildContent string, varNames []string) stri
 		"pkg_config", "pkg_info",
 	}
 	for _, fn := range phaseFuncs {
-		script.WriteString(fmt.Sprintf("%s() { :; }\n", fn))
+		fmt.Fprintf(&script, "%s() { :; }\n", fn)
 	}
 	script.WriteString("\n")
 
-	// Source ebuild (with function bodies stripped — same as buildMetadataExtractionScript)
+	// Source ebuild content directly — mvdan.cc/sh now handles all bash features.
 	script.WriteString("# --- BEGIN EBUILD ---\n")
-	script.WriteString(stripFunctionBodies(ebuildContent))
+	script.WriteString(ebuildContent)
 	script.WriteString("\n# --- END EBUILD ---\n\n")
 
 	// Output each variable
 	for _, name := range varNames {
-		script.WriteString(fmt.Sprintf("echo \"%s=$%s\"\n", name, name))
+		fmt.Fprintf(&script, "echo \"%s=$%s\"\n", name, name)
 	}
 
 	return script.String()

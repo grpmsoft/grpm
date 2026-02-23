@@ -4,9 +4,8 @@
 // bash interpreter for executing ebuild scripts without external bash dependency.
 //
 // Panic recovery: All interpreter entry points (Run, RunFile, Eval) use
-// defer/recover to catch panics from unsupported bash constructs in mvdan.cc/sh
-// (e.g., ${!var@a}, complex array operations). Panics are converted to
-// descriptive errors instead of crashing the emerge process.
+// defer/recover to catch unexpected panics from mvdan.cc/sh. Panics are
+// converted to descriptive errors instead of crashing the emerge process.
 package ebuild
 
 import (
@@ -94,11 +93,10 @@ func (i *Interpreter) SetPackageDatabase(db *state.PackageDatabase) {
 // The script is parsed and executed with the ebuild environment variables
 // available and Portage helper commands intercepted by the exec handler.
 //
-// Panics from unsupported bash constructs (e.g., ${!var@a}, ${var@Q}) in
-// mvdan.cc/sh are caught and converted to descriptive errors.
+// Panics from unexpected interpreter failures are caught and converted
+// to descriptive errors.
 func (i *Interpreter) Run(ctx context.Context, script string) (runErr error) {
-	// Recover from panics caused by unsupported bash constructs in mvdan.cc/sh.
-	// Common triggers: ${!var@a} (variable attributes), complex array operations.
+	// Recover from unexpected interpreter panics in mvdan.cc/sh.
 	defer func() {
 		if r := recover(); r != nil {
 			logging.Debug("[ebuild] interpreter panic recovered: %v", r)
@@ -109,7 +107,7 @@ func (i *Interpreter) Run(ctx context.Context, script string) (runErr error) {
 		}
 	}()
 
-	// Transform unsupported bash constructs (${VAR@a}, etc.) before parsing.
+	// Preprocess script for edge-case bash constructs (>& redirection, ${VAR@a} safety net).
 	script = preprocessScript(script)
 
 	// Parse the script with bash variant for full ebuild compatibility
@@ -618,7 +616,7 @@ func (i *Interpreter) execHandler(next interp.ExecHandlerFunc) interp.ExecHandle
 		}
 
 		cmd := args[0]
-		cmdArgs := expandBraceArgs(args[1:])
+		cmdArgs := args[1:]
 		hc := interp.HandlerCtx(ctx)
 
 		// Special handling for commands that need stdin from context
@@ -672,48 +670,6 @@ func (i *Interpreter) execHandler(next interp.ExecHandlerFunc) interp.ExecHandle
 			result := i.helpers.verRsImpl(cmdArgs[0], cmdArgs[1], version)
 			_, _ = io.WriteString(hc.Stdout, result)
 			return nil
-		}
-
-		// __grpm_has_func replaces 'declare -f funcname' which mvdan.cc/sh
-		// doesn't support. Returns 0 if the function is known to exist
-		// (defined in the ebuild or in embedded eclasses), 1 otherwise.
-		if cmd == "__grpm_has_func" {
-			if len(cmdArgs) > 0 {
-				funcName := cmdArgs[0]
-				// Check if function is defined in the parsed ebuild
-				if i.env != nil {
-					// Check the ebuild's function list
-					if i.helpers != nil && i.helpers.eclassRegistry != nil {
-						// Function names from ebuild have pattern: multilib_src_configure
-						// Always return success — the function is defined in the
-						// combined script (either from ebuild or embedded eclass).
-						// mvdan.cc/sh DOES define functions, just declare -f can't check them.
-						_ = funcName
-						return nil // success = function exists
-					}
-				}
-			}
-			return nil // success by default
-		}
-
-		// __grpm_has_var replaces 'declare -p varname' which mvdan.cc/sh
-		// doesn't support. Mimics declare -p output so callers that check
-		// the output format (e.g., `[[ $(declare -p X) == "declare -a"* ]]`
-		// in python-utils-r1.eclass) work correctly.
-		if cmd == "__grpm_has_var" {
-			if len(cmdArgs) > 0 {
-				varName := cmdArgs[0]
-				if val := hc.Env.Get(varName).String(); val != "" {
-					// Output declare -p format to hc.Stdout (not i.stdout)
-					// so command substitutions like $(declare -p X) capture it.
-					// Report as array (-a) since eclasses typically check this
-					// for array variables like PYTHON_COMPAT, MULTILIB_COMPAT.
-					_, _ = fmt.Fprintf(hc.Stdout, "declare -a %s='(%s)'\n", varName, val)
-					return nil
-				}
-				return interp.ExitStatus(1) // variable not found
-			}
-			return interp.ExitStatus(1)
 		}
 
 		// Internal command to sync bash variables back to Go environment
@@ -841,87 +797,10 @@ func (i *Interpreter) Eval(ctx context.Context, expr string) (result string, eva
 	return buf.String(), nil
 }
 
-// expandBraceArgs expands brace patterns in command arguments.
-//
-// mvdan.cc/sh has a limitation where brace expansion doesn't work when
-// mixed with variable expansion in the same word (e.g., ${PN}/config.{sub,guess}).
-// In real bash, brace expansion happens BEFORE variable expansion, but mvdan.cc/sh
-// doesn't implement this ordering. This function expands remaining literal braces
-// in arguments that the interpreter failed to expand.
-//
-// Handles: prefix{a,b,c}suffix → prefix-a-suffix prefix-b-suffix prefix-c-suffix
-func expandBraceArgs(args []string) []string {
-	var needsExpansion bool
-	for _, arg := range args {
-		if strings.Contains(arg, "{") && strings.Contains(arg, ",") && strings.Contains(arg, "}") {
-			needsExpansion = true
-			break
-		}
-	}
-	if !needsExpansion {
-		return args
-	}
-
-	result := make([]string, 0, len(args))
-	for _, arg := range args {
-		expanded := expandSingleBrace(arg)
-		result = append(result, expanded...)
-	}
-	return result
-}
-
-// expandSingleBrace expands a single brace pattern in a string.
-// Supports: prefix{a,b,c}suffix → [prefix+a+suffix, prefix+b+suffix, prefix+c+suffix]
-// Does NOT support nested braces (rare in ebuilds).
-func expandSingleBrace(s string) []string {
-	open := strings.Index(s, "{")
-	if open < 0 {
-		return []string{s}
-	}
-
-	// Find matching close brace (skip nested)
-	close := -1
-	depth := 0
-	for i := open; i < len(s); i++ {
-		switch s[i] {
-		case '{':
-			depth++
-		case '}':
-			depth--
-			if depth == 0 {
-				close = i
-				goto found
-			}
-		}
-	}
-found:
-	if close < 0 {
-		return []string{s}
-	}
-
-	// Extract prefix, alternatives, suffix
-	prefix := s[:open]
-	inner := s[open+1 : close]
-	suffix := s[close+1:]
-
-	// Check for comma (brace expansion requires at least one comma)
-	if !strings.Contains(inner, ",") {
-		return []string{s}
-	}
-
-	// Split alternatives by comma
-	parts := strings.Split(inner, ",")
-	result := make([]string, 0, len(parts))
-	for _, part := range parts {
-		expanded := prefix + part + suffix
-		// Recursively expand remaining braces in suffix
-		result = append(result, expandSingleBrace(expanded)...)
-	}
-	return result
-}
-
-// paramExpansionRe matches ${VAR@op} parameter expansion operators
-// unsupported by mvdan.cc/sh. Captures: $1=varname (with optional !), $2=operator.
+// paramExpansionRe matches ${VAR@op} parameter expansion operators.
+// Most @op operators are now supported by mvdan.cc/sh v3.12+, but we keep
+// this as a safety net for edge cases in eclasses. Captures: $1=varname
+// (with optional !), $2=operator.
 var paramExpansionRe = regexp.MustCompile(`\$\{(!?[a-zA-Z_][a-zA-Z0-9_]*)@([aQEPAK])\}`)
 
 // redirectRe matches ">& file" (redirect stdout+stderr to file) which mvdan.cc/sh
@@ -931,17 +810,13 @@ var paramExpansionRe = regexp.MustCompile(`\$\{(!?[a-zA-Z_][a-zA-Z0-9_]*)@([aQEP
 // and IS followed by a non-digit (filename, not fd number).
 var redirectRe = regexp.MustCompile(`(?m)(^|[^0-9])>&(\s*[^0-9\s&])`)
 
-// preprocessScript transforms bash constructs unsupported by mvdan.cc/sh
-// into equivalent forms that won't cause parser/runtime panics.
+// preprocessScript transforms bash constructs that need normalization for
+// mvdan.cc/sh into equivalent forms.
 //
 // Handles:
-//   - ${VAR@a} → "a" (variable attributes; assume array for eclass compatibility)
-//   - ${VAR@Q/E/P/A/K} → "" (other transformation operators)
-//   - >& file → &> file (bash synonym, mvdan/sh panics on >& with filename)
-//
-// This is needed because Gentoo eclasses (e.g., app-alternatives.eclass) use
-// ${ALTERNATIVES@a} to check if a variable is an array, which mvdan.cc/sh
-// does not support and panics on.
+//   - ${VAR@a} → "a" (safety net for edge cases; mvdan.cc/sh supports @a natively)
+//   - ${VAR@Q/E/P/A/K} → "" (safety net for rarely-used operators)
+//   - >& file → &> file (bash synonym, mvdan/sh requires &> form for filename redirection)
 func preprocessScript(script string) string {
 	// Transform >& file → &> file (both mean redirect stdout+stderr to file).
 	// mvdan.cc/sh panics on >& with a filename argument (it only supports

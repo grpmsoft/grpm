@@ -118,7 +118,7 @@ func (e *Executor) dispatchPhase(phase Phase, defaultImpl func() (string, error)
 			}
 			logging.Debug("[ebuild] panic recovered in phase %s for %s: %v", phase, pkgName, r)
 			output = ""
-			phaseErr = fmt.Errorf("phase %s panicked for %s: %v (unsupported bash construct)", phase, pkgName, r)
+			phaseErr = fmt.Errorf("phase %s panicked for %s: %v", phase, pkgName, r)
 		}
 	}()
 

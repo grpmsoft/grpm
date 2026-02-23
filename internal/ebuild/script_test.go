@@ -484,38 +484,28 @@ src_prepare() {
 	}
 }
 
-// TestParseEbuildScript_UnsupportedSyntax documents known parser limitations.
-// These patterns are valid bash but not supported by mvdan.cc/sh parser.
-func TestParseEbuildScript_UnsupportedSyntax(t *testing.T) {
+// TestParseEbuildScript_BraceExpansionInDeclarations verifies that brace expansion
+// in declaration commands is supported (fixed upstream in mvdan/sh PR #1261).
+func TestParseEbuildScript_BraceExpansionInDeclarations(t *testing.T) {
 	tests := []struct {
-		name        string
-		content     string
-		wantErr     bool
-		description string
+		name    string
+		content string
 	}{
 		{
-			name:        "brace expansion in variable name",
-			content:     `export RUN_{VERY_,}EXPENSIVE_TESTS=yes`,
-			wantErr:     true,
-			description: "Brace expansion in variable names not supported by mvdan.cc/sh",
+			name:    "brace expansion in variable name",
+			content: `export RUN_{VERY_,}EXPENSIVE_TESTS=yes`,
 		},
 		{
-			name:        "brace expansion in export statement",
-			content:     `export FOO_{A,B}_BAR=value`,
-			wantErr:     true,
-			description: "Multiple variable names via brace expansion not supported",
+			name:    "brace expansion in export statement",
+			content: `export FOO_{A,B}_BAR=value`,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := ParseEbuildScriptFromString(tt.content, nil)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("ParseEbuildScriptFromString() error = %v, wantErr %v\nNote: %s",
-					err, tt.wantErr, tt.description)
-			}
-			if tt.wantErr && err != nil {
-				t.Logf("Expected limitation: %s - error: %v", tt.description, err)
+			if err != nil {
+				t.Errorf("ParseEbuildScriptFromString() unexpected error = %v", err)
 			}
 		})
 	}

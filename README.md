@@ -251,12 +251,11 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidelines and [AGENTS.md
 - ✅ Package sets (@world, @system, @selected) in all commands
 - ✅ Enterprise tool handling (Portage-compatible BDEPEND)
 - ✅ Portage-compatible dependency filtering (installed packages, BDEPEND/DEPEND)
-- ✅ Hardened bash interpreter with function body stripping and USE-conditional distfile filtering
-- ✅ Eclass metadata extraction with BASH_VERSINFO emulation and stdout isolation
+- ✅ Bash 5.2 compatible interpreter (mvdan.cc/sh with 6 upstream PRs merged) and USE-conditional distfile filtering
+- ✅ Eclass metadata extraction with stdout isolation
 
 **Known Limitations:**
-- Bash interpreter (`mvdan.cc/sh`) handles ~90% of bash; complex eclasses may fail (interpreter evolution planned for v0.10.0)
-- Build success ~20% of @world (autotools packages pass; Python/CMake/Meson builds need interpreter improvements)
+- Build success ~20% of @world (autotools packages pass; Python/CMake/Meson builds need build system support)
 - PMS compliance ~60% for simple packages (validated by community audit, 2026-02-09)
 
 **v1.0.0** — Production ready after community validation (no fixed date).

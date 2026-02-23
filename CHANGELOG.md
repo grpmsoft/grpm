@@ -5,6 +5,30 @@ All notable changes to GRPM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] - mvdan.cc/sh Upstream Integration
+
+### Changed
+- **Upgraded mvdan.cc/sh to upstream master** — Removed local `replace` directive, now using upstream `v3.12.1-0.20260222231309-fff6e565d306` with all 6 GRPM-contributed PRs merged
+- **BASH_VERSINFO updated to 5.2** — Eclasses now take modern bash 5 code paths with native `${var@a}` support
+
+### Removed
+- **`stripFunctionBodies()` workaround** — No longer needed: brace expansion in declarations now works natively (upstream PR [#1261](https://github.com/mvdan/sh/pull/1261))
+- **`__grpm_has_func` / `__grpm_has_var` command handlers** — No longer needed: `declare -f` and `declare -p` now work natively (upstream PR [#1255](https://github.com/mvdan/sh/pull/1255))
+- **`type -P` → `command -v` text replacement** — No longer needed: `type -P` now works natively (upstream PR [#1255](https://github.com/mvdan/sh/pull/1255))
+- **`expandBraceArgs()` manual brace expansion** — No longer needed: mixed variable+brace expansion now works natively
+- **Unset array pre-initialization workaround** — No longer needed: `${unset[@]}` now correctly expands to nothing
+- **545 lines of workaround code removed** across interpreter.go, metadata.go, executor.go, and test files
+
+### Fixed
+- **Re-enabled integration tests** for sys-apps/grep, sys-apps/sed, sys-apps/coreutils (previously skipped due to brace expansion limitation)
+
+### Documentation
+- **ARCHITECTURE.md** — Known Limitations rewritten: workaround table → upstream PRs table
+- **PMS_COMPLIANCE.md** — "Fundamental Limitation" section → "Upstream Contributions" with 6 merged PRs
+- **README.md** — Updated interpreter description to reflect bash 5.2 compatibility
+
+---
+
 ## [0.9.4] - 2026-02-09 - Bash Interpreter Hardening
 
 ### Ebuild Metadata Extraction & Signature File Filtering
