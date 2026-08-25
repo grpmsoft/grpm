@@ -280,6 +280,18 @@ Do not open public issues for security reports.
 
 ---
 
+
+
+## Star History
+
+<a href="https://starhistory.io">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.starhistory.io/png?repos=grpmsoft/grpm&style=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.starhistory.io/png?repos=grpmsoft/grpm&style=professional" />
+   <img alt="Star History Chart" src="https://api.starhistory.io/png?repos=grpmsoft/grpm" width="800" />
+ </picture>
+</a>
+
 ## License
 
 GRPM is licensed under the [Apache License 2.0](LICENSE).
