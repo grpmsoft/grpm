@@ -158,17 +158,11 @@ func (r *PortageResolver) collectDependencies(p *pkg.Package, allPackages map[st
 		return
 	}
 
-	// Check if this package is already installed
+	// Note: installed-package short-circuit removed. With multi-version SAT,
+	// ALL deps must be explored so implication clauses have providers.
+	// Without exploration, addPackageConstraints emits prohibit clauses
+	// for candidates whose deps are missing from the adapter.
 	pkgInstalled := r.isInstalled(p.Name)
-	if pkgInstalled && !r.options.Deep {
-		// Package is installed and we're not doing a deep traversal.
-		// Still add to allPackages for SAT solving, but skip dependency collection.
-		copyPkg := *p
-		allPackages[versionKey] = &copyPkg
-		r.addCandidateVersions(p.Name, allCandidates)
-		logging.Debug("Package %s is installed, skipping dependency traversal (use --deep to include)", p.Name)
-		return
-	}
 
 	// Store a copy of the package
 	copyPkg := *p
@@ -190,11 +184,8 @@ func (r *PortageResolver) collectDependencies(p *pkg.Package, allPackages map[st
 			continue
 		}
 
-		// Check if dependency is already installed
-		if r.isInstalled(dep.Name) && !r.options.Deep {
-			logging.Debug("Dependency %s is already installed, skipping", dep.Name)
-			continue
-		}
+		// Note: installed-dep short-circuit removed for multi-version SAT.
+		// SAT must see all providers to build correct implication clauses.
 
 		// Load ALL candidate versions and recursively explore each one's deps.
 		// SAT needs transitive deps of ALL candidates, not just the highest.
