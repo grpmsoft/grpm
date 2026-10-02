@@ -365,20 +365,25 @@ func (pr *PortageRepository) parseEbuild(name, path string) (*pkg.Package, error
 	parser := NewEbuildParserWithMetadata(string(content), meta)
 	parsedDeps, err := parser.ParseDependencies()
 	if err == nil {
-		// Convert ParsedDependency to Constraint, preserving OrGroupID
-		// Skip blockers and filter by USE conditionals
+		// Convert ParsedDependency to Constraint, preserving OrGroupID.
+		// Blockers are collected into p.Blockers for SAT conflict clauses.
 		realDepsCount := 0
+		blockerCount := 0
 		skippedByUSE := 0
 		for _, pd := range parsedDeps {
-			if pd.IsBlocker {
-				// TODO: Add to p.Conflicts instead of p.Deps
-				logging.Debug("Skipping blocker: %s for %s", pd.Constraint.Name, name)
+			// Filter by USE conditional first (applies to blockers too)
+			if !pr.isUSEConditionalActive(pd.UseFlag, effectiveUSE) {
+				skippedByUSE++
 				continue
 			}
 
-			// Filter by USE conditional
-			if !pr.isUSEConditionalActive(pd.UseFlag, effectiveUSE) {
-				skippedByUSE++
+			if pd.IsBlocker {
+				if pd.Atom != nil {
+					p.AddBlocker(pd.Atom, pd.IsHardBlock)
+					blockerCount++
+					logging.Debug("Collected blocker: %s for %s (strong=%v)",
+						pd.Atom.String(), name, pd.IsHardBlock)
+				}
 				continue
 			}
 
@@ -388,9 +393,9 @@ func (pr *PortageRepository) parseEbuild(name, path string) (*pkg.Package, error
 			p.Deps = append(p.Deps, constraint)
 			realDepsCount++
 		}
-		if realDepsCount > 0 || skippedByUSE > 0 {
-			logging.Debug("Parsed %d dependencies for %s (%d blockers skipped, %d filtered by USE)",
-				realDepsCount, name, len(parsedDeps)-realDepsCount-skippedByUSE, skippedByUSE)
+		if realDepsCount > 0 || blockerCount > 0 || skippedByUSE > 0 {
+			logging.Debug("Parsed %d dependencies for %s (%d blockers collected, %d filtered by USE)",
+				realDepsCount, name, blockerCount, skippedByUSE)
 		}
 	}
 
@@ -676,14 +681,20 @@ func (pr *PortageRepository) loadDependenciesWithEclass(ebuildPath string, p *pk
 			continue
 		}
 
-		// Convert ParsedDependency to Constraint, skip blockers and filter by USE
+		// Convert ParsedDependency to Constraint.
+		// Blockers are collected into p.Blockers for SAT conflict clauses.
 		for _, pd := range deps {
-			if pd.IsBlocker {
+			// Filter by USE conditional if effectiveUSE is provided
+			if effectiveUSE != nil && !pr.isUSEConditionalActive(pd.UseFlag, effectiveUSE) {
 				continue
 			}
 
-			// Filter by USE conditional if effectiveUSE is provided
-			if effectiveUSE != nil && !pr.isUSEConditionalActive(pd.UseFlag, effectiveUSE) {
+			if pd.IsBlocker {
+				if pd.Atom != nil {
+					p.AddBlocker(pd.Atom, pd.IsHardBlock)
+					logging.Debug("Collected blocker via eclass: %s for %s (strong=%v)",
+						pd.Atom.String(), p.Name, pd.IsHardBlock)
+				}
 				continue
 			}
 
@@ -821,12 +832,17 @@ func (pr *PortageRepository) parseFromMetadataCache(name, ebuildPath string) (*p
 		}
 
 		for _, pd := range deps {
-			if pd.IsBlocker {
+			// Filter by USE conditional first (applies to blockers too)
+			if !pr.isUSEConditionalActive(pd.UseFlag, effectiveUSE) {
 				continue
 			}
 
-			// Filter by USE conditional
-			if !pr.isUSEConditionalActive(pd.UseFlag, effectiveUSE) {
+			if pd.IsBlocker {
+				if pd.Atom != nil {
+					p.AddBlocker(pd.Atom, pd.IsHardBlock)
+					logging.Debug("Collected blocker from cache: %s for %s (strong=%v)",
+						pd.Atom.String(), name, pd.IsHardBlock)
+				}
 				continue
 			}
 
@@ -837,8 +853,8 @@ func (pr *PortageRepository) parseFromMetadataCache(name, ebuildPath string) (*p
 		}
 	}
 
-	logging.Debug("Loaded %s-%s from metadata cache (%d deps, KEYWORDS=%v)",
-		name, version, len(p.Deps), p.Keywords)
+	logging.Debug("Loaded %s-%s from metadata cache (%d deps, %d blockers, KEYWORDS=%v)",
+		name, version, len(p.Deps), len(p.Blockers), p.Keywords)
 
 	return p, nil
 }

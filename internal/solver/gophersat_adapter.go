@@ -15,10 +15,11 @@ import (
 type ClauseSource int
 
 const (
-	ClauseRoot       ClauseSource = iota // root at-least-one
+	ClauseRoot        ClauseSource = iota // root at-least-one
 	ClauseImplication                     // if A then B1|B2|...
 	ClauseAtMostOne                       // pairwise exclusion (-vi|-vj)
 	ClauseProhibit                        // single negative literal: candidate impossible
+	ClauseConflict                        // blocker: two packages cannot coexist (-A|-B)
 )
 
 func (s ClauseSource) String() string {
@@ -31,6 +32,8 @@ func (s ClauseSource) String() string {
 		return "at-most-one"
 	case ClauseProhibit:
 		return "prohibit"
+	case ClauseConflict:
+		return "conflict"
 	default:
 		return "unknown"
 	}
@@ -574,6 +577,41 @@ func (g *GophersatAdapter) AddAtMostOnePerSlot() {
 	}
 }
 
+// AddBlockerConflict adds conflict clauses for a specific candidate version that
+// declares a blocker. Emits (-blockerVarID | -B) for each matching version B
+// of the blocked package. Only the declaring version gets the conflict — other
+// versions of the same name that don't declare the blocker are unaffected.
+func (g *GophersatAdapter) AddBlockerConflict(blockerVarID int, blockedAtom *pkg.Atom) {
+	if blockedAtom == nil || blockerVarID == 0 {
+		return
+	}
+	blockedName := blockedAtom.CP()
+	blockerKey := g.varNames[blockerVarID]
+
+	blockedVersions := g.packages[blockedName]
+	if len(blockedVersions) == 0 {
+		logging.Debug("Blocker %s blocks %s but no versions registered — vacuously true",
+			blockerKey, blockedAtom.String())
+		return
+	}
+
+	for _, tv := range blockedVersions {
+		if !blockedAtom.Matches(tv) {
+			continue
+		}
+		targetKey := tv.Name + "@" + tv.Version
+		targetVarID, exists := g.vars[targetKey]
+		if !exists || targetVarID == blockerVarID {
+			continue
+		}
+
+		reason := fmt.Sprintf("blocker: %s blocks %s (atom %s)", blockerKey, targetKey, blockedAtom.String())
+		g.withMeta(ClauseConflict, reason)
+		g.addClause([]int{-blockerVarID, -targetVarID})
+		logging.Debug("Added blocker conflict: %s vs %s", blockerKey, targetKey)
+	}
+}
+
 // findSatisfyingVars returns SAT variable IDs for all registered packages
 // that satisfy the given constraint.
 func (g *GophersatAdapter) findSatisfyingVars(c pkg.Constraint) []int {
@@ -676,11 +714,11 @@ type edgeRef struct {
 // then formats the justification chain top-down.
 type unsatTracer struct {
 	adapter       *GophersatAdapter
-	dead          map[int]bool            // varID → is dead
+	dead          map[int]bool             // varID → is dead
 	justification map[int]*implicationEdge // varID → edge that proved it dead (nil = prohibit)
-	reason        map[int]string          // varID → one-line summary
-	printed       map[int]bool            // dedup for formatting
-	chain         []string                // output lines
+	reason        map[int]string           // varID → one-line summary
+	printed       map[int]bool             // dedup for formatting
+	chain         []string                 // output lines
 }
 
 // propagate marks nodes dead bottom-up: prohibits first, then dependents
@@ -807,6 +845,53 @@ func (tr *unsatTracer) walkTopDown(varID int, depth int) {
 	}
 }
 
+// findReachableConflicts collects ClauseConflict clauses where both literals
+// are reachable from root candidates via implication edges.
+func (tr *unsatTracer) findReachableConflicts() []string {
+	g := tr.adapter
+
+	// BFS from roots through implications to find all reachable vars
+	reachable := make(map[int]bool)
+	queue := make([]int, len(g.rootVars))
+	copy(queue, g.rootVars)
+	for _, v := range g.rootVars {
+		reachable[v] = true
+	}
+	for len(queue) > 0 {
+		v := queue[0]
+		queue = queue[1:]
+		for _, edge := range g.implications[v] {
+			for _, prov := range edge.providers {
+				if !reachable[prov] {
+					reachable[prov] = true
+					queue = append(queue, prov)
+				}
+			}
+		}
+	}
+
+	// Find conflict clauses where both vars are reachable
+	var results []string
+	for i, clause := range g.clauses {
+		if g.clausesMeta[i].Source != ClauseConflict {
+			continue
+		}
+		if len(clause) == 2 {
+			a, b := clause[0], clause[1]
+			if a < 0 {
+				a = -a
+			}
+			if b < 0 {
+				b = -b
+			}
+			if reachable[a] && reachable[b] {
+				results = append(results, fmt.Sprintf("  %s", g.clausesMeta[i].Reason))
+			}
+		}
+	}
+	return results
+}
+
 // ExplainWhyUNSAT propagates deadness bottom-up from prohibit leaves via worklist,
 // then formats the justification chain top-down from roots. O(edges), cycle-safe,
 // deterministic. Cycles do NOT make nodes dead (correct: SAT can satisfy cyclic deps).
@@ -839,7 +924,7 @@ func (g *GophersatAdapter) ExplainWhyUNSAT() ExplainUNSATResult {
 	if allRootsDead {
 		lines = append(lines, fmt.Sprintf("UNSAT: all %d root candidates are impossible", len(g.rootVars)))
 	} else {
-		lines = append(lines, "UNSAT: some root candidates impossible (SAT conflict through at-most-one)")
+		lines = append(lines, "UNSAT: conflict between required packages")
 	}
 
 	if len(rootResults) > 0 {
@@ -858,9 +943,26 @@ func (g *GophersatAdapter) ExplainWhyUNSAT() ExplainUNSATResult {
 		lines = append(lines, tr.chain...)
 	}
 
+	// If not all roots dead, the UNSAT is caused by binary conflict clauses
+	// (blockers or at-most-one). Find ClauseConflict clauses involving
+	// candidates reachable from roots and report them.
+	if !allRootsDead {
+		conflicts := tr.findReachableConflicts()
+		if len(conflicts) > 0 {
+			lines = append(lines, "")
+			lines = append(lines, "Conflicts:")
+			lines = append(lines, conflicts...)
+		}
+	}
+
+	coreSize := len(tr.chain)
+	if coreSize == 0 {
+		coreSize = 1
+	}
+
 	return ExplainUNSATResult{
 		Lines:    lines,
-		CoreSize: len(tr.chain),
+		CoreSize: coreSize,
 	}
 }
 

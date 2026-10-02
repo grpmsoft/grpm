@@ -320,6 +320,16 @@ func (r *PortageResolver) addPackageConstraints(adapter *GophersatAdapter, p *pk
 			logging.Debug("Warning: failed to add OR-group implication: %v", err)
 		}
 	}
+
+	// Add blocker conflict clauses: if this package blocks another,
+	// they cannot coexist in the solution.
+	for _, blocker := range p.Blockers {
+		if blocker.Atom == nil {
+			continue
+		}
+		logging.Debug("Adding blocker conflict from %s: blocks %s", pkgKey, blocker.Atom.String())
+		adapter.AddBlockerConflict(pkgVarID, blocker.Atom)
+	}
 }
 
 // addRootConstraints adds at-least-one constraints for root packages.
