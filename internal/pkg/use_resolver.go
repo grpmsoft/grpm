@@ -98,7 +98,7 @@ func ResolveEffectiveUSE(iuseDefaults map[string]bool, category, name, version, 
 		return effectiveUSE
 	}
 
-	// 2. Apply profile USE flags (make.defaults + use.force - use.mask)
+	// 2. Apply profile USE flags (make.defaults only)
 	applyUSEFlagList(effectiveUSE, cfg.ProfileUSEFlags())
 
 	// 3. Apply make.conf global USE flags
