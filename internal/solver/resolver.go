@@ -318,13 +318,22 @@ func (r *PortageResolver) addPackageConstraints(adapter *GophersatAdapter, p *pk
 }
 
 // addRootConstraints adds at-least-one constraints for root packages.
-// Uses ALL registered candidates, allowing SAT to backtrack to an older
-// version if the newest is unsatisfiable.
-func (r *PortageResolver) addRootConstraints(adapter *GophersatAdapter, rootPackages map[string]*pkg.Package) {
-	for _, p := range rootPackages {
+// Filters candidates by the user's atom (e.g., =foo-1.0 only matches 1.0).
+// Allows SAT to backtrack among matching versions if one is unsatisfiable.
+func (r *PortageResolver) addRootConstraints(adapter *GophersatAdapter, rootPackages map[string]*pkg.Package, rootAtoms map[string]string) {
+	for name, p := range rootPackages {
 		var candidateVars []int
+		atomStr := rootAtoms[name]
+		atom, parseErr := pkg.ParseAtom(atomStr)
+
 		if versions, ok := adapter.packages[p.Name]; ok {
 			for _, v := range versions {
+				// Filter by atom if user specified version constraint
+				if parseErr == nil && atom.HasVersion() {
+					if !atom.Matches(v) {
+						continue
+					}
+				}
 				key := v.Name + "@" + v.Version
 				if varID := adapter.GetVarID(key); varID != 0 {
 					candidateVars = append(candidateVars, varID)
@@ -338,7 +347,7 @@ func (r *PortageResolver) addRootConstraints(adapter *GophersatAdapter, rootPack
 		}
 		if len(candidateVars) > 0 {
 			adapter.addClause(candidateVars)
-			logging.Debug("Added root at-least-one for %s (%d candidates)", p.Name, len(candidateVars))
+			logging.Debug("Added root at-least-one for %s (%d candidates, atom=%s)", p.Name, len(candidateVars), atomStr)
 		}
 	}
 }
@@ -434,6 +443,7 @@ func (r *PortageResolver) Resolve(packages []string) (map[string]*pkg.Package, e
 	// This determines the unit clause for each root package.
 	rootPackageNames := make([]string, 0, len(packages))
 	rootPackagesMap := make(map[string]*pkg.Package)
+	rootAtoms := make(map[string]string) // name → original atom string
 
 	// Load and collect all dependencies
 	for _, pkgName := range packages {
@@ -442,9 +452,10 @@ func (r *PortageResolver) Resolve(packages []string) (map[string]*pkg.Package, e
 			return nil, fmt.Errorf("failed to load package %s: %w", pkgName, err)
 		}
 
-		// Store the actual package name (category/package) for constraints
+		// Store the actual package name and original atom for root constraints
 		rootPackageNames = append(rootPackageNames, p.Name)
 		rootPackagesMap[p.Name] = p
+		rootAtoms[p.Name] = pkgName
 
 		logging.Debug("Resolving package: %s-%s with %d dependencies",
 			p.Name, p.Version, len(p.Deps))
@@ -478,7 +489,7 @@ func (r *PortageResolver) Resolve(packages []string) (map[string]*pkg.Package, e
 	}
 
 	// Add root requirements: unit clause for each root package's selected version
-	r.addRootConstraints(adapter, rootPackagesMap)
+	r.addRootConstraints(adapter, rootPackagesMap, rootAtoms)
 
 	// Add implication constraints for each candidate version.
 	// For each version of each package, its deps become implications:
@@ -522,9 +533,8 @@ func (r *PortageResolver) Resolve(packages []string) (map[string]*pkg.Package, e
 		return nil, err
 	}
 
-	// Post-SAT pass: iteratively resolve transitive deps for all packages in the
-	// result. OR-group alternatives were added shallowly (without recursing into
-	// their deps), so we need to fill in the gaps now. Loop until convergence.
+	// Post-SAT safety net: should add ZERO packages if SAT encoding is complete.
+	// Any addition signals a gap in implication clauses. Logged as warning.
 	for pass := 1; pass <= 10; pass++ {
 		added := 0
 		// Snapshot current result keys to avoid modifying map while iterating
@@ -580,7 +590,11 @@ func (r *PortageResolver) Resolve(packages []string) (map[string]*pkg.Package, e
 				}
 			}
 		}
-		logging.Debug("Post-pass %d: added %d packages", pass, added)
+		if added > 0 {
+			logging.Info("WARNING: Post-SAT pass %d added %d packages — SAT encoding incomplete", pass, added)
+		} else {
+			logging.Debug("Post-SAT pass %d: clean (0 added)", pass)
+		}
 		if added == 0 {
 			break
 		}

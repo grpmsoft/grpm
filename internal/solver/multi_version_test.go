@@ -55,6 +55,22 @@ func (m *multiVersionRepo) LoadPackage(name string) (*pkg.Package, error) {
 	return &cp, nil
 }
 
+func (m *multiVersionRepo) FindByAtom(atom *pkg.Atom) ([]*pkg.Package, error) {
+	if atom == nil {
+		return nil, fmt.Errorf("atom is nil")
+	}
+	var result []*pkg.Package
+	for _, versions := range m.versions {
+		for _, p := range versions {
+			if atom.Matches(p) {
+				cp := *p
+				result = append(result, &cp)
+			}
+		}
+	}
+	return result, nil
+}
+
 func (m *multiVersionRepo) LoadPackageVersion(name, version string) (*pkg.Package, error) {
 	if versions, ok := m.versions[name]; ok {
 		for _, v := range versions {
@@ -876,5 +892,56 @@ func TestFix_ORGroupDepsExplored(t *testing.T) {
 		if _, ok := slotResult[yKey]; !ok {
 			t.Error("b selected but its dep y missing — OR deps not explored")
 		}
+	}
+}
+
+// Root at-least-one must respect the user's atom constraint.
+// `emerge =foo-1.0` must not select foo-2.0.
+func TestFix_RootRespectsAtomConstraint(t *testing.T) {
+	r := newMultiVersionRepo()
+
+	r.addVersion(pkg.NewPackage("app-misc/pinned", "1.0", "0"))
+	r.addVersion(pkg.NewPackage("app-misc/pinned", "2.0", "0"))
+	r.addVersion(pkg.NewPackage("app-misc/pinned", "3.0", "0"))
+
+	resolver := NewResolver(r)
+	result, err := resolver.Resolve([]string{"=app-misc/pinned-1.0"})
+	if err != nil {
+		t.Fatalf("Resolve failed: %v", err)
+	}
+
+	slotResult := toSlotKeyMap(result)
+	key := pkg.SlotKey{Name: "app-misc/pinned", Slot: "0"}
+	p, ok := slotResult[key]
+	if !ok {
+		t.Fatal("expected pinned in result")
+	}
+	if p.Version != "1.0" {
+		t.Errorf("expected 1.0 (exact atom), got %s — root at-least-one ignores atom", p.Version)
+	}
+}
+
+// Post-SAT pass must add zero packages. If it adds any, SAT encoding is incomplete.
+func TestFix_PostSATPassAddsNothing(t *testing.T) {
+	r := newMultiVersionRepo()
+
+	dep := pkg.NewPackage("dev-libs/dep", "1.0", "0")
+	r.addVersion(dep)
+
+	app := pkg.NewPackage("app-misc/complete", "1.0", "0")
+	app.Deps = []pkg.Constraint{{Name: "dev-libs/dep", Type: pkg.ConstraintTypeVersion}}
+	r.addVersion(app)
+
+	resolver := NewResolver(r)
+	result, err := resolver.Resolve([]string{"app-misc/complete"})
+	if err != nil {
+		t.Fatalf("Resolve failed: %v", err)
+	}
+
+	// dep should already be in result from SAT, not added by post-pass
+	slotResult := toSlotKeyMap(result)
+	depKey := pkg.SlotKey{Name: "dev-libs/dep", Slot: "0"}
+	if _, ok := slotResult[depKey]; !ok {
+		t.Error("dep should be in SAT result directly, not requiring post-pass")
 	}
 }
