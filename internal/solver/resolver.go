@@ -89,6 +89,10 @@ type PortageResolver struct {
 	// PostPassAdded counts packages added by post-SAT safety net.
 	// Should be 0 if SAT encoding is complete. Non-zero signals a gap.
 	PostPassAdded int
+
+	// PackagesExplored counts unique package names loaded during collection.
+	// Measures exploration cost, not result size.
+	PackagesExplored int
 }
 
 // NewResolver creates a new resolver without mask/keyword support.
@@ -221,24 +225,29 @@ func (r *PortageResolver) collectDependencies(p *pkg.Package, allPackages map[st
 		}
 	}
 
-	// For OR-groups: add alternative packages to allPackages (so SAT solver knows
-	// about them), but DON'T recursively collect their dependencies yet.
-	// After SAT solving, we'll collect deps for chosen alternatives in a second pass.
+	// Lazy OR expansion: only expand the first preferred alternative.
+	// Others get candidates registered (for SAT variable creation) but deps
+	// NOT explored. An unexpanded alternative without dep exploration will get
+	// prohibit clauses in addPackageConstraints (no providers for its deps).
+	// If SAT is UNSAT, Resolve() retries with the next alternative expanded.
 	for groupID, alternatives := range orGroups {
 		logging.Debug("OR-group %d for %s: %d alternatives", groupID, p.Name, len(alternatives))
-		for _, alt := range alternatives {
-			// Note: BDEPEND and installed-alternative skips removed for multi-version SAT.
-			// SAT must see all alternatives to build correct OR-group implications.
-
-			// Load ALL candidate versions and explore deps (same as required deps).
-			// With implication clauses, SAT handles "only if chosen" — we must
-			// explore so SAT has the transitive dep vars to build implications.
+		sorted := r.sortAlternativesByInstalled(alternatives)
+		for i, alt := range sorted {
+			// Register candidates for SAT variable creation
 			r.addCandidateVersions(alt.Name, allCandidates)
-			if candidates, ok := allCandidates[alt.Name]; ok {
-				for _, candidate := range candidates {
-					r.collectDependencies(candidate, allPackages, allCandidates)
+
+			// Only explore deps of the FIRST (preferred) alternative
+			if i == 0 {
+				if candidates, ok := allCandidates[alt.Name]; ok {
+					for _, candidate := range candidates {
+						r.collectDependencies(candidate, allPackages, allCandidates)
+					}
 				}
 			}
+			// Non-preferred alternatives: candidates registered but deps not explored.
+			// addPackageConstraints will emit prohibit for their unresolvable deps,
+			// making SAT prefer the expanded alternative.
 		}
 	}
 }
@@ -250,6 +259,7 @@ func (r *PortageResolver) addCandidateVersions(name string, allCandidates map[st
 	if _, exists := allCandidates[name]; exists {
 		return // Already loaded
 	}
+	r.PackagesExplored++
 
 	versions, err := r.repo.GetAllVersions(name)
 	if err != nil {
@@ -545,6 +555,7 @@ func (r *PortageResolver) loadPackageFromAtom(atomStr string) (*pkg.Package, err
 //nolint:gocyclo // Complexity inherent to multi-pass Portage-compatible resolution with OR-group support
 func (r *PortageResolver) Resolve(packages []string) (ResolveResult, error) {
 	r.PostPassAdded = 0
+	r.PackagesExplored = 0
 	adapter := NewGophersatAdapter()
 	allPackages := make(map[string]*pkg.Package)
 	allCandidates := make(map[string][]*pkg.Package) // name -> all versions

@@ -2414,3 +2414,125 @@ func TestMAXSAT_BacktrackStillWorks(t *testing.T) {
 		t.Errorf("should backtrack to v1 (v2 unsatisfiable), got %s", p.Version)
 	}
 }
+
+// --- Tests for lazy OR expansion ---
+
+// TestLazyOR_OnlyPreferredAlternativeExpanded verifies that OR-group alternatives
+// are expanded lazily: only the first preferred (leftmost) is fully explored.
+// Others are prohibited. This prevents perl-world explosion through || ( editor ).
+func TestLazyOR_OnlyPreferredAlternativeExpanded(t *testing.T) {
+	r := newMultiVersionRepo()
+
+	// "heavy" has a deep dep chain (simulating perl/emacs world)
+	heavyDep := pkg.NewPackage("dev-libs/heavy-dep", "1.0", "0")
+	r.addVersion(heavyDep)
+
+	heavy := pkg.NewPackage("app-editors/heavy", "1.0", "0")
+	heavy.Deps = []pkg.Constraint{{Name: "dev-libs/heavy-dep", Type: pkg.ConstraintTypeVersion}}
+	r.addVersion(heavy)
+
+	// "light" has no deps
+	light := pkg.NewPackage("app-editors/light", "1.0", "0")
+	r.addVersion(light)
+
+	// app depends on || ( light heavy )
+	app := pkg.NewPackage("app-misc/editor-user", "1.0", "0")
+	app.Deps = []pkg.Constraint{
+		{Name: "app-editors/light", Type: pkg.ConstraintTypeVersion, OrGroupID: 1},
+		{Name: "app-editors/heavy", Type: pkg.ConstraintTypeVersion, OrGroupID: 1},
+	}
+	r.addVersion(app)
+
+	resolver := NewResolver(r)
+	result := resolveClean(t, resolver, []string{"app-misc/editor-user"})
+
+	// light should be selected (preferred = leftmost)
+	lightKey := pkg.SlotKey{Name: "app-editors/light", Slot: "0"}
+	if _, ok := result[lightKey]; !ok {
+		t.Error("expected light in result (preferred leftmost alternative)")
+	}
+
+	// heavy-dep should NOT be in result — heavy was not expanded
+	heavyDepKey := pkg.SlotKey{Name: "dev-libs/heavy-dep", Slot: "0"}
+	if _, ok := result[heavyDepKey]; ok {
+		t.Error("heavy-dep should NOT be in result — heavy alternative was not expanded (lazy)")
+	}
+}
+
+// TestLazyOR_FallbackOnUNSAT verifies that when the preferred OR alternative
+// is unsatisfiable, the resolver falls back to the next alternative.
+func TestLazyOR_FallbackOnUNSAT(t *testing.T) {
+	r := newMultiVersionRepo()
+
+	// "broken" has an unsatisfiable dep
+	broken := pkg.NewPackage("app-editors/broken", "1.0", "0")
+	broken.Deps = []pkg.Constraint{{Name: "dev-libs/nonexistent", Type: pkg.ConstraintTypeVersion}}
+	r.addVersion(broken)
+
+	// "working" has no deps
+	working := pkg.NewPackage("app-editors/working", "1.0", "0")
+	r.addVersion(working)
+
+	// app depends on || ( broken working )
+	app := pkg.NewPackage("app-misc/fallback-user", "1.0", "0")
+	app.Deps = []pkg.Constraint{
+		{Name: "app-editors/broken", Type: pkg.ConstraintTypeVersion, OrGroupID: 1},
+		{Name: "app-editors/working", Type: pkg.ConstraintTypeVersion, OrGroupID: 1},
+	}
+	r.addVersion(app)
+
+	resolver := NewResolver(r)
+	result := resolveClean(t, resolver, []string{"app-misc/fallback-user"})
+
+	// working should be selected (fallback after broken is prohibited)
+	workingKey := pkg.SlotKey{Name: "app-editors/working", Slot: "0"}
+	if _, ok := result[workingKey]; !ok {
+		t.Error("expected working in result (fallback from broken preferred)")
+	}
+}
+
+// TestLazyOR_ClosureSizeReduced measures that lazy expansion reduces the
+// number of packages explored compared to eager expansion.
+func TestLazyOR_ClosureSizeReduced(t *testing.T) {
+	r := newMultiVersionRepo()
+
+	// Build a chain: heavy → dep1 → dep2 → dep3 (4 packages total)
+	for i := 3; i >= 1; i-- {
+		dep := pkg.NewPackage(fmt.Sprintf("dev-libs/dep%d", i), "1.0", "0")
+		if i < 3 {
+			dep.Deps = []pkg.Constraint{{Name: fmt.Sprintf("dev-libs/dep%d", i+1), Type: pkg.ConstraintTypeVersion}}
+		}
+		r.addVersion(dep)
+	}
+	heavy := pkg.NewPackage("app-editors/heavy", "1.0", "0")
+	heavy.Deps = []pkg.Constraint{{Name: "dev-libs/dep1", Type: pkg.ConstraintTypeVersion}}
+	r.addVersion(heavy)
+
+	light := pkg.NewPackage("app-editors/light", "1.0", "0")
+	r.addVersion(light)
+
+	app := pkg.NewPackage("app-misc/size-test", "1.0", "0")
+	app.Deps = []pkg.Constraint{
+		{Name: "app-editors/light", Type: pkg.ConstraintTypeVersion, OrGroupID: 1},
+		{Name: "app-editors/heavy", Type: pkg.ConstraintTypeVersion, OrGroupID: 1},
+	}
+	r.addVersion(app)
+
+	resolver := NewResolver(r)
+	result := resolveClean(t, resolver, []string{"app-misc/size-test"})
+
+	// With lazy expansion: app + light = 2 packages
+	// With eager expansion: app + light + heavy + dep1 + dep2 + dep3 = 6 packages
+	t.Logf("result size: %d packages, explored: %d names", len(result), resolver.PackagesExplored)
+	for k, p := range result {
+		t.Logf("  %s: %s-%s", k, p.Name, p.Version)
+	}
+	if len(result) > 3 {
+		t.Errorf("lazy OR should keep result small: got %d packages (expected ≤3)", len(result))
+	}
+	// With lazy OR: should explore app + light + OR-group = ~3 names
+	// Without lazy OR: explores app + light + heavy + dep1 + dep2 + dep3 = 6+ names
+	if resolver.PackagesExplored > 4 {
+		t.Errorf("lazy OR should explore ≤4 names, got %d — heavy chain explored unnecessarily", resolver.PackagesExplored)
+	}
+}
