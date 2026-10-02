@@ -2865,3 +2865,42 @@ func TestBDEPEND_SkipForInstalledKeep(t *testing.T) {
 		}
 	}
 }
+
+// TestBDEPEND_NotSkippedWithNewUse verifies that --newuse forces BDEPEND
+// evaluation even for installed packages (they will be rebuilt).
+func TestBDEPEND_NotSkippedWithNewUse(t *testing.T) {
+	r := newMultiVersionRepo()
+
+	// lib has BDEPEND on missingtool (not in repo)
+	lib := pkg.NewPackage("dev-libs/lib", "1.0", "0")
+	lib.Deps = []pkg.Constraint{
+		{Name: "dev-build/missingtool", Type: pkg.ConstraintTypeVersion, DepType: pkg.DepTypeBuildHost},
+	}
+	r.addVersion(lib)
+
+	installed := &state.InstalledPackage{
+		Package: pkg.NewPackage("dev-libs/lib", "1.0", "0"),
+	}
+	db := state.NewPackageDatabase("/var/db/pkg")
+	if err := db.Add(installed); err != nil {
+		t.Fatalf("failed to add installed: %v", err)
+	}
+
+	// Without --newuse: lib=Keep, BDEPEND skipped, SAT OK
+	resolver := NewResolver(r)
+	resolver.SetInstalledDB(db)
+	result := resolveClean(t, resolver, []string{"dev-libs/lib"})
+	libKey := pkg.SlotKey{Name: "dev-libs/lib", Slot: "0"}
+	if entry := result[libKey]; entry == nil || entry.Action != ActionKeep {
+		t.Errorf("without --newuse: expected Keep, got %v", entry)
+	}
+
+	// With --newuse: lib rebuilds, BDEPEND required, missingtool → UNSAT
+	resolver2 := NewResolver(r)
+	resolver2.SetInstalledDB(db)
+	resolver2.SetOptions(ResolveOptions{NewUse: true})
+	_, err := resolver2.Resolve([]string{"dev-libs/lib"})
+	if err == nil {
+		t.Error("with --newuse: expected UNSAT — BDEPEND missingtool not in repo")
+	}
+}

@@ -447,11 +447,12 @@ func (r *PortageResolver) addPackageConstraints(adapter *GophersatAdapter, p *pk
 	// Skip BDEPEND implications for installed (Keep) candidates.
 	// Installed packages are already built — they don't need build deps.
 	// Tree candidates still need BDEPEND (they will be built).
-	isInstalledCandidate := adapter.IsVarInstalled(pkgVarID)
+	// Skip BDEPEND only if installed AND not rebuilding (--newuse forces rebuild)
+	skipBDEPEND := adapter.IsVarInstalled(pkgVarID) && !r.options.NewUse
 
 	// Add REQUIRED dependencies as implications: (-P@V | B1 | B2 | ...)
 	for _, dep := range requiredDeps {
-		if isInstalledCandidate && isBuildTimeDep(dep.DepType) {
+		if skipBDEPEND && isBuildTimeDep(dep.DepType) {
 			continue
 		}
 		versionStr := "any"
@@ -475,7 +476,7 @@ func (r *PortageResolver) addPackageConstraints(adapter *GophersatAdapter, p *pk
 	// Add OR-group constraints as implications.
 	for groupID, alternatives := range orGroups {
 		// Skip BDEPEND OR-groups for installed candidates
-		if isInstalledCandidate && len(alternatives) > 0 && isBuildTimeDep(alternatives[0].DepType) {
+		if skipBDEPEND && len(alternatives) > 0 && isBuildTimeDep(alternatives[0].DepType) {
 			continue
 		}
 		logging.Debug("Adding OR-group %d implication from %s with %d alternatives",
@@ -552,6 +553,9 @@ func (r *PortageResolver) determineAction(p *pkg.Package) PackageAction {
 		return ActionInstall // new slot, nothing installed there
 	}
 	if installed.Version == p.Version {
+		if r.options.NewUse {
+			return ActionUpgrade // same version, rebuild for USE changes
+		}
 		return ActionKeep
 	}
 	cmp := pkg.CompareVersions(p.Version, installed.Version)
