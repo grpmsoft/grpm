@@ -319,6 +319,7 @@ func (r *PortageResolver) addRootConstraints(adapter *GophersatAdapter, rootPack
 			}
 		}
 		if len(candidateVars) > 0 {
+			adapter.withMeta(ClauseRoot, fmt.Sprintf("root: at-least-one of %s (atom=%s)", p.Name, atomStr))
 			adapter.addClause(candidateVars)
 			logging.Debug("Added root at-least-one for %s (%d candidates, atom=%s)", p.Name, len(candidateVars), atomStr)
 		}
@@ -494,11 +495,11 @@ func (r *PortageResolver) Resolve(packages []string) (map[string]*pkg.Package, e
 	}
 
 	if status != pkg.StatusSat {
-		logging.Debug("UNSAT core analysis:")
-		for i, clause := range adapter.clauses {
-			logging.Debug("Clause %d: %v", i, clause)
+		explanation := adapter.ExplainUNSAT()
+		for _, line := range explanation {
+			logging.Info("%s", line)
 		}
-		return nil, fmt.Errorf("no solution found")
+		return nil, fmt.Errorf("no solution found (UNSAT, see explanation above)")
 	}
 
 	// Build result

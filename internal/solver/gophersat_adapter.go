@@ -5,18 +5,52 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/crillab/gophersat/explain"
 	"github.com/crillab/gophersat/solver"
 	"github.com/grpmsoft/grpm/internal/logging"
 	"github.com/grpmsoft/grpm/internal/pkg"
 )
 
+// ClauseSource identifies why a SAT clause was added.
+type ClauseSource int
+
+const (
+	ClauseRoot       ClauseSource = iota // root at-least-one
+	ClauseImplication                     // if A then B1|B2|...
+	ClauseAtMostOne                       // pairwise exclusion (-vi|-vj)
+	ClauseProhibit                        // single negative literal: candidate impossible
+)
+
+func (s ClauseSource) String() string {
+	switch s {
+	case ClauseRoot:
+		return "root"
+	case ClauseImplication:
+		return "implication"
+	case ClauseAtMostOne:
+		return "at-most-one"
+	case ClauseProhibit:
+		return "prohibit"
+	default:
+		return "unknown"
+	}
+}
+
+// clauseMeta stores the source and human-readable reason for a clause.
+type clauseMeta struct {
+	Source ClauseSource
+	Reason string
+}
+
 // GophersatAdapter adapts the gophersat SAT solver for package dependency resolution
 type GophersatAdapter struct {
 	clauses      [][]int
+	clausesMeta  []clauseMeta              // parallel to clauses: source + reason
 	vars         map[string]int            // name@version -> var ID
 	varNames     map[int]string            // var ID -> name@version
 	packages     map[string][]*pkg.Package // name -> []versions
 	addedClauses map[string]struct{}       // to prevent duplicate clauses
+	pendingMeta  *clauseMeta               // set before addClause to tag the next clause
 }
 
 func NewGophersatAdapter() *GophersatAdapter {
@@ -53,8 +87,19 @@ func (g *GophersatAdapter) addClause(clause []int) {
 	}
 
 	g.clauses = append(g.clauses, clause)
+	if g.pendingMeta != nil {
+		g.clausesMeta = append(g.clausesMeta, *g.pendingMeta)
+		g.pendingMeta = nil
+	} else {
+		g.clausesMeta = append(g.clausesMeta, clauseMeta{})
+	}
 	g.addedClauses[key] = struct{}{}
 	logging.Debug("Added clause: %v", clause)
+}
+
+// withMeta sets metadata for the next addClause call.
+func (g *GophersatAdapter) withMeta(source ClauseSource, reason string) {
+	g.pendingMeta = &clauseMeta{Source: source, Reason: reason}
 }
 
 // AddPackage registers a package version as a SAT variable
@@ -124,7 +169,7 @@ func (g *GophersatAdapter) AddAtomConstraint(atom *pkg.Atom) error {
 		return nil
 	}
 
-	// Add clause: at least one of the satisfying packages must be selected
+	g.withMeta(ClauseRoot, fmt.Sprintf("atom %s", atom.String()))
 	g.addClause(satisfiedVars)
 	return nil
 }
@@ -166,6 +211,7 @@ func (g *GophersatAdapter) AddOrGroupConstraint(alternatives []pkg.Constraint) e
 
 	// Add single clause: at-least-one from all alternatives
 	logging.Debug("Adding OR-group clause with %d total options", len(allSatisfyingVars))
+	g.withMeta(ClauseRoot, "OR-group: at-least-one alternative")
 	g.addClause(allSatisfyingVars)
 	return nil
 }
@@ -200,7 +246,7 @@ func (g *GophersatAdapter) addVersionConstraint(c pkg.Constraint) error {
 		return nil
 	}
 
-	// Add clause: at least one of the satisfying packages must be selected
+	g.withMeta(ClauseRoot, fmt.Sprintf("version constraint %s %s", c.Name, c.Version.String()))
 	g.addClause(satisfiedVars)
 	return nil
 }
@@ -214,6 +260,7 @@ func (g *GophersatAdapter) addSimpleConstraint(name string) error {
 			varID := g.getVarID(key)
 			packageVars = append(packageVars, varID)
 		}
+		g.withMeta(ClauseRoot, fmt.Sprintf("simple constraint %s", name))
 		g.addClause(packageVars)
 		return nil
 	}
@@ -236,13 +283,20 @@ func (g *GophersatAdapter) AddExactlyOneConstraint(pkgName string, versions []st
 
 	// For a single package - just mandatory installation
 	if len(versionVars) == 1 {
+		g.withMeta(ClauseRoot, fmt.Sprintf("mandatory %s", pkgName))
 		g.addClause([]int{versionVars[0]})
 		logging.Debug("Added mandatory constraint for %s: [%d]", pkgName, versionVars[0])
 		return
 	}
 
 	// Add clauses for "exactly one version" constraint
-	for _, clause := range exactlyOne(versionVars) {
+	eoClauses := exactlyOne(versionVars)
+	for i, clause := range eoClauses {
+		if i == 0 {
+			g.withMeta(ClauseRoot, fmt.Sprintf("at-least-one %s", pkgName))
+		} else {
+			g.withMeta(ClauseAtMostOne, fmt.Sprintf("at-most-one %s", pkgName))
+		}
 		g.addClause(clause)
 	}
 	logging.Debug("Added exactly-one constraint for %s: %d versions", pkgName, len(versions))
@@ -268,15 +322,15 @@ func (g *GophersatAdapter) addSlotConstraint(c pkg.Constraint) error {
 		return fmt.Errorf("no package %s provides slot %s", c.Name, c.Slot)
 	}
 
-	// Add clause: at least one package in this slot must be installed
+	g.withMeta(ClauseRoot, fmt.Sprintf("slot constraint %s:%s", c.Name, c.Slot))
 	g.addClause(slotVars)
 	return nil
 }
 
 func (g *GophersatAdapter) addUseFlagConstraint(c pkg.Constraint) error {
 	if c.Required {
-		// Create variable for USE flag
 		flagVar := g.getVarID("USE_" + c.Flag)
+		g.withMeta(ClauseRoot, fmt.Sprintf("USE flag %s", c.Flag))
 		g.addClause([]int{flagVar})
 	}
 	return nil
@@ -370,6 +424,9 @@ func (g *GophersatAdapter) AddImplication(dependent int, providers []int) {
 	if len(providers) == 0 {
 		return
 	}
+	depName := g.varNames[dependent]
+	providerNames := g.literalNames(providers)
+	g.withMeta(ClauseImplication, fmt.Sprintf("%s => one of [%s]", depName, strings.Join(providerNames, ", ")))
 	clause := make([]int, 0, 1+len(providers))
 	clause = append(clause, -dependent)
 	clause = append(clause, providers...)
@@ -383,7 +440,7 @@ func (g *GophersatAdapter) AddImplication(dependent int, providers []int) {
 func (g *GophersatAdapter) AddImplicationConstraint(dependentVarID int, c pkg.Constraint) error {
 	providers := g.findSatisfyingVars(c)
 	if len(providers) == 0 {
-		// No provider → this candidate is unsatisfiable, prohibit it
+		g.withMeta(ClauseProhibit, fmt.Sprintf("no provider for %s (needed by %s)", c.String(), g.varNames[dependentVarID]))
 		g.addClause([]int{-dependentVarID})
 		logging.Debug("Prohibiting %d: no package provides %s", dependentVarID, c.String())
 		return nil
@@ -398,9 +455,7 @@ func (g *GophersatAdapter) AddImplicationSlotConstraint(dependentVarID int, c pk
 	isOperator := c.Slot == "=" || c.Slot == "*"
 	var slotVars []int
 	for _, p := range g.packages[c.Name] {
-		// Slot operators := and :* match ANY slot
 		slotMatch := isOperator || p.Slot.Name == c.Slot
-		// Also check version constraint if present
 		versionMatch := c.Version == nil || c.Version.Satisfies(p.Version)
 		if slotMatch && versionMatch {
 			key := p.Name + "@" + p.Version
@@ -409,6 +464,7 @@ func (g *GophersatAdapter) AddImplicationSlotConstraint(dependentVarID int, c pk
 		}
 	}
 	if len(slotVars) == 0 {
+		g.withMeta(ClauseProhibit, fmt.Sprintf("no provider for %s:%s (needed by %s)", c.Name, c.Slot, g.varNames[dependentVarID]))
 		g.addClause([]int{-dependentVarID})
 		logging.Debug("Prohibiting %d: no package %s in slot %s", dependentVarID, c.Name, c.Slot)
 		return nil
@@ -439,6 +495,7 @@ func (g *GophersatAdapter) AddImplicationOrGroup(dependentVarID int, alternative
 		}
 	}
 	if len(allSatisfyingVars) == 0 {
+		g.withMeta(ClauseProhibit, fmt.Sprintf("no provider for OR-group (needed by %s)", g.varNames[dependentVarID]))
 		g.addClause([]int{-dependentVarID})
 		logging.Debug("Prohibiting %d: no packages satisfy OR-group", dependentVarID)
 		return nil
@@ -477,6 +534,8 @@ func (g *GophersatAdapter) AddAtMostOnePerSlot() {
 			sg.name, sg.slot, len(vars), len(vars)*(len(vars)-1)/2)
 		for i := 0; i < len(vars); i++ {
 			for j := i + 1; j < len(vars); j++ {
+				g.withMeta(ClauseAtMostOne, fmt.Sprintf("conflict %s vs %s (slot %s:%s)",
+					g.varNames[vars[i]], g.varNames[vars[j]], sg.name, sg.slot))
 				g.addClause([]int{-vars[i], -vars[j]})
 			}
 		}
@@ -529,4 +588,88 @@ func (g *GophersatAdapter) GetPackageVersions(name string) []string {
 		versions = append(versions, p.Version)
 	}
 	return versions
+}
+
+// literalNames maps a slice of positive var IDs to their name@version strings.
+func (g *GophersatAdapter) literalNames(varIDs []int) []string {
+	names := make([]string, 0, len(varIDs))
+	for _, id := range varIDs {
+		absID := id
+		if absID < 0 {
+			absID = -absID
+		}
+		if name, ok := g.varNames[absID]; ok {
+			if id < 0 {
+				names = append(names, "!"+name)
+			} else {
+				names = append(names, name)
+			}
+		} else {
+			names = append(names, fmt.Sprintf("var%d", id))
+		}
+	}
+	return names
+}
+
+// formatClause returns a human-readable representation of a clause.
+func (g *GophersatAdapter) formatClause(clause []int) string {
+	names := g.literalNames(clause)
+	return "(" + strings.Join(names, " | ") + ")"
+}
+
+// ExplainUNSAT extracts a (not necessarily minimal) unsatisfiable subset of
+// clauses and returns human-readable lines explaining why resolution failed.
+// Uses gophersat/explain.UnsatSubset for fast single-SAT-call extraction.
+func (g *GophersatAdapter) ExplainUNSAT() []string {
+	pb := &explain.Problem{
+		Clauses:   g.clauses,
+		NbVars:    len(g.vars),
+		NbClauses: len(g.clauses),
+	}
+
+	subset, err := pb.UnsatSubset()
+	if err != nil {
+		return []string{fmt.Sprintf("UNSAT explanation failed: %v", err)}
+	}
+
+	// Map subset clauses back to our metadata via literal-set matching.
+	type clauseKey string
+	makeCK := func(c []int) clauseKey {
+		s := make([]int, len(c))
+		copy(s, c)
+		sort.Ints(s)
+		return clauseKey(fmt.Sprintf("%v", s))
+	}
+
+	// Build index: clauseKey → original clause index
+	idx := make(map[clauseKey]int, len(g.clauses))
+	for i, c := range g.clauses {
+		idx[makeCK(c)] = i
+	}
+
+	var lines []string
+	lines = append(lines, fmt.Sprintf("UNSAT core: %d clauses (of %d total)", subset.NbClauses, len(g.clauses)))
+
+	// Group by source type for summary
+	counts := make(map[ClauseSource]int)
+	for _, c := range subset.Clauses {
+		if origIdx, ok := idx[makeCK(c)]; ok {
+			counts[g.clausesMeta[origIdx].Source]++
+		}
+	}
+	for src, n := range counts {
+		lines = append(lines, fmt.Sprintf("  %s: %d clauses", src, n))
+	}
+
+	lines = append(lines, "")
+	for _, c := range subset.Clauses {
+		ck := makeCK(c)
+		if origIdx, ok := idx[ck]; ok {
+			meta := g.clausesMeta[origIdx]
+			lines = append(lines, fmt.Sprintf("  [%s] %s  — %s", meta.Source, g.formatClause(c), meta.Reason))
+		} else {
+			lines = append(lines, fmt.Sprintf("  [?] %s", g.formatClause(c)))
+		}
+	}
+	return lines
 }
