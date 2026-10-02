@@ -590,7 +590,8 @@ func (ep *EbuildParser) parsePackageAtom(atomStr string, depType DependencyType,
 		dep.Constraint.Type = pkg.ConstraintTypeSlot
 	}
 
-	// Store USE flags in Condition field
+	// UseRequire, UseBlock, UseDefault already set by ToConstraint() above.
+	// Store in Condition field for backward compatibility with non-SAT consumers.
 	if atom.HasUseDeps() {
 		var useFlags []string
 		useFlags = append(useFlags, atom.UseRequire...)
@@ -630,8 +631,22 @@ func (ep *EbuildParser) parsePackageAtomLegacy(atom string, depType DependencyTy
 			useFlagsStr := atom[idx+1 : endIdx]
 			// Parse USE flags (comma or space separated)
 			useFlagsStr = strings.ReplaceAll(useFlagsStr, ",", " ")
-			// Store in Condition field for now
+			// Store in Condition field for backward compatibility
 			dep.Constraint.Condition = useFlagsStr
+			// Also populate UseRequire/UseBlock for SAT filtering.
+			// Skip conditional flags (flag?, !flag?) and flags with defaults
+			// (flag(+), flag(-)) — only hard requirements ([flag]) and hard
+			// blocks ([-flag]) should filter providers at SAT level.
+			for _, flag := range strings.Fields(useFlagsStr) {
+				if strings.ContainsAny(flag, "?()") {
+					continue
+				}
+				if strings.HasPrefix(flag, "-") {
+					dep.Constraint.UseBlock = append(dep.Constraint.UseBlock, strings.TrimPrefix(flag, "-"))
+				} else {
+					dep.Constraint.UseRequire = append(dep.Constraint.UseRequire, flag)
+				}
+			}
 			atom = atom[:idx] + atom[endIdx+1:]
 		}
 	}

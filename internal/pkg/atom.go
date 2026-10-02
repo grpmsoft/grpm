@@ -827,5 +827,24 @@ func (a *Atom) ToConstraint() Constraint {
 		c.Slot = a.Slot
 	}
 
+	if len(a.UseRequire) > 0 {
+		c.UseRequire = make([]string, len(a.UseRequire))
+		copy(c.UseRequire, a.UseRequire)
+	}
+	if len(a.UseBlock) > 0 {
+		c.UseBlock = make([]string, len(a.UseBlock))
+		copy(c.UseBlock, a.UseBlock)
+	}
+	if len(a.UseDefault) > 0 {
+		c.UseDefault = make(map[string]bool, len(a.UseDefault))
+		for _, entry := range a.UseDefault {
+			if strings.HasSuffix(entry, "(+)") {
+				c.UseDefault[strings.TrimSuffix(entry, "(+)")] = true
+			} else if strings.HasSuffix(entry, "(-)") {
+				c.UseDefault[strings.TrimSuffix(entry, "(-)")] = false
+			}
+		}
+	}
+
 	return c
 }
