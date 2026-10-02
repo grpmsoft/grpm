@@ -65,6 +65,11 @@ type GophersatAdapter struct {
 	implications map[int][]implicationEdge // varID → "if selected, needs one of providers"
 	prohibits    map[int]string            // varID → reason why this candidate is impossible
 	rootVars     []int                     // var IDs from root at-least-one clauses
+
+	// installed tracks which SAT variable IDs represent packages from VDB
+	// (already installed on the system). Used by MAX-SAT (task 014) to assign
+	// preference weights for keeping installed versions.
+	installed map[int]bool
 }
 
 func NewGophersatAdapter() *GophersatAdapter {
@@ -75,6 +80,7 @@ func NewGophersatAdapter() *GophersatAdapter {
 		addedClauses: make(map[string]struct{}),
 		implications: make(map[int][]implicationEdge),
 		prohibits:    make(map[int]string),
+		installed:    make(map[int]bool),
 	}
 }
 
@@ -610,6 +616,70 @@ func (g *GophersatAdapter) AddBlockerConflict(blockerVarID int, blockedAtom *pkg
 		g.addClause([]int{-blockerVarID, -targetVarID})
 		logging.Debug("Added blocker conflict: %s vs %s", blockerKey, targetKey)
 	}
+}
+
+// AddWeakBlockerConflict adds a conflict clause for a weak blocker ("!pkg").
+// Unlike strong blockers ("!!pkg") which always emit (-A|-B), weak blockers
+// only conflict when at least one side is an installed package. This matches
+// Portage semantics: weak blockers mean "don't coexist with the INSTALLED version"
+// but installing both fresh is OK (the package manager schedules unmerge after install).
+//
+// If neither the declaring package nor any matching target is installed,
+// no conflict clause is emitted — SAT allows both to coexist.
+func (g *GophersatAdapter) AddWeakBlockerConflict(blockerVarID int, blockedAtom *pkg.Atom) {
+	if blockedAtom == nil || blockerVarID == 0 {
+		return
+	}
+	blockedName := blockedAtom.CP()
+	blockerKey := g.varNames[blockerVarID]
+
+	blockedVersions := g.packages[blockedName]
+	if len(blockedVersions) == 0 {
+		logging.Debug("Weak blocker %s blocks %s but no versions registered — vacuously true",
+			blockerKey, blockedAtom.String())
+		return
+	}
+
+	blockerIsInstalled := g.installed[blockerVarID]
+
+	for _, tv := range blockedVersions {
+		if !blockedAtom.Matches(tv) {
+			continue
+		}
+		targetKey := tv.Name + "@" + tv.Version
+		targetVarID, exists := g.vars[targetKey]
+		if !exists || targetVarID == blockerVarID {
+			continue
+		}
+
+		targetIsInstalled := g.installed[targetVarID]
+
+		// Weak blocker: only emit conflict if at least one side is installed
+		if !blockerIsInstalled && !targetIsInstalled {
+			logging.Debug("Weak blocker %s vs %s — neither installed, skipping conflict",
+				blockerKey, targetKey)
+			continue
+		}
+
+		reason := fmt.Sprintf("weak blocker: %s blocks %s (atom %s, installed side present)",
+			blockerKey, targetKey, blockedAtom.String())
+		g.withMeta(ClauseConflict, reason)
+		g.addClause([]int{-blockerVarID, -targetVarID})
+		logging.Debug("Added weak blocker conflict: %s vs %s", blockerKey, targetKey)
+	}
+}
+
+// MarkInstalled marks a SAT variable as representing an installed package (from VDB).
+// This flag is used by:
+// - AddWeakBlockerConflict: weak blockers only fire when an installed side is present
+// - MAX-SAT (task 014): preference weights for keeping installed versions
+func (g *GophersatAdapter) MarkInstalled(varID int) {
+	g.installed[varID] = true
+}
+
+// IsVarInstalled returns true if the given SAT variable represents an installed package.
+func (g *GophersatAdapter) IsVarInstalled(varID int) bool {
+	return g.installed[varID]
 }
 
 // findSatisfyingVars returns SAT variable IDs for all registered packages
