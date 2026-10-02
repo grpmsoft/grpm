@@ -16,16 +16,30 @@ import (
 // Two packages with the same SlotKey cannot coexist; different SlotKeys can.
 type ResolveResult map[pkg.SlotKey]*pkg.Package
 
-// StringKeyMap converts the ResolveResult to a string-keyed map for legacy consumers.
-// The string key is the package name for slot "0", or "name:slot" for non-zero slots.
-func (s ResolveResult) StringKeyMap() map[string]*pkg.Package {
-	result := make(map[string]*pkg.Package, len(s))
+// FindByName returns all packages with the given name across all slots.
+func (s ResolveResult) FindByName(name string) []*pkg.Package {
+	var result []*pkg.Package
 	for key, p := range s {
-		if key.Slot != "" && key.Slot != "0" {
-			result[key.Name+":"+key.Slot] = p
-		} else {
-			result[key.Name] = p
+		if key.Name == name {
+			result = append(result, p)
 		}
+	}
+	return result
+}
+
+// FindByDep returns packages matching dep name and slot constraint.
+// If dep.Slot is set and is not an operator ("=", "*"), only matching slots are returned.
+func (s ResolveResult) FindByDep(dep pkg.Constraint) []*pkg.Package {
+	isOperator := dep.Slot == "=" || dep.Slot == "*"
+	var result []*pkg.Package
+	for key, p := range s {
+		if key.Name != dep.Name {
+			continue
+		}
+		if dep.Slot != "" && !isOperator && key.Slot != dep.Slot {
+			continue
+		}
+		result = append(result, p)
 	}
 	return result
 }

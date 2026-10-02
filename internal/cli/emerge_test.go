@@ -8,6 +8,7 @@ import (
 	"github.com/grpmsoft/grpm/internal/config"
 	"github.com/grpmsoft/grpm/internal/fetch"
 	"github.com/grpmsoft/grpm/internal/pkg"
+	"github.com/grpmsoft/grpm/internal/solver"
 )
 
 func TestParseJobsFromMakeOpts(t *testing.T) {
@@ -276,74 +277,59 @@ func TestFilterTargetPackages(t *testing.T) {
 	zlib := pkg.NewPackage("sys-libs/zlib", "1.3", "0")
 	gcc := pkg.NewPackage("sys-devel/gcc", "13.4.1_p20250807", "13")
 
+	sk := func(name, slot string) pkg.SlotKey { return pkg.SlotKey{Name: name, Slot: slot} }
+
 	tests := []struct {
 		name             string
-		solution         map[string]*pkg.Package
+		solution         solver.ResolveResult
 		packages         []string
 		wantLen          int
 		shouldBeFiltered []string
 		shouldRemain     []string
 	}{
 		{
-			name: "filter simple package name",
-			solution: map[string]*pkg.Package{
-				"app-misc/hello": hello,
-				"sys-libs/zlib":  zlib,
-			},
+			name:             "filter simple package name",
+			solution:         solver.ResolveResult{sk("app-misc/hello", "0"): hello, sk("sys-libs/zlib", "0"): zlib},
 			packages:         []string{"app-misc/hello"},
 			wantLen:          1,
 			shouldBeFiltered: []string{"app-misc/hello"},
 			shouldRemain:     []string{"sys-libs/zlib"},
 		},
 		{
-			name: "filter versioned atom",
-			solution: map[string]*pkg.Package{
-				"sys-devel/gcc": gcc,
-				"sys-libs/zlib": zlib,
-			},
+			name:             "filter versioned atom",
+			solution:         solver.ResolveResult{sk("sys-devel/gcc", "13"): gcc, sk("sys-libs/zlib", "0"): zlib},
 			packages:         []string{"=sys-devel/gcc-13.4.1_p20250807"},
 			wantLen:          1,
 			shouldBeFiltered: []string{"sys-devel/gcc"},
 			shouldRemain:     []string{"sys-libs/zlib"},
 		},
 		{
-			name: "filter multiple packages",
-			solution: map[string]*pkg.Package{
-				"app-misc/hello": hello,
-				"sys-libs/zlib":  zlib,
-				"sys-devel/gcc":  gcc,
-			},
+			name:             "filter multiple packages",
+			solution:         solver.ResolveResult{sk("app-misc/hello", "0"): hello, sk("sys-libs/zlib", "0"): zlib, sk("sys-devel/gcc", "13"): gcc},
 			packages:         []string{"app-misc/hello", "sys-devel/gcc"},
 			wantLen:          1,
 			shouldBeFiltered: []string{"app-misc/hello", "sys-devel/gcc"},
 			shouldRemain:     []string{"sys-libs/zlib"},
 		},
 		{
-			name: "filter with >= operator",
-			solution: map[string]*pkg.Package{
-				"sys-devel/gcc": gcc,
-				"sys-libs/zlib": zlib,
-			},
+			name:             "filter with >= operator",
+			solution:         solver.ResolveResult{sk("sys-devel/gcc", "13"): gcc, sk("sys-libs/zlib", "0"): zlib},
 			packages:         []string{">=sys-devel/gcc-13.0.0"},
 			wantLen:          1,
 			shouldBeFiltered: []string{"sys-devel/gcc"},
 			shouldRemain:     []string{"sys-libs/zlib"},
 		},
 		{
-			name: "all packages filtered",
-			solution: map[string]*pkg.Package{
-				"app-misc/hello": hello,
-			},
+			name:             "all packages filtered",
+			solution:         solver.ResolveResult{sk("app-misc/hello", "0"): hello},
 			packages:         []string{"app-misc/hello"},
 			wantLen:          0,
 			shouldBeFiltered: []string{"app-misc/hello"},
 			shouldRemain:     []string{},
 		},
 		{
-			name: "no packages filtered (target not in solution)",
-			solution: map[string]*pkg.Package{
-				"sys-libs/zlib": zlib,
-			},
+			name:             "no packages filtered (target not in solution)",
+			solution:         solver.ResolveResult{sk("sys-libs/zlib", "0"): zlib},
 			packages:         []string{"app-misc/hello"},
 			wantLen:          1,
 			shouldBeFiltered: []string{},
@@ -360,13 +346,13 @@ func TestFilterTargetPackages(t *testing.T) {
 			}
 
 			for _, name := range tt.shouldBeFiltered {
-				if _, exists := result[name]; exists {
+				if len(result.FindByName(name)) > 0 {
 					t.Errorf("filterTargetPackages() should have filtered %s, but it remains", name)
 				}
 			}
 
 			for _, name := range tt.shouldRemain {
-				if _, exists := result[name]; !exists {
+				if len(result.FindByName(name)) == 0 {
 					t.Errorf("filterTargetPackages() should have kept %s, but it was filtered", name)
 				}
 			}
@@ -375,23 +361,25 @@ func TestFilterTargetPackages(t *testing.T) {
 }
 
 func TestTopologicalSort(t *testing.T) {
+	sk := func(name, slot string) pkg.SlotKey { return pkg.SlotKey{Name: name, Slot: slot} }
+
 	t.Run("deps before dependents", func(t *testing.T) {
 		zlib := pkg.NewPackage("sys-libs/zlib", "1.3", "0")
 		hello := pkg.NewPackage("app-misc/hello", "2.10", "0")
 		hello.Deps = []pkg.Constraint{{Name: "sys-libs/zlib"}}
 
-		solution := map[string]*pkg.Package{
-			"app-misc/hello": hello,
-			"sys-libs/zlib":  zlib,
+		solution := solver.ResolveResult{
+			sk("app-misc/hello", "0"): hello,
+			sk("sys-libs/zlib", "0"):  zlib,
 		}
 
 		order := topologicalSort(solution)
 		zlibIdx, helloIdx := -1, -1
 		for i, key := range order {
-			if key == "sys-libs/zlib" {
+			if key.Name == "sys-libs/zlib" {
 				zlibIdx = i
 			}
-			if key == "app-misc/hello" {
+			if key.Name == "app-misc/hello" {
 				helloIdx = i
 			}
 		}
@@ -407,12 +395,12 @@ func TestTopologicalSort(t *testing.T) {
 		a := pkg.NewPackage("cat/a", "1.0", "0")
 		a.Deps = []pkg.Constraint{{Name: "cat/b"}}
 
-		solution := map[string]*pkg.Package{"cat/a": a, "cat/b": b, "cat/c": c}
+		solution := solver.ResolveResult{sk("cat/a", "0"): a, sk("cat/b", "0"): b, sk("cat/c", "0"): c}
 		order := topologicalSort(solution)
 
 		idx := make(map[string]int)
 		for i, k := range order {
-			idx[k] = i
+			idx[k.Name] = i
 		}
 		if idx["cat/c"] >= idx["cat/b"] || idx["cat/b"] >= idx["cat/a"] {
 			t.Errorf("expected c < b < a, got order: %v", order)
@@ -420,37 +408,36 @@ func TestTopologicalSort(t *testing.T) {
 	})
 
 	t.Run("no deps — deterministic sorted order", func(t *testing.T) {
-		solution := map[string]*pkg.Package{
-			"z/pkg": pkg.NewPackage("z/pkg", "1.0", "0"),
-			"a/pkg": pkg.NewPackage("a/pkg", "1.0", "0"),
-			"m/pkg": pkg.NewPackage("m/pkg", "1.0", "0"),
+		solution := solver.ResolveResult{
+			sk("z/pkg", "0"): pkg.NewPackage("z/pkg", "1.0", "0"),
+			sk("a/pkg", "0"): pkg.NewPackage("a/pkg", "1.0", "0"),
+			sk("m/pkg", "0"): pkg.NewPackage("m/pkg", "1.0", "0"),
 		}
 		order := topologicalSort(solution)
-		if order[0] != "a/pkg" || order[1] != "m/pkg" || order[2] != "z/pkg" {
+		if order[0].Name != "a/pkg" || order[1].Name != "m/pkg" || order[2].Name != "z/pkg" {
 			t.Errorf("expected alphabetical order, got %v", order)
 		}
 	})
 
 	t.Run("empty solution", func(t *testing.T) {
-		order := topologicalSort(map[string]*pkg.Package{})
+		order := topologicalSort(solver.ResolveResult{})
 		if len(order) != 0 {
 			t.Errorf("expected empty, got %v", order)
 		}
 	})
 
 	t.Run("PDEPEND edges excluded — no false cycle", func(t *testing.T) {
-		// A depends on B (RDEPEND), B post-depends on A (PDEPEND)
 		a := pkg.NewPackage("cat/a", "1.0", "0")
 		b := pkg.NewPackage("cat/b", "1.0", "0")
 		a.Deps = []pkg.Constraint{{Name: "cat/b", DepType: pkg.DepTypeRuntime}}
 		b.Deps = []pkg.Constraint{{Name: "cat/a", DepType: pkg.DepTypePostMerge}}
 
-		solution := map[string]*pkg.Package{"cat/a": a, "cat/b": b}
+		solution := solver.ResolveResult{sk("cat/a", "0"): a, sk("cat/b", "0"): b}
 		order := topologicalSort(solution)
 
 		idx := make(map[string]int)
 		for i, k := range order {
-			idx[k] = i
+			idx[k.Name] = i
 		}
 		if idx["cat/b"] >= idx["cat/a"] {
 			t.Errorf("b should come before a (PDEPEND excluded), got order: %v", order)
@@ -458,7 +445,6 @@ func TestTopologicalSort(t *testing.T) {
 	})
 
 	t.Run("real cycle — deterministic sorted fallback", func(t *testing.T) {
-		// A→B→C→A — true cycle (all RDEPEND), plus D→A outside cycle
 		a := pkg.NewPackage("cat/a", "1.0", "0")
 		b := pkg.NewPackage("cat/b", "1.0", "0")
 		c := pkg.NewPackage("cat/c", "1.0", "0")
@@ -468,11 +454,10 @@ func TestTopologicalSort(t *testing.T) {
 		c.Deps = []pkg.Constraint{{Name: "cat/a", DepType: pkg.DepTypeRuntime}}
 		d.Deps = []pkg.Constraint{{Name: "cat/a", DepType: pkg.DepTypeRuntime}}
 
-		solution := map[string]*pkg.Package{"cat/a": a, "cat/b": b, "cat/c": c, "cat/d": d}
+		solution := solver.ResolveResult{sk("cat/a", "0"): a, sk("cat/b", "0"): b, sk("cat/c", "0"): c, sk("cat/d", "0"): d}
 
-		// Run multiple times to verify determinism
 		first := topologicalSort(solution)
-		for i := 0; i < 20; i++ {
+		for i := range 20 {
 			order := topologicalSort(solution)
 			for j, k := range order {
 				if k != first[j] {

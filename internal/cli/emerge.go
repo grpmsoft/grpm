@@ -129,21 +129,20 @@ func (a *App) runEmerge(args []string) error {
 		return err
 	}
 
-	var solution map[string]*pkg.Package
+	var solution solver.ResolveResult
 
 	if *noDeps {
 		// --nodeps: skip resolution, just find the best acceptable version
 		logging.Action("Skipping dependency resolution (--nodeps)...")
 		acceptKeywords := a.getAcceptKeywords(cfg)
-		solution = make(map[string]*pkg.Package)
+		solution = make(solver.ResolveResult)
 		for _, name := range packages {
 			found, loadErr := a.loadBestAcceptableVersion(r, name, acceptKeywords)
 			if loadErr != nil || found == nil {
 				logging.Warn("Package %s not found: %v", name, loadErr)
 				continue
 			}
-			key := fmt.Sprintf("%s-%s", found.Name, found.Version)
-			solution[key] = found
+			solution[pkg.SlotKeyOf(found)] = found
 		}
 	} else {
 		// Resolve dependencies with Portage-compatible filtering
@@ -192,6 +191,9 @@ func (a *App) runEmerge(args []string) error {
 	fmt.Println()
 	for _, key := range buildOrder {
 		p := solution[key]
+		if p == nil {
+			continue
+		}
 		useStr := FormatUSEFlags(p, cfg)
 		fmt.Printf("[ebuild  N    ] %s-%s %s\n", p.Name, p.Version, useStr)
 	}
@@ -268,7 +270,7 @@ type parallelBuildOptions struct {
 //
 // Dependencies are respected: a package only starts building after all its
 // dependencies have completed successfully.
-func (a *App) buildPackagesParallel(solution map[string]*pkg.Package, parallelJobs int, keepGoing bool, opts *parallelBuildOptions) error {
+func (a *App) buildPackagesParallel(solution solver.ResolveResult, parallelJobs int, keepGoing bool, opts *parallelBuildOptions) error {
 	logging.Action("Starting parallel build with %d workers...", parallelJobs)
 
 	// Get package database (with root prefix)
@@ -298,30 +300,26 @@ func (a *App) buildPackagesParallel(solution map[string]*pkg.Package, parallelJo
 
 	scheduler := daemon.NewBuildScheduler(config)
 
-	// Create tasks for all packages
-	taskMap := make(map[string]*daemon.BuildTask)
-	for _, p := range solution {
+	// Create tasks for all packages (keyed by SlotKey to avoid slot collapse)
+	taskMap := make(map[pkg.SlotKey]*daemon.BuildTask)
+	for key, p := range solution {
 		task := daemon.NewBuildTask(p)
-		taskMap[p.Name] = task
+		taskMap[key] = task
 
-		// Capture variables for closure
-		pkgCopy := p
 		task.BuildFunc = func(ctx context.Context, buildPkg *pkg.Package) error {
 			return a.buildAndInstallSinglePackage(ctx, buildPkg, installer, opts)
 		}
-		_ = pkgCopy // Ensure pkgCopy is used
 
 		if err := scheduler.AddTask(task); err != nil {
 			return fmt.Errorf("failed to add task for %s: %w", p.Name, err)
 		}
 	}
 
-	// Add dependencies
+	// Add dependencies — look up by name+slot to avoid spurious cross-slot edges
 	for _, p := range solution {
 		taskID := p.Name + "-" + p.Version
 		for _, dep := range p.Deps {
-			depPkg, exists := solution[dep.Name]
-			if exists {
+			for _, depPkg := range solution.FindByDep(dep) {
 				depTaskID := depPkg.Name + "-" + depPkg.Version
 				if err := scheduler.AddDependency(taskID, depTaskID); err != nil {
 					if a.verbose {
@@ -504,15 +502,16 @@ func (a *App) createFetcher(distDir string) fetch.Fetcher {
 // topologicalSort returns solution keys ordered so dependencies come before dependents.
 // PDEPEND (post-merge) edges are excluded — Portage merges those after the dependent.
 // Falls back to deterministic sorted order for nodes in cycles.
-func topologicalSort(solution map[string]*pkg.Package) []string {
-	depIndex := make(map[string]string, len(solution))
-	for key, p := range solution {
-		depIndex[p.Name] = key
+// buildDepEdges constructs the dependency graph edges for topological sort.
+// Skips PDEPEND and filters by slot when the dep has a concrete slot constraint.
+func buildDepEdges(solution solver.ResolveResult) (inDegree map[pkg.SlotKey]int, edges map[pkg.SlotKey][]pkg.SlotKey) {
+	nameIndex := make(map[string][]pkg.SlotKey, len(solution))
+	for key := range solution {
+		nameIndex[key.Name] = append(nameIndex[key.Name], key)
 	}
 
-	// Kahn's algorithm — skip PDEPEND edges to avoid false cycles
-	inDegree := make(map[string]int, len(solution))
-	edges := make(map[string][]string, len(solution))
+	inDegree = make(map[pkg.SlotKey]int, len(solution))
+	edges = make(map[pkg.SlotKey][]pkg.SlotKey, len(solution))
 	for key := range solution {
 		inDegree[key] = 0
 	}
@@ -521,22 +520,35 @@ func topologicalSort(solution map[string]*pkg.Package) []string {
 			if dep.DepType == pkg.DepTypePostMerge {
 				continue
 			}
-			if depKey, ok := depIndex[dep.Name]; ok && depKey != key {
+			isOperator := dep.Slot == "=" || dep.Slot == "*"
+			for _, depKey := range nameIndex[dep.Name] {
+				if depKey == key {
+					continue
+				}
+				if dep.Slot != "" && !isOperator && depKey.Slot != dep.Slot {
+					continue
+				}
 				edges[depKey] = append(edges[depKey], key)
 				inDegree[key]++
 			}
 		}
 	}
+	return
+}
 
-	var queue []string
+func topologicalSort(solution solver.ResolveResult) []pkg.SlotKey {
+	inDegree, edges := buildDepEdges(solution)
+
+	// Deterministic seed: sort by name then slot
+	var queue []pkg.SlotKey
 	for key := range solution {
 		if inDegree[key] == 0 {
 			queue = append(queue, key)
 		}
 	}
-	sort.Strings(queue)
+	sortSlotKeys(queue)
 
-	var result []string
+	var result []pkg.SlotKey
 	for len(queue) > 0 {
 		node := queue[0]
 		queue = queue[1:]
@@ -545,32 +557,41 @@ func topologicalSort(solution map[string]*pkg.Package) []string {
 			inDegree[next]--
 			if inDegree[next] == 0 {
 				queue = append(queue, next)
-				sort.Strings(queue)
+				sortSlotKeys(queue)
 			}
 		}
 	}
 
-	// Cycle fallback: append remaining in deterministic sorted order
+	// Cycle fallback
 	if len(result) < len(solution) {
-		seen := make(map[string]bool, len(result))
+		seen := make(map[pkg.SlotKey]bool, len(result))
 		for _, k := range result {
 			seen[k] = true
 		}
-		var remaining []string
+		var remaining []pkg.SlotKey
 		for key := range solution {
 			if !seen[key] {
 				remaining = append(remaining, key)
 			}
 		}
-		sort.Strings(remaining)
+		sortSlotKeys(remaining)
 		result = append(result, remaining...)
 	}
 
 	return result
 }
 
+func sortSlotKeys(keys []pkg.SlotKey) {
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].Name != keys[j].Name {
+			return keys[i].Name < keys[j].Name
+		}
+		return keys[i].Slot < keys[j].Slot
+	})
+}
+
 // buildAndInstallPackages builds packages from source and installs them.
-func (a *App) buildAndInstallPackages(solution map[string]*pkg.Package, repoPath, distDir, tmpDir string, jobs int, keepWork, enableTests, replace, force bool, root string, keepGoing bool, fetcher fetch.Fetcher, useExpandVars map[string]string, cfg *config.Config) error {
+func (a *App) buildAndInstallPackages(solution solver.ResolveResult, repoPath, distDir, tmpDir string, jobs int, keepWork, enableTests, replace, force bool, root string, keepGoing bool, fetcher fetch.Fetcher, useExpandVars map[string]string, cfg *config.Config) error {
 	logging.Action("Starting source build...")
 
 	builtCount := 0
@@ -592,20 +613,24 @@ func (a *App) buildAndInstallPackages(solution map[string]*pkg.Package, repoPath
 	ordered := topologicalSort(solution)
 
 	pkgNum := 0
-	for _, name := range ordered {
-		p := solution[name]
+	for _, key := range ordered {
+		p := solution[key]
+		if p == nil {
+			continue
+		}
 		pkgNum++
-		logging.Action("(%d/%d) Emerging %s-%s", pkgNum, totalPackages, p.Name, p.Version)
+		label := p.Name + "-" + p.Version
+		logging.Action("(%d/%d) Emerging %s", pkgNum, totalPackages, label)
 
-		buildErr := a.buildAndInstallSingle(name, p, installer, repoPath, distDir, tmpDir, jobs, keepWork, enableTests, replace, force, fetcher, useExpandVars, cfg)
+		buildErr := a.buildAndInstallSingle(label, p, installer, repoPath, distDir, tmpDir, jobs, keepWork, enableTests, replace, force, fetcher, useExpandVars, cfg)
 		if buildErr != nil {
 			if keepGoing {
-				logging.Error("failed to emerge %s: %v", name, buildErr)
+				logging.Error("failed to emerge %s: %v", label, buildErr)
 				failedCount++
-				failedPkgs = append(failedPkgs, name)
+				failedPkgs = append(failedPkgs, label)
 				continue
 			}
-			return fmt.Errorf("failed to emerge %s: %w", name, buildErr)
+			return fmt.Errorf("failed to emerge %s: %w", label, buildErr)
 		}
 
 		builtCount++
@@ -846,26 +871,23 @@ func (a *App) findEbuildFile(p *pkg.Package, repoPath string) string {
 // The packages parameter contains atom strings (e.g., "app-misc/hello", "=sys-devel/gcc-13.4.1").
 // Each atom is parsed to extract the package name (category/package), and matching
 // packages are removed from the solution.
-func (a *App) filterTargetPackages(solution map[string]*pkg.Package, packages []string) map[string]*pkg.Package {
-	// Build a set of target package names from atoms
+func (a *App) filterTargetPackages(solution solver.ResolveResult, packages []string) solver.ResolveResult {
 	targetNames := make(map[string]bool)
 	for _, atomStr := range packages {
 		atom, err := pkg.ParseAtom(atomStr)
 		if err != nil {
-			// If parsing fails, try using the string directly as package name
 			targetNames[atomStr] = true
 			continue
 		}
 		targetNames[atom.CP()] = true
 	}
 
-	// Filter out target packages
-	filtered := make(map[string]*pkg.Package)
-	for name, p := range solution {
-		if !targetNames[name] {
-			filtered[name] = p
+	filtered := make(solver.ResolveResult)
+	for key, p := range solution {
+		if !targetNames[key.Name] {
+			filtered[key] = p
 		} else if a.verbose {
-			logging.Debug("--onlydeps: excluding target package %s-%s", name, p.Version)
+			logging.Debug("--onlydeps: excluding target package %s-%s", p.Name, p.Version)
 		}
 	}
 
@@ -930,7 +952,7 @@ func (a *App) loadBestAcceptableVersion(r repo.Repository, name string, acceptKe
 // don't actually need those tools.
 //
 // Returns an error if required tools are missing, with suggestions for installation.
-func (a *App) checkBuildTools(solution map[string]*pkg.Package, repoPath string) error {
+func (a *App) checkBuildTools(solution solver.ResolveResult, repoPath string) error {
 	logging.Debug("Checking external tool availability...")
 
 	checker := tools.NewChecker()

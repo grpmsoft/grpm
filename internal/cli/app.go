@@ -311,8 +311,7 @@ func (a *App) runResolve(args []string) error {
 		return nil
 	}
 
-	// Convert to string-keyed map for downstream consumers
-	solution := satResult.StringKeyMap()
+	solution := satResult
 
 	// Check for slot collisions if autounmask is enabled
 	if *autounmask || *autounmaskWrite {
@@ -332,7 +331,7 @@ func (a *App) runResolve(args []string) error {
 
 // handleResolveAutounmask handles autounmask logic for resolve command.
 // Returns true if collisions were found and handled.
-func (a *App) handleResolveAutounmask(solution map[string]*pkg.Package, writeChanges bool) (bool, error) {
+func (a *App) handleResolveAutounmask(solution solver.ResolveResult, writeChanges bool) (bool, error) {
 	graph := solver.NewDependencyGraph()
 	for _, p := range solution {
 		graph.AddPackage(p, false)
@@ -375,7 +374,7 @@ func (a *App) handleResolveAutounmask(solution map[string]*pkg.Package, writeCha
 }
 
 // displayResolveSolution displays the dependency resolution solution.
-func (a *App) displayResolveSolution(solution map[string]*pkg.Package, pretend bool) {
+func (a *App) displayResolveSolution(solution solver.ResolveResult, pretend bool) {
 	if pretend {
 		fmt.Println("\n*** Dependency resolution (--pretend mode):")
 		fmt.Println("*** The following packages would be used:")
@@ -383,11 +382,11 @@ func (a *App) displayResolveSolution(solution map[string]*pkg.Package, pretend b
 		fmt.Println("Dependency solution:")
 	}
 
-	for name, p := range solution {
+	for _, p := range solution {
 		if pretend {
-			fmt.Printf("[ebuild  N    ] %s-%s [%s]\n", name, p.Version, p.Slot.Name)
+			fmt.Printf("[ebuild  N    ] %s-%s [%s]\n", p.Name, p.Version, p.Slot.Name)
 		} else {
-			fmt.Printf("- %s-%s [slot:%s]\n", name, p.Version, p.Slot.Name)
+			fmt.Printf("- %s-%s [slot:%s]\n", p.Name, p.Version, p.Slot.Name)
 		}
 	}
 
@@ -542,21 +541,20 @@ func (a *App) initRepository(useMock bool, repoPath string) (repo.Repository, er
 // For real Portage repositories, masked packages are automatically filtered.
 // NOTE: This method does NOT filter installed packages. Use resolvePackageDependenciesWithOptions
 // for Portage-compatible behavior.
-func (a *App) resolvePackageDependencies(r repo.Repository, packages []string) (map[string]*pkg.Package, error) {
-	// Create resolver with mask support if using real Portage repository
+func (a *App) resolvePackageDependencies(r repo.Repository, packages []string) (solver.ResolveResult, error) {
 	resolver := a.createResolverWithMasks(r)
 
-	satResult, err := resolver.Resolve(packages)
+	result, err := resolver.Resolve(packages)
 	if err != nil {
 		return nil, fmt.Errorf("dependency resolution failed: %w", err)
 	}
 
-	if len(satResult) == 0 {
+	if len(result) == 0 {
 		a.log.Info("No packages to install")
 		return nil, nil
 	}
 
-	return satResult.StringKeyMap(), nil
+	return result, nil
 }
 
 // resolvePackageDependenciesWithOptions resolves dependencies with Portage-compatible filtering.
@@ -567,7 +565,7 @@ func (a *App) resolvePackageDependencies(r repo.Repository, packages []string) (
 //   - Use EmptyTree=true to see full dependency tree
 //   - Use Deep=true to traverse installed package dependencies
 //   - Use WithBdeps=true to include build-time deps for installed packages
-func (a *App) resolvePackageDependenciesWithOptions(r repo.Repository, packages []string, opts solver.ResolveOptions, varDbPath string, isMock bool) (map[string]*pkg.Package, error) {
+func (a *App) resolvePackageDependenciesWithOptions(r repo.Repository, packages []string, opts solver.ResolveOptions, varDbPath string, isMock bool) (solver.ResolveResult, error) {
 	// Create resolver with mask support
 	resolver := a.createResolverWithMasks(r)
 
@@ -586,17 +584,17 @@ func (a *App) resolvePackageDependenciesWithOptions(r repo.Repository, packages 
 		}
 	}
 
-	satResult, err := resolver.Resolve(packages)
+	result, err := resolver.Resolve(packages)
 	if err != nil {
 		return nil, fmt.Errorf("dependency resolution failed: %w", err)
 	}
 
-	if len(satResult) == 0 {
+	if len(result) == 0 {
 		a.log.Info("No packages to install")
 		return nil, nil
 	}
 
-	return satResult.StringKeyMap(), nil
+	return result, nil
 }
 
 // createResolverWithMasks creates a resolver with package.mask and KEYWORDS filtering.
@@ -719,7 +717,7 @@ func (a *App) detectProfilePath() string {
 }
 
 // displayPlanAndAsk displays installation plan and asks for confirmation if needed
-func (a *App) displayPlanAndAsk(solution map[string]*pkg.Package, pretend, ask bool) (bool, error) {
+func (a *App) displayPlanAndAsk(solution solver.ResolveResult, pretend, ask bool) (bool, error) {
 	if !pretend && !ask {
 		return true, nil // Normal install mode - proceed
 	}
@@ -759,7 +757,7 @@ func (a *App) askUserConfirmation() (bool, error) {
 }
 
 // executeInstallation performs the actual package installation
-func (a *App) executeInstallation(solution map[string]*pkg.Package, useBinpkg bool, binpkgDir string) error {
+func (a *App) executeInstallation(solution solver.ResolveResult, useBinpkg bool, binpkgDir string) error {
 	if solution == nil {
 		return nil
 	}
@@ -794,7 +792,7 @@ func (a *App) executeInstallation(solution map[string]*pkg.Package, useBinpkg bo
 
 // handleSlotCollisions checks for and handles slot collisions in the solution.
 // Returns an error if collisions are found and cannot be resolved.
-func (a *App) handleSlotCollisions(solution map[string]*pkg.Package, writeChanges bool) error {
+func (a *App) handleSlotCollisions(solution solver.ResolveResult, writeChanges bool) error {
 	if solution == nil {
 		return nil
 	}
