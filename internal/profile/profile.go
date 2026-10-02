@@ -196,25 +196,37 @@ func (p *Profile) Resolve() error {
 func (p *Profile) GetUSEFlags() []string {
 	flags := make([]string, 0)
 
-	// Collect from parents first (bottom-up)
 	for _, parent := range p.Parents {
 		flags = append(flags, parent.GetUSEFlags()...)
 	}
 
-	// Add USE flags from make.defaults
 	if use, exists := p.MakeDefaults["USE"]; exists {
 		flags = append(flags, parseUSEFlags(use)...)
 	}
 
-	// Add forced USE flags
-	flags = append(flags, p.USEForce...)
-
-	// Add negated masked USE flags
-	for _, masked := range p.USEMask {
-		flags = append(flags, "-"+masked)
-	}
-
 	return deduplicateUSEFlags(flags)
+}
+
+// GetForcedUSE returns USE flags from use.force across the profile hierarchy.
+// These flags are unconditionally enabled per PMS — user config cannot override.
+func (p *Profile) GetForcedUSE() []string {
+	var flags []string
+	for _, parent := range p.Parents {
+		flags = append(flags, parent.GetForcedUSE()...)
+	}
+	flags = append(flags, p.USEForce...)
+	return flags
+}
+
+// GetMaskedUSE returns USE flags from use.mask across the profile hierarchy.
+// These flags are unconditionally disabled per PMS — user config cannot override.
+func (p *Profile) GetMaskedUSE() []string {
+	var flags []string
+	for _, parent := range p.Parents {
+		flags = append(flags, parent.GetMaskedUSE()...)
+	}
+	flags = append(flags, p.USEMask...)
+	return flags
 }
 
 // GetSystemPackages returns all system packages from this profile and its parents.

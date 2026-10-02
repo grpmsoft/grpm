@@ -11,6 +11,8 @@ type mockUSEConfig struct {
 	globalUSE  []string
 	packageUSE map[string][]string // "cat/name:version:slot" -> flags
 	useExpand  map[string]string   // VAR_NAME -> "val1 val2"
+	forcedUSE  []string
+	maskedUSE  []string
 }
 
 func (m *mockUSEConfig) ProfileUSEFlags() []string { return m.profileUSE }
@@ -22,6 +24,8 @@ func (m *mockUSEConfig) PackageUSEFlags(category, name, version, slot string) []
 func (m *mockUSEConfig) USEExpandValue(varName string) string {
 	return m.useExpand[varName]
 }
+func (m *mockUSEConfig) ForcedUSE() []string { return m.forcedUSE }
+func (m *mockUSEConfig) MaskedUSE() []string { return m.maskedUSE }
 
 func TestResolveEffectiveUSE_IUSEDefaultsOnly(t *testing.T) {
 	// IUSE: +ssl -debug nls
@@ -386,5 +390,37 @@ func TestResolveEffectiveUSE_FullPriorityChain(t *testing.T) {
 		if got != want {
 			t.Errorf("flag %q: got %v, want %v", flag, got, want)
 		}
+	}
+}
+
+func TestResolveEffectiveUSE_ForcedOverridesPackageUse(t *testing.T) {
+	iuse := map[string]bool{"forced_flag": false}
+	cfg := &mockUSEConfig{
+		packageUSE: map[string][]string{
+			"app-misc/test:1.0:0": {"-forced_flag"},
+		},
+		forcedUSE: []string{"forced_flag"},
+	}
+
+	result := ResolveEffectiveUSE(iuse, "app-misc", "test", "1.0", "0", cfg)
+
+	if !result["forced_flag"] {
+		t.Error("use.force must override package.use -forced_flag: PMS says force is final")
+	}
+}
+
+func TestResolveEffectiveUSE_MaskedOverridesPackageUse(t *testing.T) {
+	iuse := map[string]bool{"masked_flag": false}
+	cfg := &mockUSEConfig{
+		packageUSE: map[string][]string{
+			"app-misc/test:1.0:0": {"masked_flag"},
+		},
+		maskedUSE: []string{"masked_flag"},
+	}
+
+	result := ResolveEffectiveUSE(iuse, "app-misc", "test", "1.0", "0", cfg)
+
+	if result["masked_flag"] {
+		t.Error("use.mask must override package.use masked_flag: PMS says mask is final")
 	}
 }

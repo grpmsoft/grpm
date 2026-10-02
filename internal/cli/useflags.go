@@ -168,6 +168,8 @@ func (c *cliUSEConfig) USEExpandValue(varName string) string {
 	}
 	return c.cfg.GetVariable(varName)
 }
+func (c *cliUSEConfig) ForcedUSE() []string { return nil }
+func (c *cliUSEConfig) MaskedUSE() []string { return nil }
 
 // resolvePackageUSE determines the effective USE flags for a package.
 // Delegates to the unified pkg.ResolveEffectiveUSE for the canonical

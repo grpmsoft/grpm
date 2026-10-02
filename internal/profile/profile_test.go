@@ -228,19 +228,39 @@ func TestGetUSEFlags(t *testing.T) {
 
 	flags := profile.GetUSEFlags()
 
-	// Should contain: ssl, unicode, -gtk, kernel_linux (forced), -debug (masked)
-	expected := []string{"ssl", "unicode", "-gtk", "kernel_linux", "-debug"}
-
-	// Check all expected flags are present
+	// GetUSEFlags returns make.defaults only (force/mask are separate per PMS)
+	expected := []string{"ssl", "unicode", "-gtk"}
 	flagMap := make(map[string]bool)
 	for _, flag := range flags {
 		flagMap[flag] = true
 	}
-
 	for _, exp := range expected {
 		if !flagMap[exp] {
 			t.Errorf("Expected flag %s not found in %v", exp, flags)
 		}
+	}
+
+	// Forced and masked are separate accessors
+	forced := profile.GetForcedUSE()
+	hasForcedKernel := false
+	for _, f := range forced {
+		if f == "kernel_linux" {
+			hasForcedKernel = true
+		}
+	}
+	if !hasForcedKernel {
+		t.Errorf("Expected kernel_linux in GetForcedUSE(), got %v", forced)
+	}
+
+	masked := profile.GetMaskedUSE()
+	hasMaskedDebug := false
+	for _, f := range masked {
+		if f == "debug" {
+			hasMaskedDebug = true
+		}
+	}
+	if !hasMaskedDebug {
+		t.Errorf("Expected debug in GetMaskedUSE(), got %v", masked)
 	}
 }
 

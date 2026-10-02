@@ -133,17 +133,29 @@ func (c *portageUSEConfig) PackageUSEFlags(category, name, version, slot string)
 }
 
 func (c *portageUSEConfig) USEExpandValue(varName string) string {
-	// Check make.conf first (higher priority)
 	if c.config != nil {
 		if value := c.config.GetVariable(varName); value != "" {
 			return value
 		}
 	}
-	// Fall back to profile make.defaults
 	if c.profile != nil {
 		return c.profile.MakeDefaults[varName]
 	}
 	return ""
+}
+
+func (c *portageUSEConfig) ForcedUSE() []string {
+	if c.profile == nil {
+		return nil
+	}
+	return c.profile.GetForcedUSE()
+}
+
+func (c *portageUSEConfig) MaskedUSE() []string {
+	if c.profile == nil {
+		return nil
+	}
+	return c.profile.GetMaskedUSE()
 }
 
 // getEffectiveUSE computes the effective USE flags for a package.

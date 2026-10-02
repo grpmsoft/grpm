@@ -6,10 +6,11 @@
 //
 // Resolution priority follows Portage (lowest to highest):
 //  1. IUSE defaults (+flag = enabled, -flag or bare = disabled)
-//  2. Profile USE flags (make.defaults + use.force - use.mask)
+//  2. Profile USE flags (make.defaults only, NOT force/mask)
 //  3. make.conf global USE flags
 //  4. USE_EXPAND variables (PYTHON_TARGETS, etc.)
 //  5. Per-package USE from package.use
+//  6. use.force / use.mask (PMS: cannot be overridden by user config)
 package pkg
 
 import (
@@ -20,9 +21,9 @@ import (
 // This interface breaks the dependency from the domain layer to infrastructure,
 // keeping the domain layer independent of config/profile packages.
 type USEResolverConfig interface {
-	// ProfileUSEFlags returns USE flags from the system profile hierarchy.
-	// Includes make.defaults, use.force, negated use.mask.
-	// Returns flags in order: parent profiles first, then current profile.
+	// ProfileUSEFlags returns USE flags from the system profile make.defaults.
+	// Does NOT include use.force or use.mask — those are applied separately as
+	// the final layer per PMS. Returns parent profiles first, then current.
 	// Negated flags are returned with "-" prefix (e.g., "-doc").
 	ProfileUSEFlags() []string
 
@@ -40,6 +41,16 @@ type USEResolverConfig interface {
 	// Example: USEExpandValue("PYTHON_TARGETS") -> "python3_12 python3_13"
 	// Returns empty string if not set.
 	USEExpandValue(varName string) string
+
+	// ForcedUSE returns flags from use.force (profile hierarchy).
+	// These are unconditionally enabled regardless of user configuration.
+	// Returns nil if not available (backward compat — force not applied).
+	ForcedUSE() []string
+
+	// MaskedUSE returns flags from use.mask (profile hierarchy).
+	// These are unconditionally disabled regardless of user configuration.
+	// Returns nil if not available (backward compat — mask not applied).
+	MaskedUSE() []string
 }
 
 // USEExpandVars lists the USE_EXPAND variables that are expanded into USE flags.
@@ -106,8 +117,16 @@ func ResolveEffectiveUSE(iuseDefaults map[string]bool, category, name, version, 
 		}
 	}
 
-	// 5. Apply per-package USE from package.use (highest priority)
+	// 5. Apply per-package USE from package.use
 	applyUSEFlagList(effectiveUSE, cfg.PackageUSEFlags(category, name, version, slot))
+
+	// 6. Apply use.force and use.mask (PMS: overrides everything, user cannot change)
+	for _, flag := range cfg.ForcedUSE() {
+		effectiveUSE[flag] = true
+	}
+	for _, flag := range cfg.MaskedUSE() {
+		delete(effectiveUSE, flag)
+	}
 
 	return effectiveUSE
 }
