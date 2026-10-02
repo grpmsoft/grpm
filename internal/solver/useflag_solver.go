@@ -69,8 +69,8 @@ func (ufs *UseFlagSolver) PackageUSEFlags(category, name, _, _ string) []string 
 // USE_EXPAND variables directly. USE_EXPAND is handled at the repository
 // parsing and CLI layers.
 func (ufs *UseFlagSolver) USEExpandValue(_ string) string { return "" }
-func (ufs *UseFlagSolver) ForcedUSE() []string              { return nil }
-func (ufs *UseFlagSolver) MaskedUSE() []string              { return nil }
+func (ufs *UseFlagSolver) ForcedUSE() []string            { return nil }
+func (ufs *UseFlagSolver) MaskedUSE() []string            { return nil }
 
 // --- Public API ---
 

@@ -2460,17 +2460,29 @@ func TestLazyOR_OnlyPreferredAlternativeExpanded(t *testing.T) {
 }
 
 // TestLazyOR_FallbackOnUNSAT verifies that when the preferred OR alternative
-// is unsatisfiable, the resolver falls back to the next alternative.
+// is unsatisfiable, the resolver retries with the next alternative expanded.
+// The working alternative has its own dep chain that requires exploration —
+// without the retry loop, its deps would be unexplored and get prohibited.
 func TestLazyOR_FallbackOnUNSAT(t *testing.T) {
 	r := newMultiVersionRepo()
 
-	// "broken" has an unsatisfiable dep
+	// "broken" has an unsatisfiable dep (no package provides nonexistent)
 	broken := pkg.NewPackage("app-editors/broken", "1.0", "0")
 	broken.Deps = []pkg.Constraint{{Name: "dev-libs/nonexistent", Type: pkg.ConstraintTypeVersion}}
 	r.addVersion(broken)
 
-	// "working" has no deps
+	// "working" depends on "workingdep" which depends on "leaf"
+	// This chain requires exploration — without retry, workingdep's dep on leaf
+	// won't be explored, leaf won't be a candidate, and workingdep gets prohibited.
+	leaf := pkg.NewPackage("dev-libs/leaf", "1.0", "0")
+	r.addVersion(leaf)
+
+	workingdep := pkg.NewPackage("dev-libs/workingdep", "1.0", "0")
+	workingdep.Deps = []pkg.Constraint{{Name: "dev-libs/leaf", Type: pkg.ConstraintTypeVersion}}
+	r.addVersion(workingdep)
+
 	working := pkg.NewPackage("app-editors/working", "1.0", "0")
+	working.Deps = []pkg.Constraint{{Name: "dev-libs/workingdep", Type: pkg.ConstraintTypeVersion}}
 	r.addVersion(working)
 
 	// app depends on || ( broken working )
@@ -2484,10 +2496,20 @@ func TestLazyOR_FallbackOnUNSAT(t *testing.T) {
 	resolver := NewResolver(r)
 	result := resolveClean(t, resolver, []string{"app-misc/fallback-user"})
 
-	// working should be selected (fallback after broken is prohibited)
+	// working should be selected via retry after broken is prohibited
 	workingKey := pkg.SlotKey{Name: "app-editors/working", Slot: "0"}
 	if _, ok := result[workingKey]; !ok {
-		t.Error("expected working in result (fallback from broken preferred)")
+		t.Error("expected working in result (retry fallback from broken preferred)")
+	}
+
+	// workingdep and leaf should also be in result (working's dep chain)
+	depKey := pkg.SlotKey{Name: "dev-libs/workingdep", Slot: "0"}
+	if _, ok := result[depKey]; !ok {
+		t.Error("expected workingdep in result (working's dependency)")
+	}
+	leafKey := pkg.SlotKey{Name: "dev-libs/leaf", Slot: "0"}
+	if _, ok := result[leafKey]; !ok {
+		t.Error("expected leaf in result (workingdep's dependency)")
 	}
 }
 

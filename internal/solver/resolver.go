@@ -93,6 +93,12 @@ type PortageResolver struct {
 	// PackagesExplored counts unique package names loaded during collection.
 	// Measures exploration cost, not result size.
 	PackagesExplored int
+
+	// orExpansionLevel tracks how many OR-group alternatives to expand per group.
+	// Key: "pkgname:groupID". Value: number of alternatives to fully explore (default 1).
+	// On UNSAT retry, the level is incremented for groups whose preferred alternative
+	// was prohibited, allowing the next alternative's deps to be explored.
+	orExpansionLevel map[string]int
 }
 
 // NewResolver creates a new resolver without mask/keyword support.
@@ -225,27 +231,37 @@ func (r *PortageResolver) collectDependencies(p *pkg.Package, allPackages map[st
 		}
 	}
 
-	// Lazy OR expansion: only expand the first preferred alternative.
-	// Others get candidates registered (for SAT variable creation) but deps
-	// NOT explored. An unexpanded alternative without dep exploration will get
-	// prohibit clauses in addPackageConstraints (no providers for its deps).
-	// If SAT is UNSAT, Resolve() retries with the next alternative expanded.
+	// Lazy OR expansion: expand only the first N preferred alternatives,
+	// where N = orExpansionLevel[key] (default 1). Others get candidates
+	// registered (for SAT variable creation) but deps NOT explored. An
+	// unexpanded alternative without dep exploration will get prohibit
+	// clauses in addPackageConstraints (no providers for its deps).
+	// If SAT is UNSAT, Resolve() retries with expanded level incremented.
 	for groupID, alternatives := range orGroups {
 		logging.Debug("OR-group %d for %s: %d alternatives", groupID, p.Name, len(alternatives))
 		sorted := r.sortAlternativesByInstalled(alternatives)
+
+		orKey := fmt.Sprintf("%s:%d", p.Name, groupID)
+		expandLevel := 1
+		if r.orExpansionLevel != nil {
+			if lvl, ok := r.orExpansionLevel[orKey]; ok && lvl > expandLevel {
+				expandLevel = lvl
+			}
+		}
+
 		for i, alt := range sorted {
 			// Register candidates for SAT variable creation
 			r.addCandidateVersions(alt.Name, allCandidates)
 
-			// Only explore deps of the FIRST (preferred) alternative
-			if i == 0 {
+			// Explore deps of alternatives up to the expansion level
+			if i < expandLevel {
 				if candidates, ok := allCandidates[alt.Name]; ok {
 					for _, candidate := range candidates {
 						r.collectDependencies(candidate, allPackages, allCandidates)
 					}
 				}
 			}
-			// Non-preferred alternatives: candidates registered but deps not explored.
+			// Non-expanded alternatives: candidates registered but deps not explored.
 			// addPackageConstraints will emit prohibit for their unresolvable deps,
 			// making SAT prefer the expanded alternative.
 		}
@@ -552,140 +568,226 @@ func (r *PortageResolver) loadPackageFromAtom(atomStr string) (*pkg.Package, err
 	return r.loadUnmaskedPackage(atom.CP())
 }
 
+// maxOrRetries bounds the lazy OR expansion retry loop.
+// Each retry expands one more alternative in at least one OR-group.
+// 10 is generous — most real OR-groups have 2-3 alternatives.
+const maxOrRetries = 10
+
 //nolint:gocyclo // Complexity inherent to multi-pass Portage-compatible resolution with OR-group support
 func (r *PortageResolver) Resolve(packages []string) (ResolveResult, error) {
 	r.PostPassAdded = 0
 	r.PackagesExplored = 0
-	adapter := NewGophersatAdapter()
-	allPackages := make(map[string]*pkg.Package)
-	allCandidates := make(map[string][]*pkg.Package) // name -> all versions
 
 	// Track root packages: name -> the specific version selected by loadPackageFromAtom.
-	// This determines the unit clause for each root package.
 	rootPackageNames := make([]string, 0, len(packages))
 	rootPackagesMap := make(map[string]*pkg.Package)
-	rootAtoms := make(map[string]string) // name → original atom string
+	rootAtoms := make(map[string]string) // name -> original atom string
 
-	// Load and collect all dependencies
+	// Load root packages (does not change across retries).
 	for _, pkgName := range packages {
 		p, err := r.loadPackageFromAtom(pkgName)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load package %s: %w", pkgName, err)
 		}
-
-		// Store the actual package name and original atom for root constraints
 		rootPackageNames = append(rootPackageNames, p.Name)
 		rootPackagesMap[p.Name] = p
 		rootAtoms[p.Name] = pkgName
-
 		logging.Debug("Resolving package: %s-%s with %d dependencies",
 			p.Name, p.Version, len(p.Deps))
+	}
 
-		// Best-effort collection: SAT determines satisfiability, not this phase.
-		// Load ALL candidate versions and explore each one's deps.
-		r.addCandidateVersions(p.Name, allCandidates)
-		if candidates, ok := allCandidates[p.Name]; ok {
-			for _, candidate := range candidates {
-				r.collectDependencies(candidate, allPackages, allCandidates)
+	// Initialize lazy OR expansion levels (all start at 1 = first alternative only).
+	if r.orExpansionLevel == nil {
+		r.orExpansionLevel = make(map[string]int)
+	}
+
+	// Retry loop: collect deps + build SAT + solve.
+	// On UNSAT caused by lazy OR (unexpanded alternative prohibited),
+	// increment expansion level and rebuild from scratch.
+	var lastAdapter *GophersatAdapter
+
+	for attempt := 0; attempt <= maxOrRetries; attempt++ {
+		if attempt > 0 {
+			logging.Info("OR-expansion retry %d: expanding additional alternatives", attempt)
+		}
+
+		adapter := NewGophersatAdapter()
+		allPackages := make(map[string]*pkg.Package)
+		allCandidates := make(map[string][]*pkg.Package)
+
+		// Reset exploration counter for this attempt
+		r.PackagesExplored = 0
+
+		// Collect dependencies with current orExpansionLevel
+		for _, p := range rootPackagesMap {
+			r.addCandidateVersions(p.Name, allCandidates)
+			if candidates, ok := allCandidates[p.Name]; ok {
+				for _, candidate := range candidates {
+					r.collectDependencies(candidate, allPackages, allCandidates)
+				}
+			}
+		}
+
+		logging.Debug("Total packages in dependency graph: %d", len(allPackages))
+		logging.Debug("Total candidate packages: %d names", len(allCandidates))
+
+		// Inject installed packages (VDB) as SAT candidates.
+		installedKeys := r.addInstalledCandidates(allCandidates, allPackages)
+
+		// Register ALL candidate versions with the SAT adapter.
+		for _, candidates := range allCandidates {
+			for _, c := range candidates {
+				adapter.AddPackage(c)
+			}
+		}
+		for _, p := range allPackages {
+			adapter.AddPackage(p)
+		}
+
+		// Mark installed versions in the adapter.
+		for _, key := range installedKeys {
+			if varID := adapter.GetVarID(key); varID != 0 {
+				adapter.MarkInstalled(varID)
+			}
+		}
+
+		// Add root constraints
+		r.addRootConstraints(adapter, rootPackagesMap, rootAtoms)
+
+		// Add implication constraints for each candidate version.
+		for _, candidates := range allCandidates {
+			for _, c := range candidates {
+				r.addPackageConstraints(adapter, c, rootPackageNames)
+			}
+		}
+		for _, p := range allPackages {
+			if _, hasCandidates := allCandidates[p.Name]; !hasCandidates {
+				r.addPackageConstraints(adapter, p, rootPackageNames)
+			}
+		}
+
+		// Add at-most-one-per-slot pairwise exclusion clauses
+		adapter.AddAtMostOnePerSlot()
+
+		logging.Debug("Total clauses in SAT problem: %d", len(adapter.clauses))
+
+		// Solve
+		const maxsatTimeout = 5 * time.Second
+		updateMode := r.options.Update
+		status, solution, err := adapter.SolveOptimal(maxsatTimeout, updateMode)
+		if err != nil {
+			return nil, err
+		}
+
+		if status == pkg.StatusSat {
+			result, buildErr := r.buildResultFromSolution(solution, allCandidates)
+			if buildErr != nil {
+				return nil, buildErr
+			}
+			return r.postSATSafetyNet(result)
+		}
+
+		// UNSAT — check if lazy OR expansion can help.
+		lastAdapter = adapter
+		expanded := r.tryExpandOrGroups(adapter, allPackages)
+		if !expanded {
+			break
+		}
+	}
+
+	// Genuine UNSAT — explain and return error
+	if lastAdapter != nil {
+		explanation := lastAdapter.ExplainWhyUNSAT()
+		for _, line := range explanation.Lines {
+			logging.Info("%s", line)
+		}
+	}
+	return nil, fmt.Errorf("no solution found (UNSAT, see explanation above)")
+}
+
+// tryExpandOrGroups checks if any OR-group has an unexpanded alternative
+// that was prohibited due to missing dep exploration. If found, increments
+// the expansion level for that group and returns true (caller should retry).
+func (r *PortageResolver) tryExpandOrGroups(adapter *GophersatAdapter, allPackages map[string]*pkg.Package) bool {
+	prohibitedNames := adapter.ProhibitedPackageNames()
+	if len(prohibitedNames) == 0 {
+		return false
+	}
+
+	expanded := false
+	for _, p := range allPackages {
+		_, orGroups := groupDependenciesByOrGroupID(p.Deps)
+		for groupID, alternatives := range orGroups {
+			orKey := fmt.Sprintf("%s:%d", p.Name, groupID)
+			currentLevel := 1
+			if lvl, ok := r.orExpansionLevel[orKey]; ok {
+				currentLevel = lvl
+			}
+			if currentLevel >= len(alternatives) {
+				continue
+			}
+			sorted := r.sortAlternativesByInstalled(alternatives)
+			for i := currentLevel; i < len(sorted); i++ {
+				if prohibitedNames[sorted[i].Name] {
+					r.orExpansionLevel[orKey] = currentLevel + 1
+					logging.Info("OR-group %s: expanding alternative %d (%s) after UNSAT",
+						orKey, currentLevel, sorted[i].Name)
+					expanded = true
+					break
+				}
 			}
 		}
 	}
 
-	logging.Debug("Total packages in dependency graph: %d", len(allPackages))
-	logging.Debug("Total candidate packages: %d names", len(allCandidates))
-
-	// Inject installed packages (VDB) as SAT candidates.
-	// Installed versions may not exist in the repo anymore (removed upstream),
-	// but they still need to participate in SAT so the solver can choose to keep them.
-	// This is a prerequisite for MAX-SAT preference weighting (task 014).
-	installedKeys := r.addInstalledCandidates(allCandidates, allPackages)
-
-	// Register ALL candidate versions with the SAT adapter.
-	// This is the key change: instead of registering one version per package,
-	// we register all unmasked versions so the SAT solver can choose.
-	for _, candidates := range allCandidates {
-		for _, c := range candidates {
-			adapter.AddPackage(c)
+	// Fallback: all expanded alternatives are prohibited — try next one.
+	if !expanded {
+		for _, p := range allPackages {
+			_, orGroups := groupDependenciesByOrGroupID(p.Deps)
+			for groupID, alternatives := range orGroups {
+				orKey := fmt.Sprintf("%s:%d", p.Name, groupID)
+				currentLevel := 1
+				if lvl, ok := r.orExpansionLevel[orKey]; ok {
+					currentLevel = lvl
+				}
+				if currentLevel >= len(alternatives) {
+					continue
+				}
+				sorted := r.sortAlternativesByInstalled(alternatives)
+				allExpandedProhibited := true
+				for i := 0; i < currentLevel && i < len(sorted); i++ {
+					if !prohibitedNames[sorted[i].Name] {
+						allExpandedProhibited = false
+						break
+					}
+				}
+				if allExpandedProhibited {
+					r.orExpansionLevel[orKey] = currentLevel + 1
+					nextAlt := "?"
+					if currentLevel < len(sorted) {
+						nextAlt = sorted[currentLevel].Name
+					}
+					logging.Info("OR-group %s: all expanded alternatives prohibited, trying %s",
+						orKey, nextAlt)
+					expanded = true
+				}
+			}
 		}
 	}
 
-	// Also register any packages from allPackages that might not have candidates
-	// (e.g., packages from repos that don't support GetAllVersions well)
-	for _, p := range allPackages {
-		adapter.AddPackage(p)
-	}
+	return expanded
+}
 
-	// Mark installed versions in the SAT adapter so weak blockers and
-	// future MAX-SAT optimization can distinguish them from repo-only candidates.
-	for _, key := range installedKeys {
-		if varID := adapter.GetVarID(key); varID != 0 {
-			adapter.MarkInstalled(varID)
-		}
-	}
-
-	// Add root requirements: unit clause for each root package's selected version
-	r.addRootConstraints(adapter, rootPackagesMap, rootAtoms)
-
-	// Add implication constraints for each candidate version.
-	// For each version of each package, its deps become implications:
-	// "if this version is selected, then its deps must be satisfied"
-	for _, candidates := range allCandidates {
-		for _, c := range candidates {
-			r.addPackageConstraints(adapter, c, rootPackageNames)
-		}
-	}
-
-	// Also process packages that are in allPackages but not in allCandidates
-	// (single-version packages loaded directly)
-	for _, p := range allPackages {
-		if _, hasCandidates := allCandidates[p.Name]; !hasCandidates {
-			r.addPackageConstraints(adapter, p, rootPackageNames)
-		}
-	}
-
-	// Add at-most-one-per-slot pairwise exclusion clauses
-	adapter.AddAtMostOnePerSlot()
-
-	logging.Debug("Total clauses in SAT problem: %d", len(adapter.clauses))
-
-	// Solve with MAX-SAT optimization for version preferences.
-	// Timeout with fallback to regular SAT — user sees a warning if optimization fails.
-	const maxsatTimeout = 5 * time.Second
-	updateMode := r.options.Update
-	status, solution, err := adapter.SolveOptimal(maxsatTimeout, updateMode)
-	if err != nil {
-		return nil, err
-	}
-
-	if status != pkg.StatusSat {
-		result := adapter.ExplainWhyUNSAT()
-		for _, line := range result.Lines {
-			logging.Info("%s", line)
-		}
-		return nil, fmt.Errorf("no solution found (UNSAT, see explanation above)")
-	}
-
-	// Build result
-	result, err := r.buildResultFromSolution(solution, allCandidates)
-	if err != nil {
-		return nil, err
-	}
-
-	// Post-SAT safety net: should add ZERO packages if SAT encoding is complete.
-	// Any addition signals a gap in implication clauses. Logged as warning.
+// postSATSafetyNet runs the post-SAT fixup passes.
+// Should add ZERO packages if SAT encoding is complete.
+func (r *PortageResolver) postSATSafetyNet(result ResolveResult) (ResolveResult, error) {
 	for pass := 1; pass <= 10; pass++ {
 		added := 0
-		// Snapshot current result keys to avoid modifying map while iterating
 		currentPkgs := make([]*pkg.Package, 0, len(result))
 		for _, p := range result {
 			currentPkgs = append(currentPkgs, p)
 		}
-
 		for _, p := range currentPkgs {
-			// Group deps by OR-group
 			requiredDeps, orGroups := groupDependenciesByOrGroupID(p.Deps)
-
-			// Required deps
 			for _, dep := range requiredDeps {
 				depPkg, err := r.loadUnmaskedPackage(dep.Name)
 				if err != nil {
@@ -698,10 +800,7 @@ func (r *PortageResolver) Resolve(packages []string) (ResolveResult, error) {
 				result[depKey] = depPkg
 				added++
 			}
-
-			// OR-groups: pick first available alternative (Portage default behavior)
 			for _, alternatives := range orGroups {
-				// Check if any alternative is already in result
 				satisfied := false
 				for _, alt := range alternatives {
 					altPkg, altErr := r.loadUnmaskedPackage(alt.Name)
@@ -716,7 +815,6 @@ func (r *PortageResolver) Resolve(packages []string) (ResolveResult, error) {
 				if satisfied {
 					continue
 				}
-				// Pick first available alternative
 				for _, alt := range alternatives {
 					altPkg, err := r.loadUnmaskedPackage(alt.Name)
 					if err != nil {
@@ -724,7 +822,7 @@ func (r *PortageResolver) Resolve(packages []string) (ResolveResult, error) {
 					}
 					result[pkg.SlotKeyOf(altPkg)] = altPkg
 					added++
-					break // Take first available
+					break
 				}
 			}
 		}
@@ -737,7 +835,6 @@ func (r *PortageResolver) Resolve(packages []string) (ResolveResult, error) {
 		}
 	}
 
-	// Output formatted package list
 	logging.Info("Resolved packages:")
 	for key, p := range result {
 		logging.Debug("- %s-%s [slot:%s key:%s:%s]", p.Name, p.Version, p.Slot.Name, key.Name, key.Slot)
