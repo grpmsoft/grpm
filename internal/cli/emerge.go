@@ -134,7 +134,7 @@ func (a *App) runEmerge(args []string) error {
 	if *noDeps {
 		// --nodeps: skip resolution, just find the best acceptable version
 		logging.Action("Skipping dependency resolution (--nodeps)...")
-		acceptKeywords := []string{"amd64", "~amd64"}
+		acceptKeywords := []string{"amd64"}
 		if cfg != nil && len(cfg.MakeConf.ACCEPT_KEYWORDS) > 0 {
 			acceptKeywords = cfg.MakeConf.ACCEPT_KEYWORDS
 		}
@@ -502,6 +502,68 @@ func (a *App) createFetcher(distDir string) fetch.Fetcher {
 	return a.createFetcherWithConfig(distDir, cfg)
 }
 
+// topologicalSort returns solution keys ordered so dependencies come before dependents.
+// Falls back to sorted order if the graph has cycles.
+func topologicalSort(solution map[string]*pkg.Package) []string {
+	// Build adjacency: for each package, which solution keys must come first
+	depIndex := make(map[string]string, len(solution))
+	for key, p := range solution {
+		depIndex[p.Name] = key
+	}
+
+	// Kahn's algorithm
+	inDegree := make(map[string]int, len(solution))
+	edges := make(map[string][]string, len(solution))
+	for key := range solution {
+		inDegree[key] = 0
+	}
+	for key, p := range solution {
+		for _, dep := range p.Deps {
+			if depKey, ok := depIndex[dep.Name]; ok && depKey != key {
+				edges[depKey] = append(edges[depKey], key)
+				inDegree[key]++
+			}
+		}
+	}
+
+	var queue []string
+	for key := range solution {
+		if inDegree[key] == 0 {
+			queue = append(queue, key)
+		}
+	}
+	sort.Strings(queue)
+
+	var result []string
+	for len(queue) > 0 {
+		node := queue[0]
+		queue = queue[1:]
+		result = append(result, node)
+		for _, next := range edges[node] {
+			inDegree[next]--
+			if inDegree[next] == 0 {
+				queue = append(queue, next)
+				sort.Strings(queue)
+			}
+		}
+	}
+
+	// Cycle fallback: append remaining in sorted order
+	if len(result) < len(solution) {
+		seen := make(map[string]bool, len(result))
+		for _, k := range result {
+			seen[k] = true
+		}
+		for key := range solution {
+			if !seen[key] {
+				result = append(result, key)
+			}
+		}
+	}
+
+	return result
+}
+
 // buildAndInstallPackages builds packages from source and installs them.
 func (a *App) buildAndInstallPackages(solution map[string]*pkg.Package, repoPath, distDir, tmpDir string, jobs int, keepWork, enableTests, replace, force bool, root string, keepGoing bool, fetcher fetch.Fetcher, useExpandVars map[string]string, cfg *config.Config) error {
 	logging.Action("Starting source build...")
@@ -521,8 +583,12 @@ func (a *App) buildAndInstallPackages(solution map[string]*pkg.Package, repoPath
 	installer := install.NewInstaller(root, db)
 	installer.Verbose = a.verbose
 
+	// Topological sort: build dependencies before dependents
+	ordered := topologicalSort(solution)
+
 	pkgNum := 0
-	for name, p := range solution {
+	for _, name := range ordered {
+		p := solution[name]
 		pkgNum++
 		logging.Action("(%d/%d) Emerging %s-%s", pkgNum, totalPackages, p.Name, p.Version)
 
