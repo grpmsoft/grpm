@@ -667,13 +667,17 @@ type ExplainUNSATResult struct {
 }
 
 // unsatTracer holds state for the graph-based UNSAT explanation traversal.
+// Pass 1 (whyImpossible): computes cache[varID] = reason, no formatting.
+// Pass 2 (walkTopDown): formats root→leaf with dedup.
 type unsatTracer struct {
 	adapter *GophersatAdapter
 	cache   map[int]string // varID → reason ("ok" if satisfiable)
-	chain   []string       // accumulated explanation lines
+	printed map[int]bool   // dedup: varID already formatted
+	chain   []string       // output lines (built in pass 2)
 }
 
-func (tr *unsatTracer) whyImpossible(varID int, depth int) string {
+// whyImpossible computes and caches reason strings. No formatting.
+func (tr *unsatTracer) whyImpossible(varID int) string {
 	if r, ok := tr.cache[varID]; ok {
 		return r
 	}
@@ -687,13 +691,13 @@ func (tr *unsatTracer) whyImpossible(varID int, depth int) string {
 	for _, edge := range tr.adapter.implications[varID] {
 		allDead := true
 		for _, prov := range edge.providers {
-			if tr.whyImpossible(prov, depth+1) == "ok" {
+			if tr.whyImpossible(prov) == "ok" {
 				allDead = false
 				break
 			}
 		}
 		if allDead && len(edge.providers) > 0 {
-			result := tr.formatDeadEdge(varID, edge, depth)
+			result := tr.summarizeEdge(edge)
 			tr.cache[varID] = result
 			return result
 		}
@@ -703,61 +707,111 @@ func (tr *unsatTracer) whyImpossible(varID int, depth int) string {
 	return "ok"
 }
 
-func (tr *unsatTracer) formatDeadEdge(varID int, edge implicationEdge, depth int) string {
+// summarizeEdge builds a one-line summary for a dead implication edge.
+// Does NOT inline nested reasons — the tree walk shows details.
+func (tr *unsatTracer) summarizeEdge(edge implicationEdge) string {
 	g := tr.adapter
+	pkgName := g.packageNameOf(edge.providers[0])
 
-	// Group providers by package name
-	pkgGroups := make(map[string][]string)
-	var pkgOrder []string
-	for _, prov := range edge.providers {
-		pkgName := g.packageNameOf(prov)
-		if _, seen := pkgGroups[pkgName]; !seen {
-			pkgOrder = append(pkgOrder, pkgName)
+	distinctPkgs := 1
+	for i := 1; i < len(edge.providers); i++ {
+		if g.packageNameOf(edge.providers[i]) != pkgName {
+			distinctPkgs++
 		}
-		ver := g.varName(prov)
-		if idx := strings.Index(ver, "@"); idx >= 0 {
-			ver = ver[idx+1:]
-		}
-		pkgGroups[pkgName] = append(pkgGroups[pkgName], fmt.Sprintf("%s: %s", ver, tr.cache[prov]))
 	}
 
-	summary := tr.buildSummary(edge, pkgOrder)
-	result := fmt.Sprintf("needs [%s] but %s", g.packageNameOf(edge.providers[0]), summary)
+	if distinctPkgs == 1 && len(edge.providers) > 1 {
+		return fmt.Sprintf("needs %s but all %d versions impossible", pkgName, len(edge.providers))
+	}
+	if distinctPkgs == 1 {
+		return fmt.Sprintf("needs %s but impossible", pkgName)
+	}
+	return fmt.Sprintf("needs one of %d providers but all impossible", len(edge.providers))
+}
 
+// findDeadEdge returns the first implication of varID where all providers are dead, or nil.
+func (tr *unsatTracer) findDeadEdge(varID int) *implicationEdge {
+	for i := range tr.adapter.implications[varID] {
+		edge := &tr.adapter.implications[varID][i]
+		allDead := true
+		for _, prov := range edge.providers {
+			if tr.cache[prov] == "ok" {
+				allDead = false
+				break
+			}
+		}
+		if allDead && len(edge.providers) > 0 {
+			return edge
+		}
+	}
+	return nil
+}
+
+// walkTopDown formats the chain root→leaf. Each varID is printed once;
+// subsequent references emit "(see above)".
+func (tr *unsatTracer) walkTopDown(varID int, depth int) {
+	if tr.cache[varID] == "ok" {
+		return
+	}
 	indent := strings.Repeat("  ", depth)
-	tr.chain = append(tr.chain, fmt.Sprintf("%s%s: %s", indent, g.varName(varID), result))
+	name := tr.adapter.varName(varID)
 
-	if depth < 8 {
-		for _, pkgName := range pkgOrder {
-			versions := pkgGroups[pkgName]
-			if len(versions) <= 4 {
-				for _, v := range versions {
-					tr.chain = append(tr.chain, fmt.Sprintf("%s  %s/%s", indent, pkgName, v))
-				}
-			} else {
-				tr.chain = append(tr.chain, fmt.Sprintf("%s  %s: %d versions, all impossible (showing first 3)", indent, pkgName, len(versions)))
-				for _, v := range versions[:3] {
-					tr.chain = append(tr.chain, fmt.Sprintf("%s    %s", indent, v))
-				}
+	if tr.printed[varID] {
+		tr.chain = append(tr.chain, fmt.Sprintf("%s%s  (see above)", indent, name))
+		return
+	}
+	tr.printed[varID] = true
+
+	// Leaf: direct prohibit
+	if _, prohibited := tr.adapter.prohibits[varID]; prohibited {
+		tr.chain = append(tr.chain, fmt.Sprintf("%s%s: %s", indent, name, tr.cache[varID]))
+		return
+	}
+
+	// Interior node: find dead edge and recurse into providers
+	edge := tr.findDeadEdge(varID)
+	if edge == nil {
+		tr.chain = append(tr.chain, fmt.Sprintf("%s%s: %s", indent, name, tr.cache[varID]))
+		return
+	}
+
+	tr.chain = append(tr.chain, fmt.Sprintf("%s%s: %s", indent, name, tr.cache[varID]))
+
+	if depth >= 8 {
+		return
+	}
+
+	// Group providers by package name
+	type provGroup struct {
+		pkgName string
+		varIDs  []int
+	}
+	var groups []provGroup
+	groupIdx := make(map[string]int)
+	for _, prov := range edge.providers {
+		pkg := tr.adapter.packageNameOf(prov)
+		if idx, ok := groupIdx[pkg]; ok {
+			groups[idx].varIDs = append(groups[idx].varIDs, prov)
+		} else {
+			groupIdx[pkg] = len(groups)
+			groups = append(groups, provGroup{pkgName: pkg, varIDs: []int{prov}})
+		}
+	}
+
+	for _, grp := range groups {
+		if len(grp.varIDs) <= 4 {
+			for _, prov := range grp.varIDs {
+				tr.walkTopDown(prov, depth+1)
+			}
+		} else {
+			// Many versions — show first 3, summarize rest
+			tr.chain = append(tr.chain, fmt.Sprintf("%s  %s: %d versions, all impossible (first 3):",
+				indent, grp.pkgName, len(grp.varIDs)))
+			for _, prov := range grp.varIDs[:3] {
+				tr.walkTopDown(prov, depth+2)
 			}
 		}
 	}
-	return result
-}
-
-func (tr *unsatTracer) buildSummary(edge implicationEdge, pkgOrder []string) string {
-	g := tr.adapter
-	if len(pkgOrder) == 1 && len(edge.providers) > 1 {
-		return fmt.Sprintf("all %d versions of %s are impossible", len(edge.providers), pkgOrder[0])
-	}
-	if len(edge.providers) <= 3 {
-		parts := make([]string, 0, len(edge.providers))
-		for _, prov := range edge.providers {
-			parts = append(parts, fmt.Sprintf("%s: %s", g.varName(prov), tr.cache[prov]))
-		}
-		return strings.Join(parts, "; ")
-	}
-	return fmt.Sprintf("%d providers all impossible", len(edge.providers))
 }
 
 // ExplainWhyUNSAT traverses the implication graph from root candidates to find
@@ -768,12 +822,17 @@ func (g *GophersatAdapter) ExplainWhyUNSAT() ExplainUNSATResult {
 		return ExplainUNSATResult{Lines: []string{"no root candidates registered"}}
 	}
 
-	tr := &unsatTracer{adapter: g, cache: make(map[int]string)}
+	tr := &unsatTracer{
+		adapter: g,
+		cache:   make(map[int]string),
+		printed: make(map[int]bool),
+	}
 
+	// Pass 1: compute reasons (no formatting)
 	var rootResults []string
 	allRootsDead := true
 	for _, rootVar := range g.rootVars {
-		r := tr.whyImpossible(rootVar, 0)
+		r := tr.whyImpossible(rootVar)
 		if r == "ok" {
 			allRootsDead = false
 		} else {
@@ -792,6 +851,11 @@ func (g *GophersatAdapter) ExplainWhyUNSAT() ExplainUNSATResult {
 		lines = append(lines, "")
 		lines = append(lines, "Root candidates:")
 		lines = append(lines, rootResults...)
+	}
+
+	// Pass 2: format top-down from roots with dedup
+	for _, rootVar := range g.rootVars {
+		tr.walkTopDown(rootVar, 0)
 	}
 
 	if len(tr.chain) > 0 {

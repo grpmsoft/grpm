@@ -1142,7 +1142,7 @@ func TestExplainWhyUNSAT_MultiVersionAllDead(t *testing.T) {
 	result := adapter.ExplainWhyUNSAT()
 	joined := strings.Join(result.Lines, "\n")
 
-	if !strings.Contains(joined, "all 2 versions of dev-libs/lib are impossible") {
+	if !strings.Contains(joined, "all 2 versions impossible") {
 		t.Errorf("should group versions, got:\n%s", joined)
 	}
 	if !strings.Contains(joined, "ghost") || !strings.Contains(joined, "phantom") {
@@ -1196,6 +1196,127 @@ func TestExplainWhyUNSAT_CoreSmallerThanTotal(t *testing.T) {
 	}
 	if result.CoreSize == 0 {
 		t.Errorf("core size should be > 0, got 0:\n%s", strings.Join(result.Lines, "\n"))
+	}
+}
+
+func TestExplainWhyUNSAT_DedupSeeAbove(t *testing.T) {
+	// Two ROOT packages both need the same impossible leaf via different mid-nodes.
+	// The leaf's full explanation must appear once; second reference says "(see above)".
+	adapter := NewGophersatAdapter()
+
+	rootA := pkg.NewPackage("app/a", "1.0", "0")
+	rootB := pkg.NewPackage("app/b", "1.0", "0")
+	shared := pkg.NewPackage("dev-libs/shared", "1.0", "0")
+	adapter.AddPackage(rootA)
+	adapter.AddPackage(rootB)
+	adapter.AddPackage(shared)
+
+	aID := adapter.GetVarID("app/a@1.0")
+	bID := adapter.GetVarID("app/b@1.0")
+	sharedID := adapter.GetVarID("dev-libs/shared@1.0")
+
+	// Both are roots
+	adapter.withMeta(ClauseRoot, "root a")
+	adapter.addClause([]int{aID})
+	adapter.addRootVars([]int{aID})
+	adapter.withMeta(ClauseRoot, "root b")
+	adapter.addClause([]int{bID})
+	adapter.addRootVars([]int{bID})
+
+	// Both depend on shared
+	adapter.AddImplication(aID, []int{sharedID})
+	adapter.AddImplication(bID, []int{sharedID})
+
+	// shared is prohibited
+	adapter.withMeta(ClauseProhibit, "no provider for ghost")
+	adapter.addClause([]int{-sharedID})
+	adapter.prohibits[sharedID] = "no provider for ghost"
+
+	result := adapter.ExplainWhyUNSAT()
+	joined := strings.Join(result.Lines, "\n")
+
+	// "shared" full reason must appear once; second root path gets "(see above)"
+	fullCount := strings.Count(joined, "dev-libs/shared@1.0: no provider")
+	seeAboveCount := strings.Count(joined, "dev-libs/shared@1.0  (see above)")
+
+	if fullCount != 1 {
+		t.Errorf("shared full explanation should appear exactly once, got %d:\n%s", fullCount, joined)
+	}
+	if seeAboveCount != 1 {
+		t.Errorf("shared should have exactly one '(see above)' reference, got %d:\n%s", seeAboveCount, joined)
+	}
+}
+
+func TestExplainWhyUNSAT_TopDownOrder(t *testing.T) {
+	adapter := NewGophersatAdapter()
+
+	root := pkg.NewPackage("app/root", "1.0", "0")
+	mid := pkg.NewPackage("dev-libs/mid", "1.0", "0")
+	leaf := pkg.NewPackage("dev-libs/leaf", "1.0", "0")
+	adapter.AddPackage(root)
+	adapter.AddPackage(mid)
+	adapter.AddPackage(leaf)
+
+	rootID := adapter.GetVarID("app/root@1.0")
+	midID := adapter.GetVarID("dev-libs/mid@1.0")
+	leafID := adapter.GetVarID("dev-libs/leaf@1.0")
+
+	adapter.withMeta(ClauseRoot, "root")
+	adapter.addClause([]int{rootID})
+	adapter.addRootVars([]int{rootID})
+
+	adapter.AddImplication(rootID, []int{midID})
+	adapter.AddImplication(midID, []int{leafID})
+	adapter.withMeta(ClauseProhibit, "no provider for ghost")
+	adapter.addClause([]int{-leafID})
+	adapter.prohibits[leafID] = "no provider for ghost"
+
+	result := adapter.ExplainWhyUNSAT()
+	joined := strings.Join(result.Lines, "\n")
+
+	// Root must appear BEFORE mid, mid BEFORE leaf (top-down order)
+	rootPos := strings.Index(joined, "app/root@1.0")
+	midPos := strings.Index(joined, "dev-libs/mid@1.0")
+	leafPos := strings.Index(joined, "dev-libs/leaf@1.0")
+
+	if rootPos == -1 || midPos == -1 || leafPos == -1 {
+		t.Fatalf("all three nodes must appear in output:\n%s", joined)
+	}
+	if rootPos >= midPos || midPos >= leafPos {
+		t.Errorf("order should be root < mid < leaf (top-down), got positions %d, %d, %d:\n%s",
+			rootPos, midPos, leafPos, joined)
+	}
+}
+
+func TestExplainWhyUNSAT_ConsistentNotation(t *testing.T) {
+	adapter := NewGophersatAdapter()
+
+	root := pkg.NewPackage("app/root", "1.0", "0")
+	dep := pkg.NewPackage("dev-libs/dep", "2.0", "0")
+	adapter.AddPackage(root)
+	adapter.AddPackage(dep)
+
+	rootID := adapter.GetVarID("app/root@1.0")
+	depID := adapter.GetVarID("dev-libs/dep@2.0")
+
+	adapter.withMeta(ClauseRoot, "root")
+	adapter.addClause([]int{rootID})
+	adapter.addRootVars([]int{rootID})
+
+	adapter.AddImplication(rootID, []int{depID})
+	adapter.withMeta(ClauseProhibit, "no provider for ghost")
+	adapter.addClause([]int{-depID})
+	adapter.prohibits[depID] = "no provider for ghost"
+
+	result := adapter.ExplainWhyUNSAT()
+	joined := strings.Join(result.Lines, "\n")
+
+	// Must use name@version notation consistently, never name/version
+	if strings.Contains(joined, "dev-libs/dep/2.0") {
+		t.Errorf("should use @ notation, not /, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "dev-libs/dep@2.0") {
+		t.Errorf("should contain dev-libs/dep@2.0, got:\n%s", joined)
 	}
 }
 
