@@ -21,6 +21,7 @@ const (
 	ActionInstall   PackageAction = iota
 	ActionUpgrade                 // version > installed, same slot
 	ActionDowngrade               // version < installed, same slot (Portage "UD")
+	ActionReinstall               // same version, rebuild for USE changes (Portage "R")
 	ActionKeep                    // same version and slot, already installed
 	ActionRemove                  // installed but deselected (blocker, slot removal)
 )
@@ -33,10 +34,12 @@ func (a PackageAction) String() string {
 		return "U"
 	case ActionDowngrade:
 		return "UD"
+	case ActionReinstall:
+		return "R"
 	case ActionKeep:
 		return "K"
 	case ActionRemove:
-		return "R"
+		return "D"
 	default:
 		return "?"
 	}
@@ -265,13 +268,16 @@ func (r *PortageResolver) collectDependencies(p *pkg.Package, allPackages map[st
 	// Group dependencies by OrGroupID
 	requiredDeps, orGroups := groupDependenciesByOrGroupID(p.Deps)
 
-	// Process REQUIRED dependencies only.
-	// Note: BDEPEND skip for installed packages removed for multi-version SAT.
-	// SAT needs ALL deps explored to build correct implications. Without BDEPEND
-	// providers in the adapter, implication clauses emit prohibit on ALL candidates.
-	// Portage's BDEPEND optimization (skip for installed) belongs in the result
-	// filtering phase, not in SAT exploration.
+	// Skip BDEPEND exploration only for the exact installed version+slot.
+	// Other versions of the same package (upgrade candidates) still need BDEPEND.
+	installedInSlot := r.findInstalledInSlot(p.Name, p.Slot.Name)
+	skipBDEPEND := installedInSlot != nil && installedInSlot.Version == p.Version &&
+		!r.options.NewUse && !r.options.EmptyTree
+
 	for _, dep := range requiredDeps {
+		if skipBDEPEND && isBuildTimeDep(dep.DepType) {
+			continue
+		}
 		// SAT must see all providers to build correct implication clauses.
 
 		// Load ALL candidate versions and recursively explore each one's deps.
@@ -292,6 +298,9 @@ func (r *PortageResolver) collectDependencies(p *pkg.Package, allPackages map[st
 	// clauses in addPackageConstraints (no providers for its deps).
 	// If SAT is UNSAT, Resolve() retries with expanded level incremented.
 	for groupID, alternatives := range orGroups {
+		if skipBDEPEND && len(alternatives) > 0 && isBuildTimeDep(alternatives[0].DepType) {
+			continue
+		}
 		logging.Debug("OR-group %d for %s: %d alternatives", groupID, p.Name, len(alternatives))
 		sorted := r.sortAlternativesByInstalled(alternatives)
 
@@ -554,7 +563,7 @@ func (r *PortageResolver) determineAction(p *pkg.Package) PackageAction {
 	}
 	if installed.Version == p.Version {
 		if r.options.NewUse {
-			return ActionUpgrade // same version, rebuild for USE changes
+			return ActionReinstall
 		}
 		return ActionKeep
 	}
@@ -567,6 +576,7 @@ func (r *PortageResolver) determineAction(p *pkg.Package) PackageAction {
 
 // findInstalledInSlot returns the installed package matching name AND slot.
 // Returns nil if no match. This is slot-aware unlike GetInstalledVersion.
+
 func (r *PortageResolver) findInstalledInSlot(name, slot string) *pkg.Package {
 	if r.installedDB == nil {
 		return nil

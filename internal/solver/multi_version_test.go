@@ -2904,3 +2904,55 @@ func TestBDEPEND_NotSkippedWithNewUse(t *testing.T) {
 		t.Error("with --newuse: expected UNSAT — BDEPEND missingtool not in repo")
 	}
 }
+
+// TestBDEPEND_UpgradeCandidateNotSkipped verifies that BDEPEND is explored
+// for upgrade candidates even when an older version is installed.
+func TestBDEPEND_UpgradeCandidateNotSkipped(t *testing.T) {
+	r := newMultiVersionRepo()
+
+	tool := pkg.NewPackage("dev-build/tool", "1.0", "0")
+	r.addVersion(tool)
+
+	libV1 := pkg.NewPackage("dev-libs/lib", "1.0", "0")
+	r.addVersion(libV1)
+
+	libV2 := pkg.NewPackage("dev-libs/lib", "2.0", "0")
+	libV2.Deps = []pkg.Constraint{
+		{Name: "dev-build/tool", Type: pkg.ConstraintTypeVersion, DepType: pkg.DepTypeBuildHost},
+	}
+	r.addVersion(libV2)
+
+	app := pkg.NewPackage("app-misc/app", "1.0", "0")
+	app.Deps = []pkg.Constraint{
+		{Name: "dev-libs/lib", Type: pkg.ConstraintTypeVersion, Version: pkg.NewMinVersionConstraint("2.0")},
+	}
+	r.addVersion(app)
+
+	installed := &state.InstalledPackage{
+		Package: pkg.NewPackage("dev-libs/lib", "1.0", "0"),
+	}
+	db := state.NewPackageDatabase("/var/db/pkg")
+	if err := db.Add(installed); err != nil {
+		t.Fatalf("failed to add installed: %v", err)
+	}
+
+	resolver := NewResolver(r)
+	resolver.SetInstalledDB(db)
+	result := resolveClean(t, resolver, []string{"app-misc/app"})
+
+	// lib should be upgrade to 2.0
+	libKey := pkg.SlotKey{Name: "dev-libs/lib", Slot: "0"}
+	entry := result[libKey]
+	if entry == nil {
+		t.Fatal("expected lib in result")
+	}
+	if entry.Package.Version != "2.0" {
+		t.Errorf("expected lib 2.0, got %s", entry.Package.Version)
+	}
+
+	// tool (BDEPEND of lib 2.0) MUST be in result — lib 2.0 needs to be built
+	toolKey := pkg.SlotKey{Name: "dev-build/tool", Slot: "0"}
+	if _, ok := result[toolKey]; !ok {
+		t.Error("tool should be in result — BDEPEND of upgrade candidate lib-2.0")
+	}
+}
