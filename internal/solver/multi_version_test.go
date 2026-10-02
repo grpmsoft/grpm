@@ -2721,3 +2721,38 @@ func keysOf(r ResolveResult) []pkg.SlotKey {
 	})
 	return keys
 }
+
+// TestAction_NewSlot_DoesNotRemoveOldSlot verifies that installing a new slot
+// does NOT remove the old installed slot. python:3.12 installed, python:3.13
+// requested → 3.13=Install, 3.12 NOT in result (not Remove, just untouched).
+func TestAction_NewSlot_DoesNotRemoveOldSlot(t *testing.T) {
+	r := newMultiVersionRepo()
+	r.addVersion(pkg.NewPackage("dev-lang/python", "3.12.7", "3.12"))
+	r.addVersion(pkg.NewPackage("dev-lang/python", "3.13.1", "3.13"))
+
+	installed := &state.InstalledPackage{
+		Package: pkg.NewPackage("dev-lang/python", "3.12.7", "3.12"),
+	}
+	db := state.NewPackageDatabase("/var/db/pkg")
+	if err := db.Add(installed); err != nil {
+		t.Fatalf("failed to add installed: %v", err)
+	}
+
+	resolver := NewResolver(r)
+	resolver.SetInstalledDB(db)
+	result := resolveClean(t, resolver, []string{"dev-lang/python:3.13"})
+
+	// python:3.13 should be Install
+	key313 := pkg.SlotKey{Name: "dev-lang/python", Slot: "3.13"}
+	if entry, ok := result[key313]; !ok {
+		t.Fatal("expected python:3.13 in result")
+	} else if entry.Action != ActionInstall {
+		t.Errorf("python:3.13 should be Install (new slot), got %s", entry.Action)
+	}
+
+	// python:3.12 must NOT be ActionRemove — no blocker, just untouched
+	key312 := pkg.SlotKey{Name: "dev-lang/python", Slot: "3.12"}
+	if entry, ok := result[key312]; ok && entry.Action == ActionRemove {
+		t.Error("python:3.12 must NOT be Remove — no blocker, old slot stays installed")
+	}
+}

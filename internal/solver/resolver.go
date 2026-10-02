@@ -762,7 +762,7 @@ func (r *PortageResolver) Resolve(packages []string) (ResolveResult, error) {
 			if buildErr != nil {
 				return nil, buildErr
 			}
-			return r.postSATSafetyNet(result)
+			return r.postSATSafetyNet(result, adapter)
 		}
 
 		// UNSAT — check if lazy OR expansion can help.
@@ -857,7 +857,7 @@ func (r *PortageResolver) tryExpandOrGroups(adapter *GophersatAdapter, allPackag
 
 // postSATSafetyNet runs the post-SAT fixup passes.
 // Should add ZERO packages if SAT encoding is complete.
-func (r *PortageResolver) postSATSafetyNet(result ResolveResult) (ResolveResult, error) {
+func (r *PortageResolver) postSATSafetyNet(result ResolveResult, adapter *GophersatAdapter) (ResolveResult, error) {
 	for pass := 1; pass <= 10; pass++ {
 		added := 0
 		currentEntries := make([]*ResolveEntry, 0, len(result))
@@ -920,7 +920,7 @@ func (r *PortageResolver) postSATSafetyNet(result ResolveResult) (ResolveResult,
 	// set ¬B_installed = false, removing the installed package from the solution.
 	// Without an explicit Remove entry, the CLI won't unmerge it, violating the
 	// blocker constraint on disk.
-	r.addRemovedPackages(result)
+	r.addRemovedPackages(result, adapter)
 
 	logging.Info("Resolved packages:")
 	for key, ent := range result {
@@ -931,12 +931,14 @@ func (r *PortageResolver) postSATSafetyNet(result ResolveResult) (ResolveResult,
 	return result, nil
 }
 
-// addRemovedPackages checks VDB for installed packages that are in the
-// dependency graph but NOT in the result. If an installed package's slot
-// has no selected version, it is added as ActionRemove. This ensures the
-// CLI will unmerge packages deselected by blocker conflict clauses.
-func (r *PortageResolver) addRemovedPackages(result ResolveResult) {
-	if r.installedDB == nil || r.options.EmptyTree {
+// addRemovedPackages marks installed packages for removal ONLY when they are
+// deselected by a blocker conflict clause. "Not selected" alone does not mean
+// "remove" — python:3.12 installed while python:3.13 is requested should NOT
+// remove 3.12 (that's a different slot, Portage shows NS for the new one).
+//
+// Rule: installed && !selected && ∃ conflict(selected, installed) → Remove.
+func (r *PortageResolver) addRemovedPackages(result ResolveResult, adapter *GophersatAdapter) {
+	if r.installedDB == nil || r.options.EmptyTree || adapter == nil {
 		return
 	}
 	for _, ip := range r.installedDB.List() {
@@ -944,24 +946,19 @@ func (r *PortageResolver) addRemovedPackages(result ResolveResult) {
 			continue
 		}
 		key := pkg.SlotKeyOf(ip.Package)
-		// Only consider packages whose name appears somewhere in the result
-		// (i.e., they are part of the dependency graph). Don't add Remove for
-		// packages completely unrelated to the current resolution.
-		nameInGraph := false
-		slotOccupied := false
-		for rk := range result {
-			if rk.Name == key.Name {
-				nameInGraph = true
-				if rk.Slot == key.Slot {
-					slotOccupied = true
-					break
-				}
-			}
+		if _, inResult := result[key]; inResult {
+			continue // already in result — not removed
 		}
-		if nameInGraph && !slotOccupied {
+		// Check if this installed package has a conflict clause with any selected package
+		installedKey := ip.Package.Name + "@" + ip.Package.Version
+		installedVarID := adapter.GetVarID(installedKey)
+		if installedVarID == 0 {
+			continue // not a SAT variable — not in the dependency graph
+		}
+		if adapter.HasConflictWith(installedVarID, result) {
 			result[key] = &ResolveEntry{Package: ip.Package, Action: ActionRemove}
-			logging.Debug("Added ActionRemove for installed %s-%s (slot %s not in solution)",
-				ip.Package.Name, ip.Package.Version, key.Slot)
+			logging.Debug("Added ActionRemove for installed %s-%s (blocker conflict)",
+				ip.Package.Name, ip.Package.Version)
 		}
 	}
 }
