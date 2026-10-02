@@ -125,8 +125,22 @@ func (vl *VarDBLoader) loadPackage(path, category, pkgDirName string) (*Installe
 		return nil, err
 	}
 
-	// Load USE flags
+	// Load SLOT from VDB (defaults to "0" if missing)
+	if slotData, slotErr := os.ReadFile(filepath.Join(path, "SLOT")); slotErr == nil {
+		slotStr := strings.TrimSpace(string(slotData))
+		if slotStr != "" {
+			installedPkg.Package.Slot = pkg.ParseSlot(slotStr)
+		}
+	}
+
+	// Load USE flags and propagate to Package.UseFlags for USE-dep evaluation
 	_ = vl.loadUSE(path, installedPkg)
+	if installedPkg.Package.UseFlags == nil {
+		installedPkg.Package.UseFlags = make(map[string]bool)
+	}
+	for _, flag := range installedPkg.USE {
+		installedPkg.Package.UseFlags[flag] = true
+	}
 
 	// Load CFLAGS
 	_ = vl.loadCFLAGS(path, installedPkg)
