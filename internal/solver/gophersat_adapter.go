@@ -42,6 +42,12 @@ type clauseMeta struct {
 	Reason string
 }
 
+// implicationEdge records one implication: if dependent is selected, at least one provider must be.
+type implicationEdge struct {
+	providers []int
+	reason    string
+}
+
 // GophersatAdapter adapts the gophersat SAT solver for package dependency resolution
 type GophersatAdapter struct {
 	clauses      [][]int
@@ -51,6 +57,11 @@ type GophersatAdapter struct {
 	packages     map[string][]*pkg.Package // name -> []versions
 	addedClauses map[string]struct{}       // to prevent duplicate clauses
 	pendingMeta  *clauseMeta               // set before addClause to tag the next clause
+
+	// Structural indices for UNSAT explanation (built alongside clauses)
+	implications map[int][]implicationEdge // varID → "if selected, needs one of providers"
+	prohibits    map[int]string            // varID → reason why this candidate is impossible
+	rootVars     []int                     // var IDs from root at-least-one clauses
 }
 
 func NewGophersatAdapter() *GophersatAdapter {
@@ -59,6 +70,8 @@ func NewGophersatAdapter() *GophersatAdapter {
 		varNames:     make(map[int]string),
 		packages:     make(map[string][]*pkg.Package),
 		addedClauses: make(map[string]struct{}),
+		implications: make(map[int][]implicationEdge),
+		prohibits:    make(map[int]string),
 	}
 }
 
@@ -100,6 +113,11 @@ func (g *GophersatAdapter) addClause(clause []int) {
 // withMeta sets metadata for the next addClause call.
 func (g *GophersatAdapter) withMeta(source ClauseSource, reason string) {
 	g.pendingMeta = &clauseMeta{Source: source, Reason: reason}
+}
+
+// addRootVars records var IDs that appear in root at-least-one clauses.
+func (g *GophersatAdapter) addRootVars(vars []int) {
+	g.rootVars = append(g.rootVars, vars...)
 }
 
 // AddPackage registers a package version as a SAT variable
@@ -426,11 +444,19 @@ func (g *GophersatAdapter) AddImplication(dependent int, providers []int) {
 	}
 	depName := g.varNames[dependent]
 	providerNames := g.literalNames(providers)
-	g.withMeta(ClauseImplication, fmt.Sprintf("%s => one of [%s]", depName, strings.Join(providerNames, ", ")))
+	reason := fmt.Sprintf("%s => one of [%s]", depName, strings.Join(providerNames, ", "))
+	g.withMeta(ClauseImplication, reason)
 	clause := make([]int, 0, 1+len(providers))
 	clause = append(clause, -dependent)
 	clause = append(clause, providers...)
 	g.addClause(clause)
+
+	provCopy := make([]int, len(providers))
+	copy(provCopy, providers)
+	g.implications[dependent] = append(g.implications[dependent], implicationEdge{
+		providers: provCopy,
+		reason:    reason,
+	})
 	logging.Debug("Added implication: -%d => %v", dependent, providers)
 }
 
@@ -440,8 +466,10 @@ func (g *GophersatAdapter) AddImplication(dependent int, providers []int) {
 func (g *GophersatAdapter) AddImplicationConstraint(dependentVarID int, c pkg.Constraint) error {
 	providers := g.findSatisfyingVars(c)
 	if len(providers) == 0 {
-		g.withMeta(ClauseProhibit, fmt.Sprintf("no provider for %s (needed by %s)", c.String(), g.varNames[dependentVarID]))
+		reason := fmt.Sprintf("no provider for %s (needed by %s)", c.String(), g.varNames[dependentVarID])
+		g.withMeta(ClauseProhibit, reason)
 		g.addClause([]int{-dependentVarID})
+		g.prohibits[dependentVarID] = reason
 		logging.Debug("Prohibiting %d: no package provides %s", dependentVarID, c.String())
 		return nil
 	}
@@ -464,8 +492,10 @@ func (g *GophersatAdapter) AddImplicationSlotConstraint(dependentVarID int, c pk
 		}
 	}
 	if len(slotVars) == 0 {
-		g.withMeta(ClauseProhibit, fmt.Sprintf("no provider for %s:%s (needed by %s)", c.Name, c.Slot, g.varNames[dependentVarID]))
+		reason := fmt.Sprintf("no provider for %s:%s (needed by %s)", c.Name, c.Slot, g.varNames[dependentVarID])
+		g.withMeta(ClauseProhibit, reason)
 		g.addClause([]int{-dependentVarID})
+		g.prohibits[dependentVarID] = reason
 		logging.Debug("Prohibiting %d: no package %s in slot %s", dependentVarID, c.Name, c.Slot)
 		return nil
 	}
@@ -495,8 +525,10 @@ func (g *GophersatAdapter) AddImplicationOrGroup(dependentVarID int, alternative
 		}
 	}
 	if len(allSatisfyingVars) == 0 {
-		g.withMeta(ClauseProhibit, fmt.Sprintf("no provider for OR-group (needed by %s)", g.varNames[dependentVarID]))
+		reason := fmt.Sprintf("no provider for OR-group (needed by %s)", g.varNames[dependentVarID])
+		g.withMeta(ClauseProhibit, reason)
 		g.addClause([]int{-dependentVarID})
+		g.prohibits[dependentVarID] = reason
 		logging.Debug("Prohibiting %d: no packages satisfy OR-group", dependentVarID)
 		return nil
 	}
@@ -590,7 +622,7 @@ func (g *GophersatAdapter) GetPackageVersions(name string) []string {
 	return versions
 }
 
-// literalNames maps a slice of positive var IDs to their name@version strings.
+// literalNames maps a slice of var IDs to their name@version strings.
 func (g *GophersatAdapter) literalNames(varIDs []int) []string {
 	names := make([]string, 0, len(varIDs))
 	for _, id := range varIDs {
@@ -611,16 +643,174 @@ func (g *GophersatAdapter) literalNames(varIDs []int) []string {
 	return names
 }
 
-// formatClause returns a human-readable representation of a clause.
-func (g *GophersatAdapter) formatClause(clause []int) string {
-	names := g.literalNames(clause)
-	return "(" + strings.Join(names, " | ") + ")"
+// varName returns human-readable name for a var ID.
+func (g *GophersatAdapter) varName(id int) string {
+	if name, ok := g.varNames[id]; ok {
+		return name
+	}
+	return fmt.Sprintf("var%d", id)
 }
 
-// ExplainUNSAT extracts a (not necessarily minimal) unsatisfiable subset of
-// clauses and returns human-readable lines explaining why resolution failed.
-// Uses gophersat/explain.UnsatSubset for fast single-SAT-call extraction.
-func (g *GophersatAdapter) ExplainUNSAT() []string {
+// packageNameOf extracts the package name (category/package) from a varID.
+func (g *GophersatAdapter) packageNameOf(varID int) string {
+	name := g.varName(varID)
+	if idx := strings.Index(name, "@"); idx >= 0 {
+		return name[:idx]
+	}
+	return name
+}
+
+// ExplainUNSATResult holds the structured explanation output.
+type ExplainUNSATResult struct {
+	Lines    []string // human-readable lines
+	CoreSize int      // number of clauses/nodes in the explanation
+}
+
+// unsatTracer holds state for the graph-based UNSAT explanation traversal.
+type unsatTracer struct {
+	adapter *GophersatAdapter
+	cache   map[int]string // varID → reason ("ok" if satisfiable)
+	chain   []string       // accumulated explanation lines
+}
+
+func (tr *unsatTracer) whyImpossible(varID int, depth int) string {
+	if r, ok := tr.cache[varID]; ok {
+		return r
+	}
+	tr.cache[varID] = "ok" // cycle guard
+
+	if reason, prohibited := tr.adapter.prohibits[varID]; prohibited {
+		tr.cache[varID] = reason
+		return reason
+	}
+
+	for _, edge := range tr.adapter.implications[varID] {
+		allDead := true
+		for _, prov := range edge.providers {
+			if tr.whyImpossible(prov, depth+1) == "ok" {
+				allDead = false
+				break
+			}
+		}
+		if allDead && len(edge.providers) > 0 {
+			result := tr.formatDeadEdge(varID, edge, depth)
+			tr.cache[varID] = result
+			return result
+		}
+	}
+
+	tr.cache[varID] = "ok"
+	return "ok"
+}
+
+func (tr *unsatTracer) formatDeadEdge(varID int, edge implicationEdge, depth int) string {
+	g := tr.adapter
+
+	// Group providers by package name
+	pkgGroups := make(map[string][]string)
+	var pkgOrder []string
+	for _, prov := range edge.providers {
+		pkgName := g.packageNameOf(prov)
+		if _, seen := pkgGroups[pkgName]; !seen {
+			pkgOrder = append(pkgOrder, pkgName)
+		}
+		ver := g.varName(prov)
+		if idx := strings.Index(ver, "@"); idx >= 0 {
+			ver = ver[idx+1:]
+		}
+		pkgGroups[pkgName] = append(pkgGroups[pkgName], fmt.Sprintf("%s: %s", ver, tr.cache[prov]))
+	}
+
+	summary := tr.buildSummary(edge, pkgOrder)
+	result := fmt.Sprintf("needs [%s] but %s", g.packageNameOf(edge.providers[0]), summary)
+
+	indent := strings.Repeat("  ", depth)
+	tr.chain = append(tr.chain, fmt.Sprintf("%s%s: %s", indent, g.varName(varID), result))
+
+	if depth < 8 {
+		for _, pkgName := range pkgOrder {
+			versions := pkgGroups[pkgName]
+			if len(versions) <= 4 {
+				for _, v := range versions {
+					tr.chain = append(tr.chain, fmt.Sprintf("%s  %s/%s", indent, pkgName, v))
+				}
+			} else {
+				tr.chain = append(tr.chain, fmt.Sprintf("%s  %s: %d versions, all impossible (showing first 3)", indent, pkgName, len(versions)))
+				for _, v := range versions[:3] {
+					tr.chain = append(tr.chain, fmt.Sprintf("%s    %s", indent, v))
+				}
+			}
+		}
+	}
+	return result
+}
+
+func (tr *unsatTracer) buildSummary(edge implicationEdge, pkgOrder []string) string {
+	g := tr.adapter
+	if len(pkgOrder) == 1 && len(edge.providers) > 1 {
+		return fmt.Sprintf("all %d versions of %s are impossible", len(edge.providers), pkgOrder[0])
+	}
+	if len(edge.providers) <= 3 {
+		parts := make([]string, 0, len(edge.providers))
+		for _, prov := range edge.providers {
+			parts = append(parts, fmt.Sprintf("%s: %s", g.varName(prov), tr.cache[prov]))
+		}
+		return strings.Join(parts, "; ")
+	}
+	return fmt.Sprintf("%d providers all impossible", len(edge.providers))
+}
+
+// ExplainWhyUNSAT traverses the implication graph from root candidates to find
+// why the problem is unsatisfiable. Returns the dependency chain(s) from root
+// to the deepest prohibit clause. O(edges) — no SAT solver call.
+func (g *GophersatAdapter) ExplainWhyUNSAT() ExplainUNSATResult {
+	if len(g.rootVars) == 0 {
+		return ExplainUNSATResult{Lines: []string{"no root candidates registered"}}
+	}
+
+	tr := &unsatTracer{adapter: g, cache: make(map[int]string)}
+
+	var rootResults []string
+	allRootsDead := true
+	for _, rootVar := range g.rootVars {
+		r := tr.whyImpossible(rootVar, 0)
+		if r == "ok" {
+			allRootsDead = false
+		} else {
+			rootResults = append(rootResults, fmt.Sprintf("  %s: %s", g.varName(rootVar), r))
+		}
+	}
+
+	var lines []string
+	if allRootsDead {
+		lines = append(lines, fmt.Sprintf("UNSAT: all %d root candidates are impossible", len(g.rootVars)))
+	} else {
+		lines = append(lines, "UNSAT: some root candidates impossible (SAT conflict through at-most-one)")
+	}
+
+	if len(rootResults) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, "Root candidates:")
+		lines = append(lines, rootResults...)
+	}
+
+	if len(tr.chain) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, "Dependency chain:")
+		lines = append(lines, tr.chain...)
+	}
+
+	return ExplainUNSATResult{
+		Lines:    lines,
+		CoreSize: len(tr.chain),
+	}
+}
+
+// ExplainUNSATGeneric extracts an unsatisfiable subset using gophersat/explain.
+// Expensive (extra SAT call) and often returns the full problem on implication-heavy formulas.
+// Use only when graph-based ExplainWhyUNSAT cannot isolate the conflict
+// (e.g., at-most-one conflicts without prohibit chains).
+func (g *GophersatAdapter) ExplainUNSATGeneric() []string {
 	pb := &explain.Problem{
 		Clauses:   g.clauses,
 		NbVars:    len(g.vars),
@@ -641,16 +831,14 @@ func (g *GophersatAdapter) ExplainUNSAT() []string {
 		return clauseKey(fmt.Sprintf("%v", s))
 	}
 
-	// Build index: clauseKey → original clause index
 	idx := make(map[clauseKey]int, len(g.clauses))
 	for i, c := range g.clauses {
 		idx[makeCK(c)] = i
 	}
 
 	var lines []string
-	lines = append(lines, fmt.Sprintf("UNSAT core: %d clauses (of %d total)", subset.NbClauses, len(g.clauses)))
+	lines = append(lines, fmt.Sprintf("UNSAT core (generic): %d clauses (of %d total)", subset.NbClauses, len(g.clauses)))
 
-	// Group by source type for summary
 	counts := make(map[ClauseSource]int)
 	for _, c := range subset.Clauses {
 		if origIdx, ok := idx[makeCK(c)]; ok {
@@ -661,15 +849,5 @@ func (g *GophersatAdapter) ExplainUNSAT() []string {
 		lines = append(lines, fmt.Sprintf("  %s: %d clauses", src, n))
 	}
 
-	lines = append(lines, "")
-	for _, c := range subset.Clauses {
-		ck := makeCK(c)
-		if origIdx, ok := idx[ck]; ok {
-			meta := g.clausesMeta[origIdx]
-			lines = append(lines, fmt.Sprintf("  [%s] %s  — %s", meta.Source, g.formatClause(c), meta.Reason))
-		} else {
-			lines = append(lines, fmt.Sprintf("  [?] %s", g.formatClause(c)))
-		}
-	}
 	return lines
 }

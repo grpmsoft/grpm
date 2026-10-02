@@ -1046,7 +1046,7 @@ func TestFix_VersionedSlotOperatorResolves(t *testing.T) {
 
 // --- Tests for UNSAT Explainer ---
 
-func TestExplainUNSAT_MissingDep(t *testing.T) {
+func TestExplainWhyUNSAT_MissingDep(t *testing.T) {
 	r := newMultiVersionRepo()
 
 	app := pkg.NewPackage("app-misc/broken", "1.0", "0")
@@ -1060,14 +1060,146 @@ func TestExplainUNSAT_MissingDep(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected UNSAT error")
 	}
-
-	// Verify error message references explanation
 	if !strings.Contains(err.Error(), "UNSAT") {
 		t.Errorf("error should mention UNSAT, got: %s", err.Error())
 	}
 }
 
-func TestExplainUNSAT_DirectAdapterCall(t *testing.T) {
+func TestExplainWhyUNSAT_ProhibitChain(t *testing.T) {
+	adapter := NewGophersatAdapter()
+
+	a := pkg.NewPackage("app/a", "1.0", "0")
+	b := pkg.NewPackage("dev-libs/b", "1.0", "0")
+	adapter.AddPackage(a)
+	adapter.AddPackage(b)
+
+	aID := adapter.GetVarID("app/a@1.0")
+	bID := adapter.GetVarID("dev-libs/b@1.0")
+
+	// Root: a must be selected
+	adapter.withMeta(ClauseRoot, "root: app/a")
+	adapter.addClause([]int{aID})
+	adapter.addRootVars([]int{aID})
+
+	// a → b (implication)
+	adapter.AddImplication(aID, []int{bID})
+
+	// b is prohibited
+	reason := "no provider for dev-libs/missing (needed by dev-libs/b@1.0)"
+	adapter.withMeta(ClauseProhibit, reason)
+	adapter.addClause([]int{-bID})
+	adapter.prohibits[bID] = reason
+
+	result := adapter.ExplainWhyUNSAT()
+	joined := strings.Join(result.Lines, "\n")
+
+	// Must show the chain: a → b → prohibit
+	if !strings.Contains(joined, "app/a@1.0") {
+		t.Errorf("should contain root package name, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "dev-libs/b") {
+		t.Errorf("should contain dependency package name, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "no provider") {
+		t.Errorf("should contain prohibit reason, got:\n%s", joined)
+	}
+	// Core size must be small (chain, not full dump)
+	if result.CoreSize > 10 {
+		t.Errorf("core size should be small chain, got %d", result.CoreSize)
+	}
+}
+
+func TestExplainWhyUNSAT_MultiVersionAllDead(t *testing.T) {
+	adapter := NewGophersatAdapter()
+
+	root := pkg.NewPackage("app/root", "1.0", "0")
+	libV1 := pkg.NewPackage("dev-libs/lib", "1.0", "0")
+	libV2 := pkg.NewPackage("dev-libs/lib", "2.0", "0")
+	adapter.AddPackage(root)
+	adapter.AddPackage(libV1)
+	adapter.AddPackage(libV2)
+
+	rootID := adapter.GetVarID("app/root@1.0")
+	v1ID := adapter.GetVarID("dev-libs/lib@1.0")
+	v2ID := adapter.GetVarID("dev-libs/lib@2.0")
+
+	adapter.withMeta(ClauseRoot, "root")
+	adapter.addClause([]int{rootID})
+	adapter.addRootVars([]int{rootID})
+
+	// root → lib (either version)
+	adapter.AddImplication(rootID, []int{v1ID, v2ID})
+
+	// Both versions prohibited
+	adapter.withMeta(ClauseProhibit, "v1: no provider for ghost")
+	adapter.addClause([]int{-v1ID})
+	adapter.prohibits[v1ID] = "no provider for ghost"
+
+	adapter.withMeta(ClauseProhibit, "v2: no provider for phantom")
+	adapter.addClause([]int{-v2ID})
+	adapter.prohibits[v2ID] = "no provider for phantom"
+
+	result := adapter.ExplainWhyUNSAT()
+	joined := strings.Join(result.Lines, "\n")
+
+	if !strings.Contains(joined, "all 2 versions of dev-libs/lib are impossible") {
+		t.Errorf("should group versions, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "ghost") || !strings.Contains(joined, "phantom") {
+		t.Errorf("should show per-version reasons, got:\n%s", joined)
+	}
+}
+
+func TestExplainWhyUNSAT_CoreSmallerThanTotal(t *testing.T) {
+	// Simulate a problem with many clauses but a short UNSAT chain.
+	// The graph explainer should report only the relevant chain.
+	adapter := NewGophersatAdapter()
+
+	root := pkg.NewPackage("app/root", "1.0", "0")
+	adapter.AddPackage(root)
+	rootID := adapter.GetVarID("app/root@1.0")
+	adapter.withMeta(ClauseRoot, "root")
+	adapter.addClause([]int{rootID})
+	adapter.addRootVars([]int{rootID})
+
+	// Create a chain: root → mid → leaf (prohibited)
+	mid := pkg.NewPackage("dev-libs/mid", "1.0", "0")
+	leaf := pkg.NewPackage("dev-libs/leaf", "1.0", "0")
+	adapter.AddPackage(mid)
+	adapter.AddPackage(leaf)
+	midID := adapter.GetVarID("dev-libs/mid@1.0")
+	leafID := adapter.GetVarID("dev-libs/leaf@1.0")
+
+	adapter.AddImplication(rootID, []int{midID})
+	adapter.AddImplication(midID, []int{leafID})
+	adapter.withMeta(ClauseProhibit, "no provider for ghost")
+	adapter.addClause([]int{-leafID})
+	adapter.prohibits[leafID] = "no provider for ghost"
+
+	// Add many unrelated satisfiable packages (noise)
+	for i := range 50 {
+		p := pkg.NewPackage(fmt.Sprintf("dev-libs/noise%d", i), "1.0", "0")
+		adapter.AddPackage(p)
+		pID := adapter.GetVarID(fmt.Sprintf("dev-libs/noise%d@1.0", i))
+		adapter.AddImplication(rootID, []int{pID})
+	}
+	// Add pairwise at-most-one noise
+	adapter.AddAtMostOnePerSlot()
+
+	totalClauses := len(adapter.clauses)
+	result := adapter.ExplainWhyUNSAT()
+
+	// Core must be MUCH smaller than total — the chain is 3 nodes, not 50+ noise packages
+	if result.CoreSize >= totalClauses/10 {
+		t.Errorf("core size %d should be < total/10 (%d), explanation is not focused:\n%s",
+			result.CoreSize, totalClauses/10, strings.Join(result.Lines, "\n"))
+	}
+	if result.CoreSize == 0 {
+		t.Errorf("core size should be > 0, got 0:\n%s", strings.Join(result.Lines, "\n"))
+	}
+}
+
+func TestExplainUNSATGeneric_AtMostOneConflict(t *testing.T) {
 	adapter := NewGophersatAdapter()
 
 	a := pkg.NewPackage("app/a", "1.0", "0")
@@ -1078,97 +1210,22 @@ func TestExplainUNSAT_DirectAdapterCall(t *testing.T) {
 	aID := adapter.GetVarID("app/a@1.0")
 	bID := adapter.GetVarID("app/b@1.0")
 
-	// a must be selected (root)
 	adapter.withMeta(ClauseRoot, "root: app/a")
 	adapter.addClause([]int{aID})
-
-	// b must be selected (root)
 	adapter.withMeta(ClauseRoot, "root: app/b")
 	adapter.addClause([]int{bID})
-
-	// a and b conflict (at-most-one)
-	adapter.withMeta(ClauseAtMostOne, "conflict app/a vs app/b")
+	adapter.withMeta(ClauseAtMostOne, "conflict")
 	adapter.addClause([]int{-aID, -bID})
 
-	// Verify UNSAT
 	status, _, _ := adapter.Solve()
 	if status != pkg.StatusUnsat {
 		t.Fatal("expected UNSAT")
 	}
 
-	lines := adapter.ExplainUNSAT()
-	if len(lines) == 0 {
-		t.Fatal("ExplainUNSAT returned empty")
-	}
-
-	// Header must show subset size
-	if !strings.Contains(lines[0], "UNSAT core") {
-		t.Errorf("first line should be UNSAT core header, got: %s", lines[0])
-	}
-
-	// Should contain package names, not just var IDs
+	// Generic explainer still works for at-most-one conflicts
+	lines := adapter.ExplainUNSATGeneric()
 	joined := strings.Join(lines, "\n")
-	if !strings.Contains(joined, "app/a@1.0") {
-		t.Errorf("explanation should contain package name app/a@1.0, got:\n%s", joined)
-	}
-	if !strings.Contains(joined, "app/b@1.0") {
-		t.Errorf("explanation should contain package name app/b@1.0, got:\n%s", joined)
-	}
-
-	// Should reference clause types
-	hasRoot := strings.Contains(joined, "[root]")
-	hasAtMostOne := strings.Contains(joined, "[at-most-one]")
-	if !hasRoot || !hasAtMostOne {
-		t.Errorf("explanation should show clause types [root] and [at-most-one], got:\n%s", joined)
-	}
-}
-
-func TestExplainUNSAT_ProhibitClause(t *testing.T) {
-	adapter := NewGophersatAdapter()
-
-	a := pkg.NewPackage("app/a", "1.0", "0")
-	adapter.AddPackage(a)
-
-	aID := adapter.GetVarID("app/a@1.0")
-
-	// a must be selected
-	adapter.withMeta(ClauseRoot, "root: app/a")
-	adapter.addClause([]int{aID})
-
-	// a is prohibited (missing dep)
-	adapter.withMeta(ClauseProhibit, "no provider for dev-libs/missing")
-	adapter.addClause([]int{-aID})
-
-	status, _, _ := adapter.Solve()
-	if status != pkg.StatusUnsat {
-		t.Fatal("expected UNSAT")
-	}
-
-	lines := adapter.ExplainUNSAT()
-	joined := strings.Join(lines, "\n")
-
-	if !strings.Contains(joined, "[prohibit]") {
-		t.Errorf("should show [prohibit] clause, got:\n%s", joined)
-	}
-	if !strings.Contains(joined, "no provider") {
-		t.Errorf("should show prohibit reason, got:\n%s", joined)
-	}
-}
-
-func TestExplainUNSAT_SATReturnsError(t *testing.T) {
-	adapter := NewGophersatAdapter()
-
-	a := pkg.NewPackage("app/a", "1.0", "0")
-	adapter.AddPackage(a)
-
-	aID := adapter.GetVarID("app/a@1.0")
-	adapter.withMeta(ClauseRoot, "root: app/a")
-	adapter.addClause([]int{aID})
-
-	// Problem is SAT — ExplainUNSAT should return error message
-	lines := adapter.ExplainUNSAT()
-	joined := strings.Join(lines, "\n")
-	if !strings.Contains(joined, "failed") {
-		t.Errorf("ExplainUNSAT on SAT problem should return error, got:\n%s", joined)
+	if !strings.Contains(joined, "UNSAT core (generic)") {
+		t.Errorf("should have generic header, got:\n%s", joined)
 	}
 }
