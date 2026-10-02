@@ -137,11 +137,6 @@ func groupDependenciesByOrGroupID(deps []pkg.Constraint) (requiredDeps []pkg.Con
 	return
 }
 
-// isBuildTimeDep returns true if the dependency is a build-time dependency.
-// Build-time deps: DEPEND (DepTypeBuild), BDEPEND (DepTypeBuildHost).
-func isBuildTimeDep(depType pkg.DepType) bool {
-	return depType == pkg.DepTypeBuild || depType == pkg.DepTypeBuildHost
-}
 
 //nolint:gocyclo // Complexity inherent to Portage-compatible dependency resolution algorithm
 // collectDependencies is best-effort: it explores the search space for SAT.
@@ -158,12 +153,6 @@ func (r *PortageResolver) collectDependencies(p *pkg.Package, allPackages map[st
 		return
 	}
 
-	// Note: installed-package short-circuit removed. With multi-version SAT,
-	// ALL deps must be explored so implication clauses have providers.
-	// Without exploration, addPackageConstraints emits prohibit clauses
-	// for candidates whose deps are missing from the adapter.
-	pkgInstalled := r.isInstalled(p.Name)
-
 	// Store a copy of the package
 	copyPkg := *p
 	allPackages[versionKey] = &copyPkg
@@ -174,17 +163,13 @@ func (r *PortageResolver) collectDependencies(p *pkg.Package, allPackages map[st
 	// Group dependencies by OrGroupID
 	requiredDeps, orGroups := groupDependenciesByOrGroupID(p.Deps)
 
-	// Process REQUIRED dependencies only
+	// Process REQUIRED dependencies only.
+	// Note: BDEPEND skip for installed packages removed for multi-version SAT.
+	// SAT needs ALL deps explored to build correct implications. Without BDEPEND
+	// providers in the adapter, implication clauses emit prohibit on ALL candidates.
+	// Portage's BDEPEND optimization (skip for installed) belongs in the result
+	// filtering phase, not in SAT exploration.
 	for _, dep := range requiredDeps {
-		// Filter build-time dependencies for installed packages
-		// Portage ignores BDEPEND/DEPEND for already-built packages unless --with-bdeps=y
-		if pkgInstalled && isBuildTimeDep(dep.DepType) && !r.options.WithBdeps {
-			logging.Debug("Skipping build-time dep %s for installed package %s (use --with-bdeps to include)",
-				dep.Name, p.Name)
-			continue
-		}
-
-		// Note: installed-dep short-circuit removed for multi-version SAT.
 		// SAT must see all providers to build correct implication clauses.
 
 		// Load ALL candidate versions and recursively explore each one's deps.
@@ -204,14 +189,8 @@ func (r *PortageResolver) collectDependencies(p *pkg.Package, allPackages map[st
 	for groupID, alternatives := range orGroups {
 		logging.Debug("OR-group %d for %s: %d alternatives", groupID, p.Name, len(alternatives))
 		for _, alt := range alternatives {
-			// Skip build-time deps for installed packages
-			if pkgInstalled && isBuildTimeDep(alt.DepType) && !r.options.WithBdeps {
-				continue
-			}
-			// Skip installed alternatives unless doing deep resolution
-			if r.isInstalled(alt.Name) && !r.options.Deep {
-				continue
-			}
+			// Note: BDEPEND and installed-alternative skips removed for multi-version SAT.
+			// SAT must see all alternatives to build correct OR-group implications.
 
 			// Load ALL candidate versions and explore deps (same as required deps).
 			// With implication clauses, SAT handles "only if chosen" — we must
@@ -301,7 +280,6 @@ func (r *PortageResolver) addPackageConstraints(adapter *GophersatAdapter, p *pk
 	}
 
 	// Add OR-group constraints as implications.
-	// Prefer installed alternatives by putting them first in the clause.
 	for groupID, alternatives := range orGroups {
 		logging.Debug("Adding OR-group %d implication from %s with %d alternatives",
 			groupID, pkgKey, len(alternatives))
