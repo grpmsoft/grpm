@@ -140,7 +140,7 @@ func isBuildTimeDep(depType pkg.DepType) bool {
 }
 
 //nolint:gocyclo // Complexity inherent to Portage-compatible dependency resolution algorithm
-func (r *PortageResolver) collectDependencies(p *pkg.Package, allPackages map[string]*pkg.Package) error {
+func (r *PortageResolver) collectDependencies(p *pkg.Package, allPackages map[string]*pkg.Package, allCandidates map[string][]*pkg.Package) error {
 	// Key by name:slot to allow multi-slot coexistence (e.g., python:3.12 + python:3.13)
 	slotKey := packageSlotKey(p)
 	if _, exists := allPackages[slotKey]; exists {
@@ -160,6 +160,7 @@ func (r *PortageResolver) collectDependencies(p *pkg.Package, allPackages map[st
 		// Still add to allPackages for SAT solving, but skip dependency collection.
 		copyPkg := *p
 		allPackages[slotKey] = &copyPkg
+		r.addCandidateVersions(p.Name, allCandidates)
 		logging.Debug("Package %s is installed, skipping dependency traversal (use --deep to include)", p.Name)
 		return nil
 	}
@@ -167,6 +168,9 @@ func (r *PortageResolver) collectDependencies(p *pkg.Package, allPackages map[st
 	// Store a copy of the package
 	copyPkg := *p
 	allPackages[slotKey] = &copyPkg
+
+	// Load all candidate versions for this package into allCandidates
+	r.addCandidateVersions(p.Name, allCandidates)
 
 	// Group dependencies by OrGroupID
 	requiredDeps, orGroups := groupDependenciesByOrGroupID(p.Deps)
@@ -187,7 +191,11 @@ func (r *PortageResolver) collectDependencies(p *pkg.Package, allPackages map[st
 			continue
 		}
 
-		// Load best version matching the dependency constraint
+		// Load all candidate versions for this dependency
+		r.addCandidateVersions(dep.Name, allCandidates)
+
+		// Load best version for recursive dep traversal (we still need
+		// to collect transitive deps from the best candidate)
 		depPkg, err := r.loadDependencyPackage(dep)
 		if err != nil {
 			if dep.Required {
@@ -198,7 +206,7 @@ func (r *PortageResolver) collectDependencies(p *pkg.Package, allPackages map[st
 		}
 
 		// Recursively collect dependencies
-		if err := r.collectDependencies(depPkg, allPackages); err != nil {
+		if err := r.collectDependencies(depPkg, allPackages, allCandidates); err != nil {
 			logging.Debug("Warning: %v", err)
 		}
 	}
@@ -217,6 +225,10 @@ func (r *PortageResolver) collectDependencies(p *pkg.Package, allPackages map[st
 			if r.isInstalled(alt.Name) && !r.options.Deep {
 				continue
 			}
+
+			// Load all candidate versions for this alternative
+			r.addCandidateVersions(alt.Name, allCandidates)
+
 			altPkg, err := r.loadUnmaskedPackage(alt.Name)
 			if err != nil {
 				logging.Debug("Warning: OR-alternative %s not found or masked: %v", alt.Name, err)
@@ -236,51 +248,107 @@ func (r *PortageResolver) collectDependencies(p *pkg.Package, allPackages map[st
 	return nil
 }
 
-// addPackageConstraints adds all constraints for a single package to the SAT solver
-func (r *PortageResolver) addPackageConstraints(adapter *GophersatAdapter, p *pkg.Package, rootPackages []string) {
-	// Add constraint that root packages must be installed
-	if contains(rootPackages, p.Name) {
-		versionStr := "any"
-		if p.Version != "" {
-			versionStr = p.Version
-		}
-		logging.Debug("Adding constraint for required package: %s = %s", p.Name, versionStr)
+// addCandidateVersions loads all versions of a package from the repository
+// and stores them in allCandidates. Does nothing if the package has already
+// been loaded. Masked/unkeyworded versions are filtered out.
+func (r *PortageResolver) addCandidateVersions(name string, allCandidates map[string][]*pkg.Package) {
+	if _, exists := allCandidates[name]; exists {
+		return // Already loaded
+	}
 
-		if err := adapter.AddConstraint(pkg.Constraint{
-			Type:    pkg.ConstraintTypeVersion,
-			Name:    p.Name,
-			Version: pkg.NewVersionConstraint(pkg.OpEqual, p.Version),
-		}); err != nil {
-			logging.Debug("Warning: failed to add package constraint: %v", err)
-		}
+	versions, err := r.repo.GetAllVersions(name)
+	if err != nil {
+		logging.Debug("Warning: failed to get versions for %s: %v", name, err)
+		return
+	}
+
+	filtered := r.filterMaskedPackages(versions)
+	if len(filtered) == 0 {
+		logging.Debug("Warning: all versions of %s are masked/unkeyworded", name)
+		return
+	}
+
+	// Sort by version descending (newest first) for consistent SAT variable ordering
+	sort.Slice(filtered, func(i, j int) bool {
+		return pkg.CompareVersions(filtered[i].Version, filtered[j].Version) > 0
+	})
+
+	allCandidates[name] = filtered
+	logging.Debug("Loaded %d candidate versions for %s", len(filtered), name)
+}
+
+// addPackageConstraints adds all constraints for a single package version to the SAT solver.
+// Uses implication clauses: if this version is selected, its deps must be satisfied.
+// Root packages get an at-least-one clause (unit clause for single version).
+func (r *PortageResolver) addPackageConstraints(adapter *GophersatAdapter, p *pkg.Package, rootPackages []string) {
+	pkgKey := p.Name + "@" + p.Version
+	pkgVarID := adapter.GetVarID(pkgKey)
+
+	// Root packages: at-least-one of their versions must be selected.
+	// This is handled separately in addRootConstraints, not here.
+	// But if this specific version IS a root package and the only version,
+	// we still add it here for backward compat with single-version repos.
+	if contains(rootPackages, p.Name) && pkgVarID == 0 {
+		// Package not registered in SAT — fallback to old behavior
+		logging.Debug("Warning: root package %s not registered in SAT adapter", p.Name)
+		return
+	}
+
+	// If this package has no SAT variable (shouldn't happen), skip
+	if pkgVarID == 0 {
+		return
 	}
 
 	// Group dependencies by OrGroupID
 	requiredDeps, orGroups := groupDependenciesByOrGroupID(p.Deps)
 
-	// Add REQUIRED dependencies (AND logic)
+	// Add REQUIRED dependencies as implications: (-P@V | B1 | B2 | ...)
 	for _, dep := range requiredDeps {
 		versionStr := "any"
 		if dep.Version != nil {
 			versionStr = dep.Version.String()
 		}
-		logging.Debug("Adding required dependency: %s %s", dep.Name, versionStr)
+		logging.Debug("Adding implication: %s => %s %s", pkgKey, dep.Name, versionStr)
 
-		if err := adapter.AddConstraint(dep); err != nil {
-			logging.Debug("Warning: failed to add constraint: %v", err)
+		switch dep.Type {
+		case pkg.ConstraintTypeSlot:
+			if err := adapter.AddImplicationSlotConstraint(pkgVarID, dep); err != nil {
+				logging.Debug("Warning: failed to add slot implication: %v", err)
+			}
+		default:
+			if err := adapter.AddImplicationConstraint(pkgVarID, dep); err != nil {
+				logging.Debug("Warning: failed to add implication: %v", err)
+			}
 		}
 	}
 
-	// Add OR-group constraints (OR logic)
+	// Add OR-group constraints as implications.
 	// Prefer installed alternatives by putting them first in the clause.
-	// SAT solvers typically assign positive values to earlier variables,
-	// so this creates a soft preference for already-installed packages.
 	for groupID, alternatives := range orGroups {
-		logging.Debug("Adding OR-group %d with %d alternatives", groupID, len(alternatives))
+		logging.Debug("Adding OR-group %d implication from %s with %d alternatives",
+			groupID, pkgKey, len(alternatives))
 		sorted := r.sortAlternativesByInstalled(alternatives)
-		if err := adapter.AddOrGroupConstraint(sorted); err != nil {
-			logging.Debug("Warning: failed to add OR-group constraint: %v", err)
+		if err := adapter.AddImplicationOrGroup(pkgVarID, sorted); err != nil {
+			logging.Debug("Warning: failed to add OR-group implication: %v", err)
 		}
+	}
+}
+
+// addRootConstraints adds constraints for root packages.
+// Root packages (user-requested atoms) get a unit clause for the specific
+// version selected by loadPackageFromAtom, which ensures deterministic
+// selection of the newest/best matching version.
+func (r *PortageResolver) addRootConstraints(adapter *GophersatAdapter, rootPackages map[string]*pkg.Package) {
+	for _, p := range rootPackages {
+		key := p.Name + "@" + p.Version
+		varID := adapter.GetVarID(key)
+		if varID == 0 {
+			logging.Debug("Warning: root package %s not registered in SAT", key)
+			continue
+		}
+		// Unit clause: this specific version must be selected
+		adapter.addClause([]int{varID})
+		logging.Debug("Added root unit clause for %s (varID=%d)", key, varID)
 	}
 }
 
@@ -369,9 +437,12 @@ func (r *PortageResolver) loadPackageFromAtom(atomStr string) (*pkg.Package, err
 func (r *PortageResolver) Resolve(packages []string) (map[string]*pkg.Package, error) {
 	adapter := NewGophersatAdapter()
 	allPackages := make(map[string]*pkg.Package)
+	allCandidates := make(map[string][]*pkg.Package) // name -> all versions
 
-	// Track root package names (not atom strings) for constraint generation
+	// Track root packages: name -> the specific version selected by loadPackageFromAtom.
+	// This determines the unit clause for each root package.
 	rootPackageNames := make([]string, 0, len(packages))
+	rootPackagesMap := make(map[string]*pkg.Package)
 
 	// Load and collect all dependencies
 	for _, pkgName := range packages {
@@ -382,26 +453,56 @@ func (r *PortageResolver) Resolve(packages []string) (map[string]*pkg.Package, e
 
 		// Store the actual package name (category/package) for constraints
 		rootPackageNames = append(rootPackageNames, p.Name)
+		rootPackagesMap[p.Name] = p
 
 		logging.Debug("Resolving package: %s-%s with %d dependencies",
 			p.Name, p.Version, len(p.Deps))
 
-		if err := r.collectDependencies(p, allPackages); err != nil {
+		if err := r.collectDependencies(p, allPackages, allCandidates); err != nil {
 			return nil, fmt.Errorf("dependency collection failed for %s: %w", p.Name, err)
 		}
 	}
 
 	logging.Debug("Total packages in dependency graph: %d", len(allPackages))
+	logging.Debug("Total candidate packages: %d names", len(allCandidates))
 
-	// First, add ALL packages to the solver
+	// Register ALL candidate versions with the SAT adapter.
+	// This is the key change: instead of registering one version per package,
+	// we register all unmasked versions so the SAT solver can choose.
+	for _, candidates := range allCandidates {
+		for _, c := range candidates {
+			adapter.AddPackage(c)
+		}
+	}
+
+	// Also register any packages from allPackages that might not have candidates
+	// (e.g., packages from repos that don't support GetAllVersions well)
 	for _, p := range allPackages {
 		adapter.AddPackage(p)
 	}
 
-	// Then add constraints for each package using actual package names
-	for _, p := range allPackages {
-		r.addPackageConstraints(adapter, p, rootPackageNames)
+	// Add root requirements: unit clause for each root package's selected version
+	r.addRootConstraints(adapter, rootPackagesMap)
+
+	// Add implication constraints for each candidate version.
+	// For each version of each package, its deps become implications:
+	// "if this version is selected, then its deps must be satisfied"
+	for _, candidates := range allCandidates {
+		for _, c := range candidates {
+			r.addPackageConstraints(adapter, c, rootPackageNames)
+		}
 	}
+
+	// Also process packages that are in allPackages but not in allCandidates
+	// (single-version packages loaded directly)
+	for _, p := range allPackages {
+		if _, hasCandidates := allCandidates[p.Name]; !hasCandidates {
+			r.addPackageConstraints(adapter, p, rootPackageNames)
+		}
+	}
+
+	// Add at-most-one-per-slot pairwise exclusion clauses
+	adapter.AddAtMostOnePerSlot()
 
 	logging.Debug("Total clauses in SAT problem: %d", len(adapter.clauses))
 
