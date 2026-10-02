@@ -666,50 +666,74 @@ type ExplainUNSATResult struct {
 	CoreSize int      // number of clauses/nodes in the explanation
 }
 
-// unsatTracer holds state for the graph-based UNSAT explanation traversal.
-// Pass 1 (whyImpossible): computes cache[varID] = reason, no formatting.
-// Pass 2 (walkTopDown): formats root→leaf with dedup.
-type unsatTracer struct {
-	adapter *GophersatAdapter
-	cache   map[int]string // varID → reason ("ok" if satisfiable)
-	printed map[int]bool   // dedup: varID already formatted
-	chain   []string       // output lines (built in pass 2)
+// edgeRef points from a provider back to an implication edge that contains it.
+type edgeRef struct {
+	dependent int
+	edgeIdx   int
 }
 
-// whyImpossible computes and caches reason strings. No formatting.
-func (tr *unsatTracer) whyImpossible(varID int) string {
-	if r, ok := tr.cache[varID]; ok {
-		return r
-	}
-	tr.cache[varID] = "ok" // cycle guard
+// unsatTracer propagates deadness bottom-up from prohibits via worklist,
+// then formats the justification chain top-down.
+type unsatTracer struct {
+	adapter       *GophersatAdapter
+	dead          map[int]bool            // varID → is dead
+	justification map[int]*implicationEdge // varID → edge that proved it dead (nil = prohibit)
+	reason        map[int]string          // varID → one-line summary
+	printed       map[int]bool            // dedup for formatting
+	chain         []string                // output lines
+}
 
-	if reason, prohibited := tr.adapter.prohibits[varID]; prohibited {
-		tr.cache[varID] = reason
-		return reason
-	}
+// propagate marks nodes dead bottom-up: prohibits first, then dependents
+// whose implication has all providers dead. Records justification edge.
+func (tr *unsatTracer) propagate() {
+	g := tr.adapter
 
-	for _, edge := range tr.adapter.implications[varID] {
-		allDead := true
-		for _, prov := range edge.providers {
-			if tr.whyImpossible(prov) == "ok" {
-				allDead = false
-				break
+	// Build reverse index: provider → edges that reference it
+	reverse := make(map[int][]edgeRef)
+	for dep, edges := range g.implications {
+		for i, edge := range edges {
+			for _, prov := range edge.providers {
+				reverse[prov] = append(reverse[prov], edgeRef{dependent: dep, edgeIdx: i})
 			}
 		}
-		if allDead && len(edge.providers) > 0 {
-			result := tr.summarizeEdge(edge)
-			tr.cache[varID] = result
-			return result
-		}
 	}
 
-	tr.cache[varID] = "ok"
-	return "ok"
+	// Seed worklist with prohibits
+	worklist := make([]int, 0, len(g.prohibits))
+	for varID, r := range g.prohibits {
+		tr.dead[varID] = true
+		tr.reason[varID] = r
+		worklist = append(worklist, varID)
+	}
+
+	for len(worklist) > 0 {
+		v := worklist[0]
+		worklist = worklist[1:]
+
+		for _, ref := range reverse[v] {
+			if tr.dead[ref.dependent] {
+				continue
+			}
+			edge := &g.implications[ref.dependent][ref.edgeIdx]
+			allDead := true
+			for _, prov := range edge.providers {
+				if !tr.dead[prov] {
+					allDead = false
+					break
+				}
+			}
+			if allDead {
+				tr.dead[ref.dependent] = true
+				tr.justification[ref.dependent] = edge
+				tr.reason[ref.dependent] = tr.summarizeEdge(edge)
+				worklist = append(worklist, ref.dependent)
+			}
+		}
+	}
 }
 
-// summarizeEdge builds a one-line summary for a dead implication edge.
-// Does NOT inline nested reasons — the tree walk shows details.
-func (tr *unsatTracer) summarizeEdge(edge implicationEdge) string {
+// summarizeEdge builds a one-line summary for a dead edge.
+func (tr *unsatTracer) summarizeEdge(edge *implicationEdge) string {
 	g := tr.adapter
 	pkgName := g.packageNameOf(edge.providers[0])
 
@@ -729,28 +753,10 @@ func (tr *unsatTracer) summarizeEdge(edge implicationEdge) string {
 	return fmt.Sprintf("needs one of %d providers but all impossible", len(edge.providers))
 }
 
-// findDeadEdge returns the first implication of varID where all providers are dead, or nil.
-func (tr *unsatTracer) findDeadEdge(varID int) *implicationEdge {
-	for i := range tr.adapter.implications[varID] {
-		edge := &tr.adapter.implications[varID][i]
-		allDead := true
-		for _, prov := range edge.providers {
-			if tr.cache[prov] == "ok" {
-				allDead = false
-				break
-			}
-		}
-		if allDead && len(edge.providers) > 0 {
-			return edge
-		}
-	}
-	return nil
-}
-
-// walkTopDown formats the chain root→leaf. Each varID is printed once;
-// subsequent references emit "(see above)".
+// walkTopDown formats the justification chain from root to prohibit leaves.
+// Each var printed once in full; subsequent refs emit "(see above)".
 func (tr *unsatTracer) walkTopDown(varID int, depth int) {
-	if tr.cache[varID] == "ok" {
+	if !tr.dead[varID] {
 		return
 	}
 	indent := strings.Repeat("  ", depth)
@@ -762,39 +768,27 @@ func (tr *unsatTracer) walkTopDown(varID int, depth int) {
 	}
 	tr.printed[varID] = true
 
-	// Leaf: direct prohibit
-	if _, prohibited := tr.adapter.prohibits[varID]; prohibited {
-		tr.chain = append(tr.chain, fmt.Sprintf("%s%s: %s", indent, name, tr.cache[varID]))
+	tr.chain = append(tr.chain, fmt.Sprintf("%s%s: %s", indent, name, tr.reason[varID]))
+
+	edge := tr.justification[varID]
+	if edge == nil || depth >= 8 {
 		return
 	}
 
-	// Interior node: find dead edge and recurse into providers
-	edge := tr.findDeadEdge(varID)
-	if edge == nil {
-		tr.chain = append(tr.chain, fmt.Sprintf("%s%s: %s", indent, name, tr.cache[varID]))
-		return
-	}
-
-	tr.chain = append(tr.chain, fmt.Sprintf("%s%s: %s", indent, name, tr.cache[varID]))
-
-	if depth >= 8 {
-		return
-	}
-
-	// Group providers by package name
+	// Group providers by package name, walk each
 	type provGroup struct {
 		pkgName string
 		varIDs  []int
 	}
 	var groups []provGroup
-	groupIdx := make(map[string]int)
+	gIdx := make(map[string]int)
 	for _, prov := range edge.providers {
-		pkg := tr.adapter.packageNameOf(prov)
-		if idx, ok := groupIdx[pkg]; ok {
+		p := tr.adapter.packageNameOf(prov)
+		if idx, ok := gIdx[p]; ok {
 			groups[idx].varIDs = append(groups[idx].varIDs, prov)
 		} else {
-			groupIdx[pkg] = len(groups)
-			groups = append(groups, provGroup{pkgName: pkg, varIDs: []int{prov}})
+			gIdx[p] = len(groups)
+			groups = append(groups, provGroup{pkgName: p, varIDs: []int{prov}})
 		}
 	}
 
@@ -804,7 +798,6 @@ func (tr *unsatTracer) walkTopDown(varID int, depth int) {
 				tr.walkTopDown(prov, depth+1)
 			}
 		} else {
-			// Many versions — show first 3, summarize rest
 			tr.chain = append(tr.chain, fmt.Sprintf("%s  %s: %d versions, all impossible (first 3):",
 				indent, grp.pkgName, len(grp.varIDs)))
 			for _, prov := range grp.varIDs[:3] {
@@ -814,29 +807,31 @@ func (tr *unsatTracer) walkTopDown(varID int, depth int) {
 	}
 }
 
-// ExplainWhyUNSAT traverses the implication graph from root candidates to find
-// why the problem is unsatisfiable. Returns the dependency chain(s) from root
-// to the deepest prohibit clause. O(edges) — no SAT solver call.
+// ExplainWhyUNSAT propagates deadness bottom-up from prohibit leaves via worklist,
+// then formats the justification chain top-down from roots. O(edges), cycle-safe,
+// deterministic. Cycles do NOT make nodes dead (correct: SAT can satisfy cyclic deps).
 func (g *GophersatAdapter) ExplainWhyUNSAT() ExplainUNSATResult {
 	if len(g.rootVars) == 0 {
 		return ExplainUNSATResult{Lines: []string{"no root candidates registered"}}
 	}
 
 	tr := &unsatTracer{
-		adapter: g,
-		cache:   make(map[int]string),
-		printed: make(map[int]bool),
+		adapter:       g,
+		dead:          make(map[int]bool),
+		justification: make(map[int]*implicationEdge),
+		reason:        make(map[int]string),
+		printed:       make(map[int]bool),
 	}
 
-	// Pass 1: compute reasons (no formatting)
+	tr.propagate()
+
 	var rootResults []string
 	allRootsDead := true
 	for _, rootVar := range g.rootVars {
-		r := tr.whyImpossible(rootVar)
-		if r == "ok" {
+		if !tr.dead[rootVar] {
 			allRootsDead = false
 		} else {
-			rootResults = append(rootResults, fmt.Sprintf("  %s: %s", g.varName(rootVar), r))
+			rootResults = append(rootResults, fmt.Sprintf("  %s: %s", g.varName(rootVar), tr.reason[rootVar]))
 		}
 	}
 
@@ -853,7 +848,6 @@ func (g *GophersatAdapter) ExplainWhyUNSAT() ExplainUNSATResult {
 		lines = append(lines, rootResults...)
 	}
 
-	// Pass 2: format top-down from roots with dedup
 	for _, rootVar := range g.rootVars {
 		tr.walkTopDown(rootVar, 0)
 	}

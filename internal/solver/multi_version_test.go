@@ -1320,6 +1320,101 @@ func TestExplainWhyUNSAT_ConsistentNotation(t *testing.T) {
 	}
 }
 
+func TestExplainWhyUNSAT_CycleDoesNotFalsifyChain(t *testing.T) {
+	// a→b, b→a (cycle), a→x, x prohibited.
+	// a is dead via x, NOT via the cycle. Chain: a → x: no provider.
+	// The cycle must NOT appear in the output.
+	adapter := NewGophersatAdapter()
+
+	a := pkg.NewPackage("app/a", "1.0", "0")
+	b := pkg.NewPackage("app/b", "1.0", "0")
+	x := pkg.NewPackage("dev-libs/x", "1.0", "0")
+	adapter.AddPackage(a)
+	adapter.AddPackage(b)
+	adapter.AddPackage(x)
+
+	aID := adapter.GetVarID("app/a@1.0")
+	bID := adapter.GetVarID("app/b@1.0")
+	xID := adapter.GetVarID("dev-libs/x@1.0")
+
+	adapter.withMeta(ClauseRoot, "root a")
+	adapter.addClause([]int{aID})
+	adapter.addRootVars([]int{aID})
+
+	// a→b, b→a (mutual cycle)
+	adapter.AddImplication(aID, []int{bID})
+	adapter.AddImplication(bID, []int{aID})
+
+	// a→x, x prohibited
+	adapter.AddImplication(aID, []int{xID})
+	adapter.withMeta(ClauseProhibit, "no provider for ghost")
+	adapter.addClause([]int{-xID})
+	adapter.prohibits[xID] = "no provider for ghost"
+
+	result := adapter.ExplainWhyUNSAT()
+	joined := strings.Join(result.Lines, "\n")
+
+	// Must contain the real root cause
+	if !strings.Contains(joined, "no provider for ghost") {
+		t.Errorf("must contain prohibit reason 'no provider for ghost', got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "dev-libs/x@1.0") {
+		t.Errorf("must contain prohibited node dev-libs/x@1.0, got:\n%s", joined)
+	}
+
+	// The cycle edge (b→a) must NOT cause a false chain through b
+	// b should not be in the chain at all — it's not dead (cycle doesn't kill)
+	if strings.Contains(joined, "app/b@1.0") {
+		// b might appear if it's dead via x→a propagation, but must not show "(see above)" loop
+		if strings.Count(joined, "(see above)") > 0 {
+			// Verify "(see above)" doesn't reference a in a cycle-caused chain
+			lines := result.Lines
+			for _, line := range lines {
+				if strings.Contains(line, "app/a@1.0  (see above)") {
+					t.Errorf("cycle should not cause '(see above)' on root node a:\n%s", joined)
+				}
+			}
+		}
+	}
+}
+
+func TestExplainWhyUNSAT_ProhibitReasonPresent(t *testing.T) {
+	// Regression guard: the "no provider" string from the actual prohibit
+	// must always appear in the output. On the libxcrypt UNSAT this was
+	// "backports-tarfile" — the fix for cycles broke it.
+	adapter := NewGophersatAdapter()
+
+	root := pkg.NewPackage("app/root", "1.0", "0")
+	mid := pkg.NewPackage("dev-libs/mid", "1.0", "0")
+	leaf := pkg.NewPackage("dev-libs/leaf", "1.0", "0")
+	adapter.AddPackage(root)
+	adapter.AddPackage(mid)
+	adapter.AddPackage(leaf)
+
+	rootID := adapter.GetVarID("app/root@1.0")
+	midID := adapter.GetVarID("dev-libs/mid@1.0")
+	leafID := adapter.GetVarID("dev-libs/leaf@1.0")
+
+	adapter.withMeta(ClauseRoot, "root")
+	adapter.addClause([]int{rootID})
+	adapter.addRootVars([]int{rootID})
+
+	adapter.AddImplication(rootID, []int{midID})
+	adapter.AddImplication(midID, []int{leafID})
+
+	reason := "no provider for backports-tarfile (needed by dev-libs/leaf@1.0)"
+	adapter.withMeta(ClauseProhibit, reason)
+	adapter.addClause([]int{-leafID})
+	adapter.prohibits[leafID] = reason
+
+	result := adapter.ExplainWhyUNSAT()
+	joined := strings.Join(result.Lines, "\n")
+
+	if !strings.Contains(joined, "backports-tarfile") {
+		t.Errorf("must contain prohibit root cause 'backports-tarfile', got:\n%s", joined)
+	}
+}
+
 func TestExplainUNSATGeneric_AtMostOneConflict(t *testing.T) {
 	adapter := NewGophersatAdapter()
 
