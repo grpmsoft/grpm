@@ -39,6 +39,7 @@ v0.9.4 ← LATEST RELEASE (Bash Interpreter Hardening)
 v0.10.x ← CURRENT PHASE (Audit-Driven Quality & Bash Evolution)
     │
     │   Wave 1: Audit bug fixes (=* glob, phase defaults, dead code)
+    │   Wave 1.5: Resolver rewrite — multi-version SAT ✅ (in review)
     │   Wave 2: Build system expansion, eclass compatibility
     │   Wave 3: @world 90%+ build success, community validation
     ↓
@@ -69,16 +70,31 @@ Following the community code audit (2026-02-09), development is organized in thr
 | Audit bug fixes | P0 | Fix `=*` glob operator, phase defaults routing, dead code removal |
 | Signature file defense | P0 | 3-layer defense against incorrect .sig downloads |
 
+### Wave 1.5: Resolver Rewrite — Multi-Version SAT
+
+| Task | Priority | Status |
+|------|----------|--------|
+| Multi-version SAT encoding (implications, at-most-one) | P0 | **DONE** (PR #78) |
+| Blocker support (SAT conflict clauses) | P0 | Planned (v0.10.0-012) |
+| Consumer migration to SlotKey result | P0 | Planned (v0.10.0-013) |
+| MAX-SAT optimization + mode weights | P1 | Planned (v0.10.0-014) |
+| Real-tree validation fixtures | P1 | Planned (v0.10.0-015) |
+| USE flag resolution unification | P1 | Planned (v0.10.0-016) |
+
+**ADR:** [ADR-001](docs/dev/adr/ADR-001-resolver-multi-version-sat.md)
+
 ### Wave 2: Architecture Evolution
 
-| Task | Priority | Blocked By |
-|------|----------|------------|
-| mvdan.cc/sh upstream integration | P0 | — | **DONE** (6 PRs merged, workarounds removed) |
-| Reduce Go command map shadowing | P1 | — |
-| Python/distutils build system | P1 | — |
-| Top 20 eclass compatibility | P1 | — |
+| Task | Priority | Status |
+|------|----------|--------|
+| mvdan.cc/sh upstream integration | P0 | **DONE** (6 PRs merged, workarounds removed) |
+| Reduce Go command map shadowing | P1 | Planned |
+| Python/distutils build system | P1 | Planned |
+| Top 20 eclass compatibility | P1 | Planned |
 
-**Architectural decision resolved:** All 6 upstream PRs to `mvdan.cc/sh` were merged (2026-02-23), resolving all major interpreter gaps. The interpreter now provides full bash 5.2 compatibility. The interpreter backend is **configurable** — users who prefer real `/bin/bash` can enable it via settings.
+**Architectural decisions resolved:**
+- **Interpreter:** All 6 upstream PRs to `mvdan.cc/sh` merged (2026-02-23). Full bash 5.2 compatibility. Configurable backend — users can enable real `/bin/bash` via settings.
+- **Resolver:** Multi-version SAT with implication clauses, at-most-one per slot, prohibit clauses for unsatisfiable candidates (2026-10-02). See ADR-001.
 
 ### Wave 3: Validation & Community
 
@@ -93,8 +109,8 @@ Following the community code audit (2026-02-09), development is organized in thr
 | Bug | Location | Status |
 |-----|----------|--------|
 | `=*` glob operator overly permissive | `internal/pkg/atom.go:748` | Tracked |
-| Phase defaults routing | `internal/ebuild/phases_impl.go` | Tracked |
-| Hardcoded `--libdir=/usr/lib64` | `internal/ebuild/phases_impl.go` | Tracked |
+| Phase defaults routing | `internal/ebuild/phases_impl.go` | **Fixed** (PR #76) |
+| Hardcoded `--libdir=/usr/lib64` | `internal/ebuild/phases_impl.go` | **Fixed** (PR #76) |
 | Dead code in compat | `internal/compat/portage.go` | Tracked |
 
 See [PMS_COMPLIANCE.md](docs/PMS_COMPLIANCE.md) for the full compliance matrix.

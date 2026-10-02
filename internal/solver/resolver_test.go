@@ -77,9 +77,9 @@ func TestResolveVersionedAtom(t *testing.T) {
 				return
 			}
 
-			p, ok := result[tt.wantName]
-			if !ok {
-				t.Errorf("Resolve(%q) missing package %s in result", tt.atomStr, tt.wantName)
+			p := findPackageByName(result, tt.wantName)
+			if p == nil {
+				t.Errorf("Resolve(%q) missing package %s in result (keys: %v)", tt.atomStr, tt.wantName, mapKeys(result))
 				return
 			}
 
@@ -89,6 +89,24 @@ func TestResolveVersionedAtom(t *testing.T) {
 			}
 		})
 	}
+}
+
+// findPackageByName searches result map values for a package with matching Name.
+func findPackageByName(result map[string]*pkg.Package, name string) *pkg.Package {
+	for _, p := range result {
+		if p.Name == name {
+			return p
+		}
+	}
+	return nil
+}
+
+func mapKeys(m map[string]*pkg.Package) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }
 
 // TestResolveWithMockRepositoryVersionedAtom tests Resolve with versioned atoms
@@ -108,7 +126,7 @@ func TestResolveWithMockRepositoryVersionedAtom(t *testing.T) {
 		t.Errorf("Expected at least 1 package in result, got %d", len(result))
 	}
 
-	if p, ok := result["app-misc/hello"]; !ok {
+	if p := findPackageByName(result, "app-misc/hello"); p == nil {
 		t.Error("Expected app-misc/hello in result")
 	} else if p.Version != "2.10" {
 		t.Errorf("Expected version 2.10, got %s", p.Version)
@@ -136,7 +154,7 @@ func TestResolveVersionedAtomPathNotTreatedAsDirectory(t *testing.T) {
 		t.Fatalf("Resolve should not fail for valid versioned atom: %v", err)
 	}
 
-	if _, ok := result["app-misc/hello"]; !ok {
+	if p := findPackageByName(result, "app-misc/hello"); p == nil {
 		t.Error("Expected app-misc/hello in result")
 	}
 }

@@ -193,7 +193,10 @@ func (g *GophersatAdapter) addVersionConstraint(c pkg.Constraint) error {
 	}
 
 	if len(satisfiedVars) == 0 {
-		logging.Debug("Warning: no package satisfies %s %s", c.Name, c.Version.String())
+		if c.Required {
+			return fmt.Errorf("unsatisfiable: no package provides %s %s", c.Name, c.Version.String())
+		}
+		logging.Debug("Warning: no package satisfies %s %s (non-required, skipping)", c.Name, c.Version.String())
 		return nil
 	}
 
@@ -246,23 +249,23 @@ func (g *GophersatAdapter) AddExactlyOneConstraint(pkgName string, versions []st
 }
 
 func (g *GophersatAdapter) addSlotConstraint(c pkg.Constraint) error {
-	// Find all packages with the specified slot
+	// Find all packages matching name AND slot
 	var slotVars []int
 	for _, pkgList := range g.packages {
 		for _, p := range pkgList {
-			if p.Slot.Name == c.Slot {
+			if p.Name == c.Name && p.Slot.Name == c.Slot {
 				key := p.Name + "@" + p.Version
-				varID := g.vars[key]
+				varID := g.getVarID(key)
 				slotVars = append(slotVars, varID)
 			}
 		}
 	}
 
 	if len(slotVars) == 0 {
-		return fmt.Errorf("no package provides slot %s", c.Slot)
+		return fmt.Errorf("no package %s provides slot %s", c.Name, c.Slot)
 	}
 
-	// Add clause: at least one package in the slot must be installed
+	// Add clause: at least one package in this slot must be installed
 	g.addClause(slotVars)
 	return nil
 }
@@ -335,11 +338,13 @@ func (g *GophersatAdapter) Solve() (pkg.Status, map[string]string, error) {
 		model := s.Model()
 
 		// Iterate over all registered variables
+		// Key by name@version to support multi-slot (same name, different slots)
 		for key, varID := range g.vars {
 			if varID <= len(model) && model[varID-1] {
 				parts := strings.Split(key, "@")
 				if len(parts) == 2 {
-					solution[parts[0]] = parts[1]
+					// Use full key (name@version) to avoid multi-slot overwrites
+					solution[key] = parts[1]
 				}
 			}
 		}
@@ -353,6 +358,157 @@ func (g *GophersatAdapter) Solve() (pkg.Status, map[string]string, error) {
 
 	logging.Debug("INDETERMINATE: solver timeout")
 	return pkg.StatusIndet, nil, fmt.Errorf("solver timeout")
+}
+
+// AddImplication adds an implication clause: if dependent is selected,
+// then at least one of the providers must be selected.
+// Encodes as: (-dependent | provider1 | provider2 | ...)
+func (g *GophersatAdapter) AddImplication(dependent int, providers []int) {
+	if len(providers) == 0 {
+		return
+	}
+	clause := make([]int, 0, 1+len(providers))
+	clause = append(clause, -dependent)
+	clause = append(clause, providers...)
+	g.addClause(clause)
+	logging.Debug("Added implication: -%d => %v", dependent, providers)
+}
+
+// AddImplicationConstraint adds an implication clause for a version constraint.
+// If dependentVarID is selected, at least one package satisfying constraint c must be selected.
+// Returns error if the constraint is Required and no package satisfies it.
+func (g *GophersatAdapter) AddImplicationConstraint(dependentVarID int, c pkg.Constraint) error {
+	providers := g.findSatisfyingVars(c)
+	if len(providers) == 0 {
+		// No provider → this candidate is unsatisfiable, prohibit it
+		g.addClause([]int{-dependentVarID})
+		logging.Debug("Prohibiting %d: no package provides %s", dependentVarID, c.String())
+		return nil
+	}
+	g.AddImplication(dependentVarID, providers)
+	return nil
+}
+
+// AddImplicationSlotConstraint adds an implication for a slot constraint.
+// If dependentVarID is selected, at least one package in the given slot must be selected.
+func (g *GophersatAdapter) AddImplicationSlotConstraint(dependentVarID int, c pkg.Constraint) error {
+	var slotVars []int
+	for _, p := range g.packages[c.Name] {
+		if p.Slot.Name == c.Slot {
+			key := p.Name + "@" + p.Version
+			varID := g.getVarID(key)
+			slotVars = append(slotVars, varID)
+		}
+	}
+	if len(slotVars) == 0 {
+		g.addClause([]int{-dependentVarID})
+		logging.Debug("Prohibiting %d: no package %s in slot %s", dependentVarID, c.Name, c.Slot)
+		return nil
+	}
+	g.AddImplication(dependentVarID, slotVars)
+	return nil
+}
+
+// AddImplicationOrGroup adds an implication for an OR-group.
+// If dependentVarID is selected, at least one alternative must be selected.
+func (g *GophersatAdapter) AddImplicationOrGroup(dependentVarID int, alternatives []pkg.Constraint) error {
+	var allSatisfyingVars []int
+	for _, alt := range alternatives {
+		if alt.Version != nil {
+			for _, p := range g.packages[alt.Name] {
+				if alt.Version.Satisfies(p.Version) {
+					key := p.Name + "@" + p.Version
+					varID := g.getVarID(key)
+					allSatisfyingVars = append(allSatisfyingVars, varID)
+				}
+			}
+		} else {
+			for _, p := range g.packages[alt.Name] {
+				key := p.Name + "@" + p.Version
+				varID := g.getVarID(key)
+				allSatisfyingVars = append(allSatisfyingVars, varID)
+			}
+		}
+	}
+	if len(allSatisfyingVars) == 0 {
+		g.addClause([]int{-dependentVarID})
+		logging.Debug("Prohibiting %d: no packages satisfy OR-group", dependentVarID)
+		return nil
+	}
+	g.AddImplication(dependentVarID, allSatisfyingVars)
+	return nil
+}
+
+// AddAtMostOnePerSlot adds pairwise exclusion clauses for package versions
+// sharing the same (name, slot). This ensures at most one version is installed
+// per slot. Clause form: (-vi | -vj) for all i < j within each slot group.
+func (g *GophersatAdapter) AddAtMostOnePerSlot() {
+	type slotGroup struct {
+		name string
+		slot string
+	}
+	groups := make(map[slotGroup][]int)
+
+	for _, versions := range g.packages {
+		for _, p := range versions {
+			key := p.Name + "@" + p.Version
+			varID, exists := g.vars[key]
+			if !exists {
+				continue
+			}
+			sg := slotGroup{name: p.Name, slot: p.Slot.Name}
+			groups[sg] = append(groups[sg], varID)
+		}
+	}
+
+	for sg, vars := range groups {
+		if len(vars) <= 1 {
+			continue
+		}
+		logging.Debug("At-most-one per slot %s:%s — %d versions, %d pairwise clauses",
+			sg.name, sg.slot, len(vars), len(vars)*(len(vars)-1)/2)
+		for i := 0; i < len(vars); i++ {
+			for j := i + 1; j < len(vars); j++ {
+				g.addClause([]int{-vars[i], -vars[j]})
+			}
+		}
+	}
+}
+
+// findSatisfyingVars returns SAT variable IDs for all registered packages
+// that satisfy the given constraint.
+func (g *GophersatAdapter) findSatisfyingVars(c pkg.Constraint) []int {
+	var result []int
+
+	switch c.Type {
+	case pkg.ConstraintTypeVersion:
+		for _, p := range g.packages[c.Name] {
+			if c.Version == nil || c.Version.Satisfies(p.Version) {
+				key := p.Name + "@" + p.Version
+				varID := g.getVarID(key)
+				result = append(result, varID)
+			}
+		}
+	case pkg.ConstraintTypeSlot:
+		for _, p := range g.packages[c.Name] {
+			if p.Slot.Name == c.Slot {
+				key := p.Name + "@" + p.Version
+				varID := g.getVarID(key)
+				result = append(result, varID)
+			}
+		}
+	}
+
+	return result
+}
+
+// GetVarID returns the SAT variable ID for a package key (name@version).
+// Returns 0 if the key is not registered.
+func (g *GophersatAdapter) GetVarID(key string) int {
+	if id, exists := g.vars[key]; exists {
+		return id
+	}
+	return 0
 }
 
 // GetPackageVersions returns all registered versions for a package

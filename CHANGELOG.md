@@ -5,44 +5,35 @@ All notable changes to GRPM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] - mvdan.cc/sh Upstream Integration
+## [Unreleased] - Multi-Version SAT Resolver
 
 ### Changed
-- **Upgraded mvdan.cc/sh to upstream master** — Removed local `replace` directive, now using upstream `v3.12.1-0.20260222231309-fff6e565d306` with all 6 GRPM-contributed PRs merged
-- **BASH_VERSINFO updated to 5.2** — Eclasses now take modern bash 5 code paths with native `${var@a}` support
-
-### Removed
-- **`stripFunctionBodies()` workaround** — No longer needed: brace expansion in declarations now works natively (upstream PR [#1261](https://github.com/mvdan/sh/pull/1261))
-- **`__grpm_has_func` / `__grpm_has_var` command handlers** — No longer needed: `declare -f` and `declare -p` now work natively (upstream PR [#1255](https://github.com/mvdan/sh/pull/1255))
-- **`type -P` → `command -v` text replacement** — No longer needed: `type -P` now works natively (upstream PR [#1255](https://github.com/mvdan/sh/pull/1255))
-- **`expandBraceArgs()` manual brace expansion** — No longer needed: mixed variable+brace expansion now works natively
-- **Unset array pre-initialization workaround** — No longer needed: `${unset[@]}` now correctly expands to nothing
-- **545 lines of workaround code removed** across interpreter.go, metadata.go, executor.go, and test files
-
-### Fixed
-- **Re-enabled integration tests** for sys-apps/grep, sys-apps/sed, sys-apps/coreutils (previously skipped due to brace expansion limitation)
-
-### Documentation
-- **ARCHITECTURE.md** — Known Limitations rewritten: workaround table → upstream PRs table
-- **PMS_COMPLIANCE.md** — "Fundamental Limitation" section → "Upstream Contributions" with 6 merged PRs
-- **README.md** — Updated interpreter description to reflect bash 5.2 compatibility
-
-## [Unreleased] - Multilib & Phase Dispatch Fixes
-
-### Fixed
-- **EXPORT_FUNCTIONS chicken-and-egg** — Eclass phase functions (e.g., `multilib-minimal_src_configure`) were never dispatched because `EXPORT_FUNCTIONS` registration only ran inside `RunPhaseFunction()`, which required `HasPhaseFunction()` to be true first. Pre-resolve eclass chain at start of `ExecutePhases()` before the phase loop.
-- **Out-of-tree build directory detection** — `DefaultSrcInstall`, `DefaultSrcCompile`, and `DefaultSrcTest` used `getWorkDir()` (returns `$S`) to find Makefile, but multilib out-of-tree builds place Makefile in `BUILD_DIR`. Switched to `getRuntimeDir()` which reads the bash CWD from the interpreter context (correct after `pushd "${BUILD_DIR}"`).
-- **Go handlers bypassing ebuild bash functions** — Multilib phase handlers hardcoded `econf`/`emake` instead of calling the ebuild's own `multilib_src_configure()`. Added `functionCaller`/`functionChecker` to prefer bash-defined functions over Go fallbacks.
+- **SAT solver uses implication clauses** — Dependencies encoded as `(-A | B1 | B2)` instead of unconditional `(B1 | B2)`. Only the selected version's deps are activated.
+- **At-most-one per slot** — Pairwise exclusion `(-vi | -vj)` for versions sharing the same `(name, slot)`. Multi-slot packages (python:3.12 + python:3.13) can coexist.
+- **Root packages use at-least-one** — SAT can backtrack to an older version if the newest is unsatisfiable. Atom constraints (version and slot) are respected.
+- **All candidate versions explored** — `collectDependencies` traverses ALL versions' deps (not just highest), including OR-group alternatives. SAT has complete transitive dep information.
+- **Unsatisfiable candidates prohibited** — No provider for a dep → prohibit clause `(-varID)` prevents SAT from selecting that candidate. Applied consistently in version, slot, and OR-group implication paths.
 
 ### Added
-- **`CallFunction()` / `HasFunction()` on Interpreter** — Allows Go code to check for and call bash functions defined by eclasses in the main interpreter context
-- **Bash function priority in exec handler** — Ebuild-defined functions (in `runner.Funcs`) now take priority over Go command map entries, matching Portage's behavior where eclasses can override default phase implementations
-- **Eclass sourcing in main interpreter** — `InheritWithEnv()` now sources eclass content in both the metadata executor AND the main interpreter, so bash functions are visible to `runner.Funcs` for phase dispatch
-- **10 new multilib tests** — Coverage for `callMultilibPhase`, `callBashFunction`, `MultilibForeachABI`, `CallFunction`, `HasFunction`
+- **`SlotKey` value object** (`pkg.SlotKey`) — `{Name, Slot}` for slot-aware result keying
+- **`PostPassAdded` counter** on resolver — Tracks packages added by post-SAT safety net. Should be 0 if SAT encoding is complete.
+- **`resolveClean` test helper** — Asserts `PostPassAdded == 0` in every multi-version test, catching SAT encoding regressions
+- **26 multi-version SAT tests** — Covering: multi-slot coexistence, at-most-one per slot, implication correctness, UNSAT on missing deps, root backtracking, version/slot atom constraints, OR-group dep exploration, transitive deps
 
-### Verified on Real Gentoo (WSL2)
-- app-arch/xz-utils (multilib, out-of-tree build) ✅
-- dev-libs/pkgconf (multilib) ✅
+### Fixed
+- **Topological build order** — `buildAndInstallPackages` and build plan (`-p`) use Kahn's algorithm instead of random Go map iteration. PDEPEND edges excluded.
+- **ACCEPT_KEYWORDS stable-only default** — `--nodeps` branch uses `getAcceptKeywords(cfg)` with architecture auto-detection instead of hardcoded `~amd64`.
+- **Version display normalized** — `FormatMainHelp` uses `TrimPrefix` to prevent double-v prefix.
+- **SA4023 staticcheck fix** — `lookupPortageUser` moved to platform-specific `initPortageUser`. Zero lint issues.
+
+### Known Limitations (open tasks)
+- **Version non-determinism** — Without MAX-SAT optimization (v0.10.0-014), dependency version is chosen by solver heuristic, not by preference.
+- **Consumer migration pending** — `Resolve()` still returns `map[string]*Package` with ad-hoc slot key strings. `internal/cli` parallel scheduler loses slot edges (v0.10.0-013).
+- **Blockers not enforced** — `portage.go` still skips `IsBlocker` deps. VDB not in candidate set (v0.10.0-012).
+
+### Upstream
+- **mvdan.cc/sh upgraded to upstream master** — All 6 GRPM-contributed PRs merged, 545 lines of workaround code removed
+- **Multilib phase dispatch fixed** — EXPORT_FUNCTIONS pre-resolution, out-of-tree build detection, bash function priority
 
 ---
 

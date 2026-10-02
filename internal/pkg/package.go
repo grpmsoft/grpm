@@ -76,6 +76,18 @@ func ParseSlot(slot string) Slot {
 	}
 }
 
+// SlotKey uniquely identifies a package installation slot.
+// Two packages with the same SlotKey cannot coexist; different SlotKeys can.
+type SlotKey struct {
+	Name string // "dev-lang/python"
+	Slot string // "3.12"
+}
+
+// SlotKeyOf returns the SlotKey for a package.
+func SlotKeyOf(p *Package) SlotKey {
+	return SlotKey{Name: p.Name, Slot: p.Slot.Name}
+}
+
 // Package represents a Gentoo package with its metadata and dependencies
 // It is an Aggregate Root in DDD terms, controlling access to its dependencies
 type Package struct {
