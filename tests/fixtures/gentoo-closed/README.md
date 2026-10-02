@@ -1,87 +1,71 @@
 # Gentoo Closed Test Fixture
 
-A small, **transitively closed** package fixture for GRPM integration testing.
-Every package's dependencies can be satisfied by other packages in this fixture,
+Transitively closed package fixture extracted from a real Gentoo rsync snapshot.
+Every package's DEPEND/RDEPEND/BDEPEND can be satisfied within this fixture,
 so `Resolve()` returns `status=SAT` with `postPass=0`.
 
-**Created:** 2026-10-02
-**Packages:** 7 entries across 6 categories
-**Closure:** Complete (all transitive deps present)
+**Source:** WSL2 Gentoo rsync snapshot
+**Timestamp:** Fri, 02 Oct 2026 12:45:00 +0000
+**Packages:** 16 names, 50 versions
+**Closure:** DEPEND + RDEPEND + BDEPEND (real md5-cache, unmodified)
 
-## Design
+## Roots
 
-Real Gentoo packages have deeply transitive BDEPEND chains through the entire
-build toolchain (gcc, binutils, perl, python, autotools, meson, etc.). A
-transitively closed fixture from the real tree would require 400+ packages
-even for a simple library like libassuan.
-
-This fixture uses **real md5-cache format** with realistic metadata (EAPI,
-KEYWORDS, SLOT, IUSE, etc.) but omits BDEPEND entries to keep the closure
-small. DEPEND/RDEPEND relationships are preserved and form real dependency
-chains that the SAT resolver must handle correctly.
-
-All USE-conditional dependencies (nls?, verify-sig?, etc.) evaluate to
-inactive with default IUSE settings (no profile, no make.conf), so they
-do not expand the closure.
+| Root | Versions | Why |
+|------|----------|-----|
+| dev-libs/libassuan | 3 | Version constraints (`>=1.33`), multi-version SAT |
+| dev-db/sqlite | 3 | Non-zero slot (`:3`), slot operators (`:=`), virtual deps, BDEPEND |
 
 ## Dependency Graph
 
 ```
-dev-libs/libassuan-2.5.7
-  DEPEND:  >=dev-libs/libgpg-error-1.33
-  RDEPEND: >=dev-libs/libgpg-error-1.33
+dev-libs/libassuan (3 versions)
+  DEPEND/RDEPEND: >=dev-libs/libgpg-error-1.33
 
-dev-libs/npth-1.8
-  DEPEND:  >=dev-libs/libgpg-error-1.17
-  RDEPEND: >=dev-libs/libgpg-error-1.17
+dev-db/sqlite:3 (3 versions)
+  BDEPEND: app-arch/unzip
+  DEPEND/RDEPEND: virtual/zlib:=[...], readline?(), icu?(), tcl?()
 
-dev-libs/libgpg-error-1.51
-  (leaf: all deps USE-conditional, defaults to inactive)
-
-virtual/pkgconfig-3
-  RDEPEND: dev-util/pkgconf
-
-dev-util/pkgconf-2.5.1
-  (leaf: RDEPEND is blocker only, skipped by parser)
-
-sys-libs/zlib-1.3.1-r1
-  (leaf: DEPEND/RDEPEND are blockers only, skipped by parser)
-
-app-misc/hello-2.12.2
-  (leaf: no dependencies)
+virtual/zlib → sys-libs/zlib
+virtual/pkgconfig → dev-util/pkgconf
+app-arch/bzip2 → app-alternatives/bzip2
 ```
 
-## Closure Proof
+## All Packages
 
-| Root Package | Transitive Deps | All Present? |
-|-------------|-----------------|--------------|
-| dev-libs/libassuan-2.5.7 | dev-libs/libgpg-error-1.51 | Yes |
-| dev-libs/npth-1.8 | dev-libs/libgpg-error-1.51 | Yes |
-| virtual/pkgconfig-3 | dev-util/pkgconf-2.5.1 | Yes |
-| dev-libs/libgpg-error-1.51 | (none active) | Yes |
-| dev-util/pkgconf-2.5.1 | (none active) | Yes |
-| sys-libs/zlib-1.3.1-r1 | (none active) | Yes |
-| app-misc/hello-2.12.2 | (none active) | Yes |
+| Package | Versions | Role |
+|---------|----------|------|
+| dev-libs/libassuan | 3 | Root: version constraint chain |
+| dev-libs/libgpg-error | 3 | Leaf of libassuan chain |
+| dev-db/sqlite | 3 | Root: slot :3, virtual deps |
+| sys-libs/zlib | 2 | Dep of sqlite via virtual/zlib |
+| sys-libs/readline | 5 | USE-conditional dep of sqlite |
+| sys-libs/ncurses | 3 | Dep of readline |
+| virtual/zlib | 2 | Virtual → sys-libs/zlib |
+| virtual/pkgconfig | 1 | Virtual → dev-util/pkgconf |
+| dev-util/pkgconf | 7 | Provider of virtual/pkgconfig |
+| app-arch/xz-utils | 3 | BDEPEND chain |
+| app-arch/bzip2 | 2 | BDEPEND chain |
+| app-arch/unzip | 2 | BDEPEND of sqlite |
+| app-alternatives/bzip2 | 1 | app-alternatives provider |
+| app-portage/elt-patches | 5 | BDEPEND chain |
+| sys-apps/findutils | 2 | BDEPEND chain |
+| sys-apps/gentoo-functions | 6 | BDEPEND chain |
 
-## Modifications from Real Tree
+## md5-cache Format
 
-- **BDEPEND stripped**: All unconditional BDEPEND entries removed to avoid
-  pulling in the entire Gentoo build toolchain (autotools, meson, gcc, etc.)
-- **KEYWORDS simplified**: Reduced to common architectures (amd64, arm, arm64,
-  ppc, ppc64, x86) without `~` prefix for stable testing
-- **Version numbers**: Based on real versions in the Gentoo tree (2026-10-02)
-  except libgpg-error-1.51 which is a synthetic version to avoid multilib
-  complexity present in real 1.59+
+Files in `metadata/md5-cache/` are unmodified copies from the rsync snapshot.
+They contain real DEPEND, RDEPEND, BDEPEND, SLOT, KEYWORDS, IUSE, EAPI, etc.
+USE-conditional deps (e.g., `readline?`, `icu?`) evaluate to inactive with
+default settings (no profile, no make.conf).
 
-## Ebuild Stubs
+Ebuild files are empty stubs (0 bytes) — PortageRepository requires them
+for directory scanning but reads metadata from md5-cache.
 
-Ebuild files are empty (0 bytes). PortageRepository requires them for directory
-scanning (`ReadDir`) but reads actual metadata from `metadata/md5-cache/`.
+## Regeneration
 
-## How to Regenerate
-
-If the fixture needs updating:
-1. Check which DEPEND/RDEPEND are unconditional for each package
-2. Ensure all referenced packages exist in the fixture
-3. Verify USE-conditional deps are inactive with default IUSE
-4. Run `go test -run TestClosedFixture ./tests/integration/` to validate
+```bash
+# On WSL2 Gentoo (after emerge --sync):
+bash /mnt/d/tmp/extract_fixture.sh
+# Then copy /tmp/gentoo-closed/ to tests/fixtures/gentoo-closed/
+```

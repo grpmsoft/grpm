@@ -26,7 +26,8 @@ trivial prohibit, not cost of full dependency closure.
 
 ## Verified on Full Tree (2026-10-02, independent review)
 
-Tested on full `gentoo/gentoo` tree with md5-cache and profile:
+Tested on WSL2 Gentoo rsync snapshot (`/var/db/repos/gentoo`, with md5-cache).
+No profile or make.conf — resolver used `NewResolver` without keyword filtering:
 
 | Package | Status | Packages | Notes |
 |---------|--------|----------|-------|
