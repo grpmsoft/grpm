@@ -19,16 +19,25 @@ Real package metadata from Gentoo WSL2 tree.
 | app-misc/hello | 2 | Minimal test |
 | virtual/pkgconfig | 1 | Virtual package |
 
-## Performance Baseline (2026-10-02, main after PR #78)
+## Performance Baseline (2026-10-02, after PR #78 + slot/glob fixes)
 
-Measured on WSL2 Gentoo, warm cache:
+### md5-cache (fixture repo, Go test, Windows)
 
-| Package | Versions | Time |
-|---------|----------|------|
-| app-misc/hello | 2 | 113ms |
-| sys-libs/zlib | 4 | 104ms |
-| dev-libs/openssl | 16 | 140ms |
-| sys-devel/gcc | 46 | 220ms |
-| dev-lang/python | 49 | 239ms |
+| Package | Versions | Time | Status |
+|---------|----------|------|--------|
+| app-misc/hello | 2 | 2ms | OK |
+| sys-libs/zlib | 4 | 1ms | OK |
+| dev-libs/openssl | 16 | 9ms | UNSAT (fixture subset) |
+| sys-devel/gcc | 46 | 41ms | UNSAT (fixture subset) |
+| dev-lang/python | 49 | 83ms | UNSAT (fixture subset) |
 
-All under 250ms. Cold start adds ~3s (Go binary first load).
+### WSL2 full tree (CLI, ebuild parsing path)
+
+| Package | Time | Status |
+|---------|------|--------|
+| app-misc/hello | 84ms | OK (1 pkg) |
+| dev-libs/libgpg-error | 5s | OK (5 pkgs) |
+| dev-libs/libassuan | 2.5s | OK (6 pkgs) |
+
+WSL times include ebuild interpreter overhead (~90ms/ebuild). md5-cache 30-100x faster.
+Stub ebuilds are empty — PortageRepository reads from md5-cache when available.
