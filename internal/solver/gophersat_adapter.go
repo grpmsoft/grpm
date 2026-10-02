@@ -771,7 +771,7 @@ func (tr *unsatTracer) walkTopDown(varID int, depth int) {
 	tr.chain = append(tr.chain, fmt.Sprintf("%s%s: %s", indent, name, tr.reason[varID]))
 
 	edge := tr.justification[varID]
-	if edge == nil || depth >= 8 {
+	if edge == nil {
 		return
 	}
 

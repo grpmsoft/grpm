@@ -1381,26 +1381,30 @@ func TestExplainWhyUNSAT_CycleDoesNotFalsifyChain(t *testing.T) {
 func TestExplainWhyUNSAT_ProhibitReasonPresent(t *testing.T) {
 	// Regression guard: the "no provider" string from the actual prohibit
 	// must always appear in the output. On the libxcrypt UNSAT this was
-	// "backports-tarfile" — the fix for cycles broke it.
+	// "backports-tarfile" — the depth cap at 8 cut it off.
 	adapter := NewGophersatAdapter()
 
 	root := pkg.NewPackage("app/root", "1.0", "0")
-	mid := pkg.NewPackage("dev-libs/mid", "1.0", "0")
-	leaf := pkg.NewPackage("dev-libs/leaf", "1.0", "0")
 	adapter.AddPackage(root)
-	adapter.AddPackage(mid)
-	adapter.AddPackage(leaf)
-
 	rootID := adapter.GetVarID("app/root@1.0")
-	midID := adapter.GetVarID("dev-libs/mid@1.0")
-	leafID := adapter.GetVarID("dev-libs/leaf@1.0")
-
 	adapter.withMeta(ClauseRoot, "root")
 	adapter.addClause([]int{rootID})
 	adapter.addRootVars([]int{rootID})
 
-	adapter.AddImplication(rootID, []int{midID})
-	adapter.AddImplication(midID, []int{leafID})
+	// Build a chain of depth 12: root → n1 → n2 → ... → n11 → leaf (prohibited)
+	prevID := rootID
+	for i := range 11 {
+		p := pkg.NewPackage(fmt.Sprintf("dev-libs/n%d", i), "1.0", "0")
+		adapter.AddPackage(p)
+		pID := adapter.GetVarID(fmt.Sprintf("dev-libs/n%d@1.0", i))
+		adapter.AddImplication(prevID, []int{pID})
+		prevID = pID
+	}
+
+	leaf := pkg.NewPackage("dev-libs/leaf", "1.0", "0")
+	adapter.AddPackage(leaf)
+	leafID := adapter.GetVarID("dev-libs/leaf@1.0")
+	adapter.AddImplication(prevID, []int{leafID})
 
 	reason := "no provider for backports-tarfile (needed by dev-libs/leaf@1.0)"
 	adapter.withMeta(ClauseProhibit, reason)
@@ -1410,8 +1414,12 @@ func TestExplainWhyUNSAT_ProhibitReasonPresent(t *testing.T) {
 	result := adapter.ExplainWhyUNSAT()
 	joined := strings.Join(result.Lines, "\n")
 
+	// The leaf prohibit at depth 12 must appear — no depth cap
 	if !strings.Contains(joined, "backports-tarfile") {
-		t.Errorf("must contain prohibit root cause 'backports-tarfile', got:\n%s", joined)
+		t.Errorf("must contain prohibit root cause 'backports-tarfile' at depth 12, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "no provider") {
+		t.Errorf("must contain at least one 'no provider' line, got:\n%s", joined)
 	}
 }
 
