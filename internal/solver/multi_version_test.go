@@ -1741,3 +1741,70 @@ func TestBlocker_OldVersionBlocksNewDoesNot(t *testing.T) {
 		t.Error("expected dev-libs/b in result — a-2.0 depends on it")
 	}
 }
+
+func TestBlocker_ExplainerShowsBlockerConflict(t *testing.T) {
+	r := newMultiVersionRepo()
+
+	a := pkg.NewPackage("dev-libs/a", "1.0", "0")
+	blockerAtom, _ := pkg.ParseAtom("!!dev-libs/b")
+	a.Blockers = []pkg.BlockerEntry{{Atom: blockerAtom, IsStrong: true}}
+	r.addVersion(a)
+
+	b := pkg.NewPackage("dev-libs/b", "1.0", "0")
+	r.addVersion(b)
+
+	// app depends on both a and b — UNSAT because a blocks b
+	app := pkg.NewPackage("app/app", "1.0", "0")
+	app.Deps = []pkg.Constraint{
+		{Name: "dev-libs/a", Type: pkg.ConstraintTypeVersion},
+		{Name: "dev-libs/b", Type: pkg.ConstraintTypeVersion},
+	}
+	r.addVersion(app)
+
+	resolver := NewResolver(r)
+	_, err := resolver.Resolve([]string{"app/app"})
+	if err == nil {
+		t.Fatal("expected UNSAT — a blocks b")
+	}
+
+	if !strings.Contains(err.Error(), "UNSAT") {
+		t.Errorf("error should mention UNSAT, got: %s", err.Error())
+	}
+}
+
+func TestBlocker_ExplainerOutputContainsBlockerReason(t *testing.T) {
+	adapter := NewGophersatAdapter()
+
+	a := pkg.NewPackage("dev-libs/a", "1.0", "0")
+	b := pkg.NewPackage("dev-libs/b", "1.0", "0")
+	app := pkg.NewPackage("app/app", "1.0", "0")
+	adapter.AddPackage(a)
+	adapter.AddPackage(b)
+	adapter.AddPackage(app)
+
+	appID := adapter.GetVarID("app/app@1.0")
+	aID := adapter.GetVarID("dev-libs/a@1.0")
+
+	adapter.withMeta(ClauseRoot, "root")
+	adapter.addClause([]int{appID})
+	adapter.addRootVars([]int{appID})
+
+	adapter.AddImplication(appID, []int{aID})
+	adapter.AddImplication(appID, []int{adapter.GetVarID("dev-libs/b@1.0")})
+
+	blockedAtom, _ := pkg.ParseAtom("!!dev-libs/b")
+	adapter.AddBlockerConflict(aID, blockedAtom)
+
+	result := adapter.ExplainWhyUNSAT()
+	joined := strings.Join(result.Lines, "\n")
+
+	if !strings.Contains(joined, "blocker:") {
+		t.Errorf("explainer should show blocker reason, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "dev-libs/a@1.0") {
+		t.Errorf("explainer should name the blocking package, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "dev-libs/b@1.0") {
+		t.Errorf("explainer should name the blocked package, got:\n%s", joined)
+	}
+}
