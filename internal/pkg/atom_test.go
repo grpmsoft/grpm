@@ -237,6 +237,27 @@ func TestParseAtom_Slots(t *testing.T) {
 			wantSlot:    "0",
 			wantSubslot: "3",
 		},
+		{
+			name:     "slot with rebuild operator :3=",
+			input:    "dev-db/sqlite:3=",
+			wantSlot: "3",
+		},
+		{
+			name:     "slot zero with rebuild operator :0=",
+			input:    "sys-libs/ncurses:0=",
+			wantSlot: "0",
+		},
+		{
+			name:     "versioned slot with rebuild operator",
+			input:    ">=dev-libs/gmp-6.0:0=",
+			wantSlot: "0",
+		},
+		{
+			name:        "slot/subslot with rebuild operator :0/1=",
+			input:       "dev-libs/openssl:0/1.1=",
+			wantSlot:    "0",
+			wantSubslot: "1.1",
+		},
 	}
 
 	for _, tc := range tests {

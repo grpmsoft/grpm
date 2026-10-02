@@ -953,3 +953,92 @@ func TestFix_RootRespectsSlotAtom(t *testing.T) {
 		t.Errorf("post-SAT pass added %d packages", resolver.PostPassAdded)
 	}
 }
+
+// Slot operator := means "any slot, rebuild on subslot change".
+// Must NOT be matched literally as slot name "=".
+func TestFix_SlotOperatorResolves(t *testing.T) {
+	r := newMultiVersionRepo()
+
+	// openssl with slot 0
+	ssl := pkg.NewPackage("dev-libs/openssl", "3.0.15", "0")
+	r.addVersion(ssl)
+
+	// app depends on openssl:= (slot operator, any slot)
+	app := pkg.NewPackage("app-misc/ssluser", "1.0", "0")
+	app.Deps = []pkg.Constraint{
+		{
+			Name: "dev-libs/openssl",
+			Slot: "=",
+			Type: pkg.ConstraintTypeSlot,
+		},
+	}
+	r.addVersion(app)
+
+	resolver := NewResolver(r)
+	result := resolveClean(t, resolver, []string{"app-misc/ssluser"})
+
+	slotResult := toSlotKeyMap(result)
+	sslKey := pkg.SlotKey{Name: "dev-libs/openssl", Slot: "0"}
+	if _, ok := slotResult[sslKey]; !ok {
+		t.Error("openssl should be in result — := means any slot, not literal '='")
+	}
+}
+
+// Slot operator :* means "any slot". Must not be literal "*".
+func TestFix_SlotStarOperatorResolves(t *testing.T) {
+	r := newMultiVersionRepo()
+
+	lib := pkg.NewPackage("dev-libs/mylib", "2.0", "5")
+	r.addVersion(lib)
+
+	app := pkg.NewPackage("app-misc/staruser", "1.0", "0")
+	app.Deps = []pkg.Constraint{
+		{
+			Name: "dev-libs/mylib",
+			Slot: "*",
+			Type: pkg.ConstraintTypeSlot,
+		},
+	}
+	r.addVersion(app)
+
+	resolver := NewResolver(r)
+	result := resolveClean(t, resolver, []string{"app-misc/staruser"})
+
+	slotResult := toSlotKeyMap(result)
+	libKey := pkg.SlotKey{Name: "dev-libs/mylib", Slot: "5"}
+	if _, ok := slotResult[libKey]; !ok {
+		t.Error("mylib should be in result — :* means any slot")
+	}
+}
+
+// Versioned slot atom: >=dev-libs/openssl-3.0:= must match version AND any slot.
+func TestFix_VersionedSlotOperatorResolves(t *testing.T) {
+	r := newMultiVersionRepo()
+
+	r.addVersion(pkg.NewPackage("dev-libs/openssl", "1.1.1", "0"))
+	r.addVersion(pkg.NewPackage("dev-libs/openssl", "3.0.15", "0"))
+
+	app := pkg.NewPackage("app-misc/versslot", "1.0", "0")
+	app.Deps = []pkg.Constraint{
+		{
+			Name:    "dev-libs/openssl",
+			Slot:    "=",
+			Type:    pkg.ConstraintTypeSlot,
+			Version: pkg.NewMinVersionConstraint("3.0"),
+		},
+	}
+	r.addVersion(app)
+
+	resolver := NewResolver(r)
+	result := resolveClean(t, resolver, []string{"app-misc/versslot"})
+
+	slotResult := toSlotKeyMap(result)
+	sslKey := pkg.SlotKey{Name: "dev-libs/openssl", Slot: "0"}
+	p, ok := slotResult[sslKey]
+	if !ok {
+		t.Fatal("openssl should be in result")
+	}
+	if pkg.CompareVersions(p.Version, "3.0") < 0 {
+		t.Errorf("expected openssl >= 3.0, got %s", p.Version)
+	}
+}

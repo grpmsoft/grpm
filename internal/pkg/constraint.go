@@ -56,6 +56,7 @@ const (
 	OpGreaterEqual
 	OpLess
 	OpLessEqual
+	OpEqualGlob // =pkg-ver* (PMS 8.3.1: prefix match at version component boundary)
 )
 
 // VersionConstraint represents a version constraint (Value Object - immutable)
@@ -135,6 +136,8 @@ func (vc *VersionConstraint) String() string {
 		return "<" + vc.version
 	case OpLessEqual:
 		return "<=" + vc.version
+	case OpEqualGlob:
+		return "=" + vc.version + "*"
 	default:
 		return "unknown"
 	}
@@ -157,6 +160,18 @@ func (vc *VersionConstraint) Satisfies(version string) bool {
 		return CompareVersions(version, vc.version) < 0
 	case OpLessEqual:
 		return CompareVersions(version, vc.version) <= 0
+	case OpEqualGlob:
+		// =ver* matches if version equals ver or starts with ver followed by
+		// a version component separator (., _, -, or 'r' for revision).
+		// =5.44* matches 5.44, 5.44.0, 5.44.2-r1 but NOT 5.440
+		if version == vc.version {
+			return true
+		}
+		if !strings.HasPrefix(version, vc.version) {
+			return false
+		}
+		next := version[len(vc.version)]
+		return next == '.' || next == '_' || next == '-'
 	default:
 		return true
 	}

@@ -302,6 +302,50 @@ func TestVersionConstraint_Satisfies(t *testing.T) {
 			version:    "1.0-r1",
 			expected:   true,
 		},
+
+		// OpEqualGlob tests (PMS 8.3.1: =pkg-ver* prefix match)
+		{
+			name:       "EqualGlob: =5.44* matches 5.44.0",
+			constraint: NewVersionConstraint(OpEqualGlob, "5.44"),
+			version:    "5.44.0",
+			expected:   true,
+		},
+		{
+			name:       "EqualGlob: =5.44* matches 5.44",
+			constraint: NewVersionConstraint(OpEqualGlob, "5.44"),
+			version:    "5.44",
+			expected:   true,
+		},
+		{
+			name:       "EqualGlob: =5.44* matches 5.44.0-r1",
+			constraint: NewVersionConstraint(OpEqualGlob, "5.44"),
+			version:    "5.44.0-r1",
+			expected:   true,
+		},
+		{
+			name:       "EqualGlob: =5.44* matches 5.44.2",
+			constraint: NewVersionConstraint(OpEqualGlob, "5.44"),
+			version:    "5.44.2",
+			expected:   true,
+		},
+		{
+			name:       "EqualGlob: =5.44* does NOT match 5.440",
+			constraint: NewVersionConstraint(OpEqualGlob, "5.44"),
+			version:    "5.440",
+			expected:   false,
+		},
+		{
+			name:       "EqualGlob: =2* matches 2.3.1",
+			constraint: NewVersionConstraint(OpEqualGlob, "2"),
+			version:    "2.3.1",
+			expected:   true,
+		},
+		{
+			name:       "EqualGlob: =2* does NOT match 20.0",
+			constraint: NewVersionConstraint(OpEqualGlob, "2"),
+			version:    "20.0",
+			expected:   false,
+		},
 	}
 
 	for _, tt := range tests {

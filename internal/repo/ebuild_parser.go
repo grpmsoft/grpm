@@ -636,12 +636,21 @@ func (ep *EbuildParser) parsePackageAtomLegacy(atom string, depType DependencyTy
 		}
 	}
 
-	// Extract slot :slot/subslot or :=
+	// Extract slot :slot/subslot or := or :slot=
 	slotParts := strings.Split(atom, ":")
 	if len(slotParts) > 1 {
 		atom = slotParts[0]
 		slotStr := slotParts[1]
-		dep.Constraint.Slot = slotStr
+		// Strip trailing slot operator '=' (PMS 8.2.6.3: :3= → slot "3")
+		if strings.HasSuffix(slotStr, "=") && slotStr != "=" {
+			slotStr = slotStr[:len(slotStr)-1]
+		}
+		// Handle subslot in slot string (e.g., "0/1.1")
+		if idx := strings.Index(slotStr, "/"); idx != -1 {
+			dep.Constraint.Slot = slotStr[:idx]
+		} else {
+			dep.Constraint.Slot = slotStr
+		}
 		dep.Constraint.Type = pkg.ConstraintTypeSlot
 	}
 
@@ -685,13 +694,13 @@ func parseAtomVersion(atom string) (pkg.Constraint, error) {
 		Type: pkg.ConstraintTypeVersion,
 	}
 
-	// Special case: =* operator (glob pattern)
+	// Special case: =* operator (PMS 8.3.1: prefix glob)
 	if strings.HasPrefix(atom, "=") && strings.Contains(atom, "*") {
 		atom = strings.TrimPrefix(atom, "=")
 		name, version := splitAtomNameVersion(atom)
 		versionPattern := strings.TrimSuffix(version, "*")
 		constraint.Name = name
-		constraint.Version = pkg.NewMinVersionConstraint(versionPattern)
+		constraint.Version = pkg.NewVersionConstraint(pkg.OpEqualGlob, versionPattern)
 		return constraint, nil
 	}
 

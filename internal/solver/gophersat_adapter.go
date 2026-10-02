@@ -249,11 +249,14 @@ func (g *GophersatAdapter) AddExactlyOneConstraint(pkgName string, versions []st
 }
 
 func (g *GophersatAdapter) addSlotConstraint(c pkg.Constraint) error {
-	// Find all packages matching name AND slot
+	// Find all packages matching name AND slot (operators := and :* match any slot)
+	isOperator := c.Slot == "=" || c.Slot == "*"
 	var slotVars []int
 	for _, pkgList := range g.packages {
 		for _, p := range pkgList {
-			if p.Name == c.Name && p.Slot.Name == c.Slot {
+			slotMatch := isOperator || p.Slot.Name == c.Slot
+			versionMatch := c.Version == nil || c.Version.Satisfies(p.Version)
+			if p.Name == c.Name && slotMatch && versionMatch {
 				key := p.Name + "@" + p.Version
 				varID := g.getVarID(key)
 				slotVars = append(slotVars, varID)
@@ -392,9 +395,14 @@ func (g *GophersatAdapter) AddImplicationConstraint(dependentVarID int, c pkg.Co
 // AddImplicationSlotConstraint adds an implication for a slot constraint.
 // If dependentVarID is selected, at least one package in the given slot must be selected.
 func (g *GophersatAdapter) AddImplicationSlotConstraint(dependentVarID int, c pkg.Constraint) error {
+	isOperator := c.Slot == "=" || c.Slot == "*"
 	var slotVars []int
 	for _, p := range g.packages[c.Name] {
-		if p.Slot.Name == c.Slot {
+		// Slot operators := and :* match ANY slot
+		slotMatch := isOperator || p.Slot.Name == c.Slot
+		// Also check version constraint if present
+		versionMatch := c.Version == nil || c.Version.Satisfies(p.Version)
+		if slotMatch && versionMatch {
 			key := p.Name + "@" + p.Version
 			varID := g.getVarID(key)
 			slotVars = append(slotVars, varID)
@@ -490,8 +498,11 @@ func (g *GophersatAdapter) findSatisfyingVars(c pkg.Constraint) []int {
 			}
 		}
 	case pkg.ConstraintTypeSlot:
+		isOperator := c.Slot == "=" || c.Slot == "*"
 		for _, p := range g.packages[c.Name] {
-			if p.Slot.Name == c.Slot {
+			slotMatch := isOperator || p.Slot.Name == c.Slot
+			versionMatch := c.Version == nil || c.Version.Satisfies(p.Version)
+			if slotMatch && versionMatch {
 				key := p.Name + "@" + p.Version
 				varID := g.getVarID(key)
 				result = append(result, varID)

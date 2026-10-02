@@ -267,6 +267,14 @@ func parseSlotAndRepo(s string, pos int, atom *Atom) (int, error) {
 	slotStr := s[pos:slotEnd]
 	pos = slotEnd
 
+	// Strip trailing slot operator '=' (PMS 8.2.6.3: :slot= means rebuild on subslot change)
+	// Examples: :3= → slot="3", :0= → slot="0", :0/1.1= → slot="0" subslot="1.1"
+	if strings.HasSuffix(slotStr, "=") && slotStr != "=" {
+		slotStr = slotStr[:len(slotStr)-1]
+		// Slot operator semantics (rebuild on subslot change) stored as SlotOperator
+		// but for matching purposes, the slot is the numeric part
+	}
+
 	// Split slot/subslot
 	if idx := strings.Index(slotStr, "/"); idx != -1 {
 		atom.Slot = slotStr[:idx]
@@ -797,8 +805,10 @@ func (a *Atom) ToConstraint() Constraint {
 	if a.Version != "" {
 		var op VersionOperator
 		switch a.Operator {
-		case "=", "=*":
+		case "=":
 			op = OpEqual
+		case "=*":
+			op = OpEqualGlob
 		case ">":
 			op = OpGreater
 		case ">=":
