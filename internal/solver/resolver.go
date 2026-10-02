@@ -47,6 +47,10 @@ type PortageResolver struct {
 
 	// options configures resolution behavior.
 	options ResolveOptions
+
+	// PostPassAdded counts packages added by post-SAT safety net.
+	// Should be 0 if SAT encoding is complete. Non-zero signals a gap.
+	PostPassAdded int
 }
 
 // NewResolver creates a new resolver without mask/keyword support.
@@ -328,8 +332,8 @@ func (r *PortageResolver) addRootConstraints(adapter *GophersatAdapter, rootPack
 
 		if versions, ok := adapter.packages[p.Name]; ok {
 			for _, v := range versions {
-				// Filter by atom if user specified version constraint
-				if parseErr == nil && atom.HasVersion() {
+				// Filter by atom if user specified version or slot constraint
+				if parseErr == nil && (atom.HasVersion() || atom.Slot != "") {
 					if !atom.Matches(v) {
 						continue
 					}
@@ -390,8 +394,8 @@ func (r *PortageResolver) loadPackageFromAtom(atomStr string) (*pkg.Package, err
 		return r.loadUnmaskedPackage(atomStr)
 	}
 
-	// If atom has a version constraint, use FindByAtom to get matching packages
-	if atom.HasVersion() {
+	// If atom has a version or slot constraint, use FindByAtom to get matching packages
+	if atom.HasVersion() || atom.Slot != "" {
 		matches, err := r.repo.FindByAtom(atom)
 		if err != nil {
 			return nil, fmt.Errorf("failed to find packages matching %s: %w", atomStr, err)
@@ -435,6 +439,7 @@ func (r *PortageResolver) loadPackageFromAtom(atomStr string) (*pkg.Package, err
 
 //nolint:gocyclo // Complexity inherent to multi-pass Portage-compatible resolution with OR-group support
 func (r *PortageResolver) Resolve(packages []string) (map[string]*pkg.Package, error) {
+	r.PostPassAdded = 0
 	adapter := NewGophersatAdapter()
 	allPackages := make(map[string]*pkg.Package)
 	allCandidates := make(map[string][]*pkg.Package) // name -> all versions
@@ -590,10 +595,9 @@ func (r *PortageResolver) Resolve(packages []string) (map[string]*pkg.Package, e
 				}
 			}
 		}
+		r.PostPassAdded += added
 		if added > 0 {
 			logging.Info("WARNING: Post-SAT pass %d added %d packages — SAT encoding incomplete", pass, added)
-		} else {
-			logging.Debug("Post-SAT pass %d: clean (0 added)", pass)
 		}
 		if added == 0 {
 			break

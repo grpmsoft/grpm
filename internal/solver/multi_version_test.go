@@ -944,4 +944,45 @@ func TestFix_PostSATPassAddsNothing(t *testing.T) {
 	if _, ok := slotResult[depKey]; !ok {
 		t.Error("dep should be in SAT result directly, not requiring post-pass")
 	}
+
+	// Post-SAT pass must have added zero packages
+	if resolver.PostPassAdded > 0 {
+		t.Errorf("post-SAT pass added %d packages — SAT encoding incomplete", resolver.PostPassAdded)
+	}
+}
+
+// Slot atom must be respected: `emerge dev-lang/py:3.13` must pick slot 3.13.
+func TestFix_RootRespectsSlotAtom(t *testing.T) {
+	r := newMultiVersionRepo()
+
+	r.addVersion(pkg.NewPackage("dev-lang/py", "3.11.9", "3.11"))
+	r.addVersion(pkg.NewPackage("dev-lang/py", "3.12.1", "3.12"))
+	r.addVersion(pkg.NewPackage("dev-lang/py", "3.13.0", "3.13"))
+
+	resolver := NewResolver(r)
+	result, err := resolver.Resolve([]string{"dev-lang/py:3.13"})
+	if err != nil {
+		t.Fatalf("Resolve failed: %v", err)
+	}
+
+	slotResult := toSlotKeyMap(result)
+	key := pkg.SlotKey{Name: "dev-lang/py", Slot: "3.13"}
+	p, ok := slotResult[key]
+	if !ok {
+		t.Fatalf("expected py:3.13 in result, got keys: %v", slotResult)
+	}
+	if p.Version != "3.13.0" {
+		t.Errorf("expected 3.13.0, got %s", p.Version)
+	}
+
+	// Other slots must NOT be in result
+	for k := range slotResult {
+		if k.Name == "dev-lang/py" && k.Slot != "3.13" {
+			t.Errorf("unexpected slot %s in result — only :3.13 requested", k.Slot)
+		}
+	}
+
+	if resolver.PostPassAdded > 0 {
+		t.Errorf("post-SAT pass added %d packages", resolver.PostPassAdded)
+	}
 }
