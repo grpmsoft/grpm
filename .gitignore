@@ -47,6 +47,7 @@ go.work.sum
 .claude/
 .goco/
 .gode/
+.mcp.json
 
 docs/dev/
 INDEX.md
