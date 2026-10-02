@@ -78,12 +78,12 @@ func TestClosedFixture_SqliteResolves(t *testing.T) {
 	result := resolveAndAssert(t, res, []string{"dev-db/sqlite"})
 
 	sqliteKey := pkg.SlotKey{Name: "dev-db/sqlite", Slot: "3"}
-	p, ok := result[sqliteKey]
+	entry, ok := result[sqliteKey]
 	if !ok {
 		t.Fatalf("result missing dev-db/sqlite:3, keys: %v", result)
 	}
-	if p.Slot.Name != "3" {
-		t.Errorf("sqlite slot = %s, want 3", p.Slot.Name)
+	if entry.Package.Slot.Name != "3" {
+		t.Errorf("sqlite slot = %s, want 3", entry.Package.Slot.Name)
 	}
 
 	zlibKey := pkg.SlotKey{Name: "sys-libs/zlib", Slot: "0"}
@@ -157,12 +157,12 @@ func TestClosedFixture_PythonMultiSlot(t *testing.T) {
 		t.Run("slot_"+slot, func(t *testing.T) {
 			result := resolveAndAssert(t, res, []string{"dev-lang/python:" + slot})
 			key := pkg.SlotKey{Name: "dev-lang/python", Slot: slot}
-			p, ok := result[key]
+			entry, ok := result[key]
 			if !ok {
 				t.Fatalf("result missing dev-lang/python:%s", slot)
 			}
-			if p.Slot.Name != slot {
-				t.Errorf("python slot = %s, want %s", p.Slot.Name, slot)
+			if entry.Package.Slot.Name != slot {
+				t.Errorf("python slot = %s, want %s", entry.Package.Slot.Name, slot)
 			}
 		})
 	}

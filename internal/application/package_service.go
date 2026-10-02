@@ -53,18 +53,18 @@ func (s *PackageService) ResolvePackage(packages []string) (*ResolutionResult, e
 
 	// Convert domain model to DTO (name:slot → version for multi-slot support)
 	packagesToInstall := make(map[string]string)
-	for key, p := range solution {
+	for key, e := range solution {
 		label := key.Name
 		if key.Slot != "" && key.Slot != "0" {
 			label = key.Name + ":" + key.Slot
 		}
-		packagesToInstall[label] = p.Version
+		packagesToInstall[label] = e.Package.Version
 	}
 
 	// Use Domain Service to find conflicts
 	var packageList []*pkg.Package
-	for _, p := range solution {
-		packageList = append(packageList, p)
+	for _, e := range solution {
+		packageList = append(packageList, e.Package)
 	}
 	conflicts := s.depService.FindConflicts(packageList)
 

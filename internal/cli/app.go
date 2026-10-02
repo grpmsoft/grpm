@@ -333,8 +333,8 @@ func (a *App) runResolve(args []string) error {
 // Returns true if collisions were found and handled.
 func (a *App) handleResolveAutounmask(solution solver.ResolveResult, writeChanges bool) (bool, error) {
 	graph := solver.NewDependencyGraph()
-	for _, p := range solution {
-		graph.AddPackage(p, false)
+	for _, e := range solution {
+		graph.AddPackage(e.Package, false)
 	}
 
 	detector := solver.NewSlotCollisionDetector(graph, nil)
@@ -382,16 +382,22 @@ func (a *App) displayResolveSolution(solution solver.ResolveResult, pretend bool
 		fmt.Println("Dependency solution:")
 	}
 
-	for _, p := range solution {
+	displayed := 0
+	for _, e := range solution {
+		p := e.Package
 		if pretend {
-			fmt.Printf("[ebuild  N    ] %s-%s [%s]\n", p.Name, p.Version, p.Slot.Name)
+			if e.Action == solver.ActionKeep {
+				continue
+			}
+			fmt.Printf("[ebuild  %s    ] %s-%s [%s]\n", e.Action, p.Name, p.Version, p.Slot.Name)
 		} else {
-			fmt.Printf("- %s-%s [slot:%s]\n", p.Name, p.Version, p.Slot.Name)
+			fmt.Printf("- %s-%s [slot:%s action:%s]\n", p.Name, p.Version, p.Slot.Name, e.Action)
 		}
+		displayed++
 	}
 
 	if pretend {
-		fmt.Printf("\nTotal: %d package(s)\n", len(solution))
+		fmt.Printf("\nTotal: %d package(s)\n", displayed)
 	}
 }
 
@@ -726,10 +732,16 @@ func (a *App) displayPlanAndAsk(solution solver.ResolveResult, pretend, ask bool
 	fmt.Println("\n*** Installation plan:")
 	fmt.Println("*** These are the packages that would be merged, in order:")
 	fmt.Println()
-	for name, pkg := range solution {
-		fmt.Printf("[ebuild  N    ] %s-%s to / USE=\"...\"\n", name, pkg.Version)
+	displayed := 0
+	for _, e := range solution {
+		p := e.Package
+		if e.Action == solver.ActionKeep {
+			continue
+		}
+		fmt.Printf("[ebuild  %s    ] %s-%s to / USE=\"...\"\n", e.Action, p.Name, p.Version)
+		displayed++
 	}
-	fmt.Printf("\nTotal: %d package(s)\n", len(solution))
+	fmt.Printf("\nTotal: %d package(s)\n", displayed)
 
 	if ask {
 		return a.askUserConfirmation()
@@ -765,8 +777,12 @@ func (a *App) executeInstallation(solution solver.ResolveResult, useBinpkg bool,
 	a.log.Action("Installing packages")
 	installedCount := 0
 
-	for name, p := range solution {
-		a.log.Installing(installedCount+1, len(solution), fmt.Sprintf("%s-%s (slot: %s)", name, p.Version, p.Slot))
+	for key, e := range solution {
+		p := e.Package
+		if e.Action == solver.ActionKeep {
+			continue
+		}
+		a.log.Installing(installedCount+1, len(solution), fmt.Sprintf("%s-%s (slot: %s)", key, p.Version, p.Slot))
 
 		// Search for binary package if requested
 		binpkgPath := ""
@@ -779,11 +795,11 @@ func (a *App) executeInstallation(solution solver.ResolveResult, useBinpkg bool,
 
 		// Install package using real installer
 		if err := a.installPackageReal(p, binpkgPath); err != nil {
-			return fmt.Errorf("failed to install %s: %w", name, err)
+			return fmt.Errorf("failed to install %s: %w", key, err)
 		}
 
 		installedCount++
-		a.log.Success("%s-%s installed successfully (%d/%d)", name, p.Version, installedCount, len(solution))
+		a.log.Success("%s-%s installed successfully (%d/%d)", key, p.Version, installedCount, len(solution))
 	}
 
 	a.log.Success("Installation completed: %d package(s) installed", installedCount)
@@ -798,8 +814,8 @@ func (a *App) handleSlotCollisions(solution solver.ResolveResult, writeChanges b
 	}
 
 	graph := solver.NewDependencyGraph()
-	for _, p := range solution {
-		graph.AddPackage(p, false)
+	for _, e := range solution {
+		graph.AddPackage(e.Package, false)
 	}
 
 	detector := solver.NewSlotCollisionDetector(graph, nil)

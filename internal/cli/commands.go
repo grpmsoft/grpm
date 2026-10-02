@@ -528,7 +528,8 @@ func (a *App) checkPackageForUpdate(pkgAtom string, r repo.Repository, db *state
 		return nil
 	}
 
-	for _, p := range satResult {
+	for _, e := range satResult {
+		p := e.Package
 		if p.Name == pkgAtom || p.Name == installedPkg.Package.Name {
 			return a.compareVersions(p, installedPkg, checkUse)
 		}

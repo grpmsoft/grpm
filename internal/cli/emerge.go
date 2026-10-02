@@ -144,7 +144,7 @@ func (a *App) runEmerge(args []string) error {
 				logging.Warn("Package %s not found: %v", name, loadErr)
 				continue
 			}
-			solution[pkg.SlotKeyOf(found)] = found
+			solution[pkg.SlotKeyOf(found)] = &solver.ResolveEntry{Package: found, Action: solver.ActionInstall}
 		}
 	} else {
 		// Resolve dependencies with Portage-compatible filtering
@@ -193,12 +193,13 @@ func (a *App) runEmerge(args []string) error {
 	}
 	fmt.Println()
 	for _, key := range buildOrder {
-		p := solution[key]
-		if p == nil {
+		e := solution[key]
+		if e == nil {
 			continue
 		}
+		p := e.Package
 		useStr := FormatUSEFlags(p, cfg)
-		fmt.Printf("[ebuild  N    ] %s-%s %s\n", p.Name, p.Version, useStr)
+		fmt.Printf("[ebuild  %s    ] %s-%s %s\n", e.Action, p.Name, p.Version, useStr)
 	}
 	fmt.Printf("\nTotal: %d package(s)\n", len(solution))
 
@@ -221,8 +222,8 @@ func (a *App) runEmerge(args []string) error {
 	// and per-package USE from package.use to each package's UseFlags map.
 	// Per Portage: USE_EXPAND vars like PYTHON_TARGETS="python3_12" are converted
 	// to USE flags like python_targets_python3_12.
-	for _, p := range solution {
-		ApplyEffectiveUSE(p, cfg)
+	for _, e := range solution {
+		ApplyEffectiveUSE(e.Package, cfg)
 	}
 
 	// Create fetcher for downloading sources (with mirrors from config)
@@ -305,7 +306,8 @@ func (a *App) buildPackagesParallel(solution solver.ResolveResult, parallelJobs 
 
 	// Create tasks for all packages (keyed by SlotKey to avoid slot collapse)
 	taskMap := make(map[pkg.SlotKey]*daemon.BuildTask)
-	for key, p := range solution {
+	for key, e := range solution {
+		p := e.Package
 		task := daemon.NewBuildTask(p)
 		taskMap[key] = task
 
@@ -319,7 +321,8 @@ func (a *App) buildPackagesParallel(solution solver.ResolveResult, parallelJobs 
 	}
 
 	// Add dependencies — look up by name+slot to avoid spurious cross-slot edges
-	for _, p := range solution {
+	for _, e := range solution {
+		p := e.Package
 		taskID := p.Name + "-" + p.Version
 		for _, dep := range p.Deps {
 			for _, depPkg := range solution.FindByDep(dep) {
@@ -518,8 +521,8 @@ func buildDepEdges(solution solver.ResolveResult) (inDegree map[pkg.SlotKey]int,
 	for key := range solution {
 		inDegree[key] = 0
 	}
-	for key, p := range solution {
-		for _, dep := range p.Deps {
+	for key, e := range solution {
+		for _, dep := range e.Package.Deps {
 			if dep.DepType == pkg.DepTypePostMerge {
 				continue
 			}
@@ -617,10 +620,11 @@ func (a *App) buildAndInstallPackages(solution solver.ResolveResult, repoPath, d
 
 	pkgNum := 0
 	for _, key := range ordered {
-		p := solution[key]
-		if p == nil {
+		e := solution[key]
+		if e == nil {
 			continue
 		}
+		p := e.Package
 		pkgNum++
 		label := p.Name + "-" + p.Version
 		logging.Action("(%d/%d) Emerging %s", pkgNum, totalPackages, label)
@@ -886,11 +890,11 @@ func (a *App) filterTargetPackages(solution solver.ResolveResult, packages []str
 	}
 
 	filtered := make(solver.ResolveResult)
-	for key, p := range solution {
+	for key, e := range solution {
 		if !targetNames[key.Name] {
-			filtered[key] = p
+			filtered[key] = e
 		} else if a.verbose {
-			logging.Debug("--onlydeps: excluding target package %s-%s", p.Name, p.Version)
+			logging.Debug("--onlydeps: excluding target package %s-%s", e.Package.Name, e.Package.Version)
 		}
 	}
 
@@ -962,7 +966,8 @@ func (a *App) checkBuildTools(solution solver.ResolveResult, repoPath string) er
 
 	// Collect all eclasses from all packages
 	allEclasses := make(map[string]bool)
-	for _, p := range solution {
+	for _, e := range solution {
+		p := e.Package
 		ebuildPath := a.findEbuildFile(p, repoPath)
 		if ebuildPath == "" {
 			continue

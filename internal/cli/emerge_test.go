@@ -289,7 +289,7 @@ func TestFilterTargetPackages(t *testing.T) {
 	}{
 		{
 			name:             "filter simple package name",
-			solution:         solver.ResolveResult{sk("app-misc/hello", "0"): hello, sk("sys-libs/zlib", "0"): zlib},
+			solution:         solver.ResolveResult{sk("app-misc/hello", "0"): &solver.ResolveEntry{Package: hello, Action: solver.ActionInstall}, sk("sys-libs/zlib", "0"): &solver.ResolveEntry{Package: zlib, Action: solver.ActionInstall}},
 			packages:         []string{"app-misc/hello"},
 			wantLen:          1,
 			shouldBeFiltered: []string{"app-misc/hello"},
@@ -297,7 +297,7 @@ func TestFilterTargetPackages(t *testing.T) {
 		},
 		{
 			name:             "filter versioned atom",
-			solution:         solver.ResolveResult{sk("sys-devel/gcc", "13"): gcc, sk("sys-libs/zlib", "0"): zlib},
+			solution:         solver.ResolveResult{sk("sys-devel/gcc", "13"): &solver.ResolveEntry{Package: gcc, Action: solver.ActionInstall}, sk("sys-libs/zlib", "0"): &solver.ResolveEntry{Package: zlib, Action: solver.ActionInstall}},
 			packages:         []string{"=sys-devel/gcc-13.4.1_p20250807"},
 			wantLen:          1,
 			shouldBeFiltered: []string{"sys-devel/gcc"},
@@ -305,7 +305,7 @@ func TestFilterTargetPackages(t *testing.T) {
 		},
 		{
 			name:             "filter multiple packages",
-			solution:         solver.ResolveResult{sk("app-misc/hello", "0"): hello, sk("sys-libs/zlib", "0"): zlib, sk("sys-devel/gcc", "13"): gcc},
+			solution:         solver.ResolveResult{sk("app-misc/hello", "0"): &solver.ResolveEntry{Package: hello, Action: solver.ActionInstall}, sk("sys-libs/zlib", "0"): &solver.ResolveEntry{Package: zlib, Action: solver.ActionInstall}, sk("sys-devel/gcc", "13"): &solver.ResolveEntry{Package: gcc, Action: solver.ActionInstall}},
 			packages:         []string{"app-misc/hello", "sys-devel/gcc"},
 			wantLen:          1,
 			shouldBeFiltered: []string{"app-misc/hello", "sys-devel/gcc"},
@@ -313,7 +313,7 @@ func TestFilterTargetPackages(t *testing.T) {
 		},
 		{
 			name:             "filter with >= operator",
-			solution:         solver.ResolveResult{sk("sys-devel/gcc", "13"): gcc, sk("sys-libs/zlib", "0"): zlib},
+			solution:         solver.ResolveResult{sk("sys-devel/gcc", "13"): &solver.ResolveEntry{Package: gcc, Action: solver.ActionInstall}, sk("sys-libs/zlib", "0"): &solver.ResolveEntry{Package: zlib, Action: solver.ActionInstall}},
 			packages:         []string{">=sys-devel/gcc-13.0.0"},
 			wantLen:          1,
 			shouldBeFiltered: []string{"sys-devel/gcc"},
@@ -321,7 +321,7 @@ func TestFilterTargetPackages(t *testing.T) {
 		},
 		{
 			name:             "all packages filtered",
-			solution:         solver.ResolveResult{sk("app-misc/hello", "0"): hello},
+			solution:         solver.ResolveResult{sk("app-misc/hello", "0"): &solver.ResolveEntry{Package: hello, Action: solver.ActionInstall}},
 			packages:         []string{"app-misc/hello"},
 			wantLen:          0,
 			shouldBeFiltered: []string{"app-misc/hello"},
@@ -329,7 +329,7 @@ func TestFilterTargetPackages(t *testing.T) {
 		},
 		{
 			name:             "no packages filtered (target not in solution)",
-			solution:         solver.ResolveResult{sk("sys-libs/zlib", "0"): zlib},
+			solution:         solver.ResolveResult{sk("sys-libs/zlib", "0"): &solver.ResolveEntry{Package: zlib, Action: solver.ActionInstall}},
 			packages:         []string{"app-misc/hello"},
 			wantLen:          1,
 			shouldBeFiltered: []string{},
@@ -369,8 +369,8 @@ func TestTopologicalSort(t *testing.T) {
 		hello.Deps = []pkg.Constraint{{Name: "sys-libs/zlib"}}
 
 		solution := solver.ResolveResult{
-			sk("app-misc/hello", "0"): hello,
-			sk("sys-libs/zlib", "0"):  zlib,
+			sk("app-misc/hello", "0"): &solver.ResolveEntry{Package: hello, Action: solver.ActionInstall},
+			sk("sys-libs/zlib", "0"):  &solver.ResolveEntry{Package: zlib, Action: solver.ActionInstall},
 		}
 
 		order := topologicalSort(solution)
@@ -395,7 +395,7 @@ func TestTopologicalSort(t *testing.T) {
 		a := pkg.NewPackage("cat/a", "1.0", "0")
 		a.Deps = []pkg.Constraint{{Name: "cat/b"}}
 
-		solution := solver.ResolveResult{sk("cat/a", "0"): a, sk("cat/b", "0"): b, sk("cat/c", "0"): c}
+		solution := solver.ResolveResult{sk("cat/a", "0"): &solver.ResolveEntry{Package: a, Action: solver.ActionInstall}, sk("cat/b", "0"): &solver.ResolveEntry{Package: b, Action: solver.ActionInstall}, sk("cat/c", "0"): &solver.ResolveEntry{Package: c, Action: solver.ActionInstall}}
 		order := topologicalSort(solution)
 
 		idx := make(map[string]int)
@@ -409,9 +409,9 @@ func TestTopologicalSort(t *testing.T) {
 
 	t.Run("no deps — deterministic sorted order", func(t *testing.T) {
 		solution := solver.ResolveResult{
-			sk("z/pkg", "0"): pkg.NewPackage("z/pkg", "1.0", "0"),
-			sk("a/pkg", "0"): pkg.NewPackage("a/pkg", "1.0", "0"),
-			sk("m/pkg", "0"): pkg.NewPackage("m/pkg", "1.0", "0"),
+			sk("z/pkg", "0"): &solver.ResolveEntry{Package: pkg.NewPackage("z/pkg", "1.0", "0"), Action: solver.ActionInstall},
+			sk("a/pkg", "0"): &solver.ResolveEntry{Package: pkg.NewPackage("a/pkg", "1.0", "0"), Action: solver.ActionInstall},
+			sk("m/pkg", "0"): &solver.ResolveEntry{Package: pkg.NewPackage("m/pkg", "1.0", "0"), Action: solver.ActionInstall},
 		}
 		order := topologicalSort(solution)
 		if order[0].Name != "a/pkg" || order[1].Name != "m/pkg" || order[2].Name != "z/pkg" {
@@ -432,7 +432,7 @@ func TestTopologicalSort(t *testing.T) {
 		a.Deps = []pkg.Constraint{{Name: "cat/b", DepType: pkg.DepTypeRuntime}}
 		b.Deps = []pkg.Constraint{{Name: "cat/a", DepType: pkg.DepTypePostMerge}}
 
-		solution := solver.ResolveResult{sk("cat/a", "0"): a, sk("cat/b", "0"): b}
+		solution := solver.ResolveResult{sk("cat/a", "0"): &solver.ResolveEntry{Package: a, Action: solver.ActionInstall}, sk("cat/b", "0"): &solver.ResolveEntry{Package: b, Action: solver.ActionInstall}}
 		order := topologicalSort(solution)
 
 		idx := make(map[string]int)
@@ -454,7 +454,7 @@ func TestTopologicalSort(t *testing.T) {
 		c.Deps = []pkg.Constraint{{Name: "cat/a", DepType: pkg.DepTypeRuntime}}
 		d.Deps = []pkg.Constraint{{Name: "cat/a", DepType: pkg.DepTypeRuntime}}
 
-		solution := solver.ResolveResult{sk("cat/a", "0"): a, sk("cat/b", "0"): b, sk("cat/c", "0"): c, sk("cat/d", "0"): d}
+		solution := solver.ResolveResult{sk("cat/a", "0"): &solver.ResolveEntry{Package: a, Action: solver.ActionInstall}, sk("cat/b", "0"): &solver.ResolveEntry{Package: b, Action: solver.ActionInstall}, sk("cat/c", "0"): &solver.ResolveEntry{Package: c, Action: solver.ActionInstall}, sk("cat/d", "0"): &solver.ResolveEntry{Package: d, Action: solver.ActionInstall}}
 
 		first := topologicalSort(solution)
 		for i := range 20 {

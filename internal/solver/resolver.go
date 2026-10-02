@@ -15,14 +15,49 @@ import (
 
 // ResolveResult is the result of dependency resolution: packages keyed by installation slot.
 // Two packages with the same SlotKey cannot coexist; different SlotKeys can.
-type ResolveResult map[pkg.SlotKey]*pkg.Package
+type PackageAction int
+
+const (
+	ActionInstall PackageAction = iota
+	ActionUpgrade
+	ActionKeep
+	ActionRemove
+)
+
+func (a PackageAction) String() string {
+	switch a {
+	case ActionInstall:
+		return "N"
+	case ActionUpgrade:
+		return "U"
+	case ActionKeep:
+		return "K"
+	case ActionRemove:
+		return "R"
+	default:
+		return "?"
+	}
+}
+
+type ResolveEntry struct {
+	Package *pkg.Package
+	Action  PackageAction
+}
+type ResolveResult map[pkg.SlotKey]*ResolveEntry
+
+func (s ResolveResult) PackageAt(key pkg.SlotKey) *pkg.Package {
+	if e, ok := s[key]; ok && e != nil {
+		return e.Package
+	}
+	return nil
+}
 
 // FindByName returns all packages with the given name across all slots.
 func (s ResolveResult) FindByName(name string) []*pkg.Package {
 	var result []*pkg.Package
-	for key, p := range s {
-		if key.Name == name {
-			result = append(result, p)
+	for key, e := range s {
+		if key.Name == name && e != nil {
+			result = append(result, e.Package)
 		}
 	}
 	return result
@@ -33,14 +68,16 @@ func (s ResolveResult) FindByName(name string) []*pkg.Package {
 func (s ResolveResult) FindByDep(dep pkg.Constraint) []*pkg.Package {
 	isOperator := dep.Slot == "=" || dep.Slot == "*"
 	var result []*pkg.Package
-	for key, p := range s {
+	for key, e := range s {
 		if key.Name != dep.Name {
 			continue
 		}
 		if dep.Slot != "" && !isOperator && key.Slot != dep.Slot {
 			continue
 		}
-		result = append(result, p)
+		if e != nil {
+			result = append(result, e.Package)
+		}
 	}
 	return result
 }
@@ -474,6 +511,20 @@ func (r *PortageResolver) addRootConstraints(adapter *GophersatAdapter, rootPack
 	}
 }
 
+func (r *PortageResolver) determineAction(p *pkg.Package) PackageAction {
+	if r.installedDB == nil {
+		return ActionInstall
+	}
+	installed := r.installedDB.GetInstalledVersion(p.Name)
+	if installed == nil || installed.Package == nil {
+		return ActionInstall
+	}
+	if installed.Package.Version == p.Version && installed.Package.Slot.Name == p.Slot.Name {
+		return ActionKeep
+	}
+	return ActionUpgrade
+}
+
 // buildResultFromSolution builds the final result map from the SAT solution.
 // The solution map contains package names as keys and selected versions as values.
 // allCandidates provides a fallback for installed packages that may not be in the repo.
@@ -507,7 +558,7 @@ func (r *PortageResolver) buildResultFromSolution(solution map[string]string, al
 				}
 			}
 		}
-		result[pkg.SlotKeyOf(p)] = p
+		result[pkg.SlotKeyOf(p)] = &ResolveEntry{Package: p, Action: r.determineAction(p)}
 	}
 	return result, nil
 }
@@ -782,11 +833,13 @@ func (r *PortageResolver) tryExpandOrGroups(adapter *GophersatAdapter, allPackag
 func (r *PortageResolver) postSATSafetyNet(result ResolveResult) (ResolveResult, error) {
 	for pass := 1; pass <= 10; pass++ {
 		added := 0
-		currentPkgs := make([]*pkg.Package, 0, len(result))
-		for _, p := range result {
-			currentPkgs = append(currentPkgs, p)
+		currentEntries := make([]*ResolveEntry, 0, len(result))
+		for _, ent := range result {
+			currentEntries = append(currentEntries, ent)
 		}
-		for _, p := range currentPkgs {
+
+		for _, ent := range currentEntries {
+			p := ent.Package
 			requiredDeps, orGroups := groupDependenciesByOrGroupID(p.Deps)
 			for _, dep := range requiredDeps {
 				depPkg, err := r.loadUnmaskedPackage(dep.Name)
@@ -797,7 +850,7 @@ func (r *PortageResolver) postSATSafetyNet(result ResolveResult) (ResolveResult,
 				if _, inResult := result[depKey]; inResult {
 					continue
 				}
-				result[depKey] = depPkg
+				result[depKey] = &ResolveEntry{Package: depPkg, Action: r.determineAction(depPkg)}
 				added++
 			}
 			for _, alternatives := range orGroups {
@@ -820,7 +873,7 @@ func (r *PortageResolver) postSATSafetyNet(result ResolveResult) (ResolveResult,
 					if err != nil {
 						continue
 					}
-					result[pkg.SlotKeyOf(altPkg)] = altPkg
+					result[pkg.SlotKeyOf(altPkg)] = &ResolveEntry{Package: altPkg, Action: r.determineAction(altPkg)}
 					added++
 					break
 				}
@@ -836,8 +889,9 @@ func (r *PortageResolver) postSATSafetyNet(result ResolveResult) (ResolveResult,
 	}
 
 	logging.Info("Resolved packages:")
-	for key, p := range result {
-		logging.Debug("- %s-%s [slot:%s key:%s:%s]", p.Name, p.Version, p.Slot.Name, key.Name, key.Slot)
+	for key, ent := range result {
+		p := ent.Package
+		logging.Debug("- %s-%s [slot:%s key:%s:%s action:%s]", p.Name, p.Version, p.Slot.Name, key.Name, key.Slot, ent.Action)
 	}
 
 	return result, nil

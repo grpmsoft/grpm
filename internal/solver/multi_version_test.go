@@ -113,12 +113,12 @@ func TestMultiVersionSAT_ChoosesNewest(t *testing.T) {
 	resolver := NewResolver(r)
 	result := resolveClean(t, resolver, []string{"sys-libs/zlib"})
 
-	slotResult := result
 	key := pkg.SlotKey{Name: "sys-libs/zlib", Slot: "0"}
-	p, ok := slotResult[key]
+	entry, ok := result[key]
 	if !ok {
 		t.Fatalf("expected SlotKey %v in result", key)
 	}
+	p := entry.Package
 
 	// Without MAX-SAT optimization (task 014), SAT may pick any valid version.
 	// Verify correctness: exactly one zlib selected, and it's one of the candidates.
@@ -127,8 +127,8 @@ func TestMultiVersionSAT_ChoosesNewest(t *testing.T) {
 		t.Errorf("expected one of {1.2.13, 1.3.0, 1.3.1}, got %s", p.Version)
 	}
 	count := 0
-	for _, rp := range result {
-		if rp.Name == "sys-libs/zlib" {
+	for _, re := range result {
+		if re.Package.Name == "sys-libs/zlib" {
 			count++
 		}
 	}
@@ -161,8 +161,6 @@ func TestMultiVersionSAT_MultiSlotCoexist(t *testing.T) {
 
 	result := resolveClean(t, resolver, []string{"app-misc/myapp"})
 
-	slotResult := result
-
 	// MUST FAIL: current resolver stores one version per cat/pkg name.
 	// With multi-slot, both python:3.12 and python:3.13 should coexist.
 	key312 := pkg.SlotKey{Name: "dev-lang/python", Slot: "3.12"}
@@ -170,17 +168,18 @@ func TestMultiVersionSAT_MultiSlotCoexist(t *testing.T) {
 
 	has312 := false
 	has313 := false
-	if _, ok := slotResult[key312]; ok {
+	if _, ok := result[key312]; ok {
 		has312 = true
 	}
-	if _, ok := slotResult[key313]; ok {
+	if _, ok := result[key313]; ok {
 		has313 = true
 	}
 
 	if !has312 || !has313 {
 		// Debug: dump result keys
 		t.Logf("result keys:")
-		for k, p := range result {
+		for k, re := range result {
+			p := re.Package
 			t.Logf("  key={Name:%q Slot:%q} → %s-%s slot=%s", k.Name, k.Slot, p.Name, p.Version, p.Slot.Name)
 		}
 		t.Errorf("expected both python:3.12 and python:3.13 in result, got312=%v got313=%v",
@@ -197,9 +196,8 @@ func TestMultiVersionSAT_AtMostOnePerSlot(t *testing.T) {
 	resolver := NewResolver(r)
 	result := resolveClean(t, resolver, []string{"dev-libs/openssl"})
 
-	slotResult := result
 	count := 0
-	for key := range slotResult {
+	for key := range result {
 		if key.Name == "dev-libs/openssl" {
 			count++
 		}
@@ -231,20 +229,19 @@ func TestMultiVersionSAT_ImplicationNotUnconditional(t *testing.T) {
 	resolver := NewResolver(r)
 	result := resolveClean(t, resolver, []string{"app-misc/app"})
 
-	slotResult := result
-
 	// Without MAX-SAT, SAT may pick v1 or v2. Check that whichever was picked
 	// has ONLY its own deps pulled (implication correctness).
 	appKey := pkg.SlotKey{Name: "app-misc/app", Slot: "0"}
-	p, ok := slotResult[appKey]
+	entry, ok := result[appKey]
 	if !ok {
 		t.Fatalf("expected app in result")
 	}
+	p := entry.Package
 
 	libAKey := pkg.SlotKey{Name: "dev-libs/liba", Slot: "0"}
 	libBKey := pkg.SlotKey{Name: "dev-libs/libb", Slot: "0"}
-	_, hasA := slotResult[libAKey]
-	_, hasB := slotResult[libBKey]
+	_, hasA := result[libAKey]
+	_, hasB := result[libBKey]
 
 	switch p.Version {
 	case "1.0":
@@ -298,12 +295,12 @@ func TestMultiVersionSAT_SATSeesMultipleCandidates(t *testing.T) {
 	// Verify that SAT actually considered multiple versions (not just one).
 	// The proof: if we resolve with >=2.13, older candidate is excluded.
 	// But first, basic: result should have the newest.
-	slotResult := result
 	key := pkg.SlotKey{Name: "dev-libs/libxml2", Slot: "0"}
-	p, ok := slotResult[key]
+	entry, ok := result[key]
 	if !ok {
 		t.Fatal("expected libxml2 in result")
 	}
+	p := entry.Package
 
 	// Without MAX-SAT optimization, SAT may pick any valid version.
 	// Verify correctness: libxml2 is present and is one of the candidates.
@@ -346,22 +343,21 @@ func TestImplication_MultiVersion_OnlySelectedVersionDepsPulled(t *testing.T) {
 	resolver := NewResolver(r)
 	result := resolveClean(t, resolver, []string{"app-misc/myutil"})
 
-	slotResult := result
-
 	// Without MAX-SAT, SAT may pick v1 or v2. Check that ONLY the selected
 	// version's deps are present (implication correctness).
 	appKey := pkg.SlotKey{Name: "app-misc/myutil", Slot: "0"}
-	p, ok := slotResult[appKey]
+	entry, ok := result[appKey]
 	if !ok {
 		t.Fatal("expected app-misc/myutil in result")
 	}
+	p := entry.Package
 
 	libXKey := pkg.SlotKey{Name: "dev-libs/libx", Slot: "0"}
 	libYKey := pkg.SlotKey{Name: "dev-libs/liby", Slot: "0"}
 	libZKey := pkg.SlotKey{Name: "dev-libs/libz", Slot: "0"}
-	_, hasX := slotResult[libXKey]
-	_, hasY := slotResult[libYKey]
-	_, hasZ := slotResult[libZKey]
+	_, hasX := result[libXKey]
+	_, hasY := result[libYKey]
+	_, hasZ := result[libZKey]
 
 	switch p.Version {
 	case "1.0":
@@ -405,27 +401,28 @@ func TestAtMostOnePerSlot_PairwiseExclusion(t *testing.T) {
 
 	// Count how many glibc versions are in the result
 	count := 0
-	for _, p := range result {
-		if p.Name == "sys-libs/glibc" {
+	for _, re := range result {
+		if re.Package.Name == "sys-libs/glibc" {
 			count++
 		}
 	}
 
 	if count != 1 {
 		t.Errorf("expected exactly 1 glibc in result, got %d", count)
-		for k, p := range result {
+		for k, re := range result {
+			p := re.Package
 			t.Logf("  key={Name:%q Slot:%q} %s-%s", k.Name, k.Slot, p.Name, p.Version)
 		}
 	}
 
 	// Without MAX-SAT, SAT may pick any valid version.
 	// Verify correctness: exactly one glibc, and it's one of the candidates.
-	slotResult := result
 	key := pkg.SlotKey{Name: "sys-libs/glibc", Slot: "0"}
-	p, ok := slotResult[key]
+	entry, ok := result[key]
 	if !ok {
 		t.Fatal("expected glibc in slot result")
 	}
+	p := entry.Package
 	validVersions := map[string]bool{"2.37": true, "2.38": true, "2.39": true}
 	if !validVersions[p.Version] {
 		t.Errorf("expected one of {2.37, 2.38, 2.39}, got %s", p.Version)
@@ -457,14 +454,13 @@ func TestMultiVersionSAT_DepVersionConstraintSatisfied(t *testing.T) {
 	resolver := NewResolver(r)
 	result := resolveClean(t, resolver, []string{"app-misc/sslapp"})
 
-	slotResult := result
-
 	// openssl should be in the result
 	opensslKey := pkg.SlotKey{Name: "dev-libs/openssl", Slot: "0"}
-	p, ok := slotResult[opensslKey]
+	entry, ok := result[opensslKey]
 	if !ok {
 		t.Fatal("expected openssl in result")
 	}
+	p := entry.Package
 
 	// The selected version must satisfy >=3.0.14
 	if pkg.CompareVersions(p.Version, "3.0.14") < 0 {
@@ -504,23 +500,21 @@ func TestMultiVersionSAT_TransitiveDeps(t *testing.T) {
 	resolver := NewResolver(r)
 	result := resolveClean(t, resolver, []string{"app-misc/transapp"})
 
-	slotResult := result
-
 	// App should be in result
 	appKey := pkg.SlotKey{Name: "app-misc/transapp", Slot: "0"}
-	if _, ok := slotResult[appKey]; !ok {
+	if _, ok := result[appKey]; !ok {
 		t.Error("expected app-misc/transapp in result")
 	}
 
 	// mylib should be in result (exactly one version)
 	libKey := pkg.SlotKey{Name: "dev-libs/mylib", Slot: "0"}
-	if _, ok := slotResult[libKey]; !ok {
+	if _, ok := result[libKey]; !ok {
 		t.Error("expected dev-libs/mylib in result")
 	}
 
 	// util should be in result (transitive dep)
 	utilKey := pkg.SlotKey{Name: "dev-libs/util", Slot: "0"}
-	if _, ok := slotResult[utilKey]; !ok {
+	if _, ok := result[utilKey]; !ok {
 		t.Error("expected dev-libs/util in result (transitive dep)")
 	}
 }
@@ -698,27 +692,26 @@ func TestFix_AllCandidatesDepsLoaded(t *testing.T) {
 	resolver := NewResolver(r)
 	result := resolveClean(t, resolver, []string{"app-misc/constrained"})
 
-	slotResult := result
-
 	// SAT should pick lib v1 (only version satisfying <2.0)
 	libKey := pkg.SlotKey{Name: "dev-libs/lib", Slot: "0"}
-	p, ok := slotResult[libKey]
+	entry, ok := result[libKey]
 	if !ok {
 		t.Fatal("expected lib in result")
 	}
+	p := entry.Package
 	if p.Version != "1.0" {
 		t.Errorf("expected lib 1.0 (constrained by <2.0), got %s", p.Version)
 	}
 
 	// old-only MUST be in result — it's lib v1's dep, loaded by SAT (not post-pass)
 	oldKey := pkg.SlotKey{Name: "dev-libs/old-only", Slot: "0"}
-	if _, ok := slotResult[oldKey]; !ok {
+	if _, ok := result[oldKey]; !ok {
 		t.Error("old-only should be in result — dep of selected lib v1")
 	}
 
 	// new-only should NOT be in result — lib v2 wasn't selected
 	newKey := pkg.SlotKey{Name: "dev-libs/new-only", Slot: "0"}
-	if _, ok := slotResult[newKey]; ok {
+	if _, ok := result[newKey]; ok {
 		t.Error("new-only should NOT be in result — dep of unselected lib v2")
 	}
 }
@@ -786,12 +779,12 @@ func TestFix_RootBacktracksOnConflict(t *testing.T) {
 	resolver := NewResolver(r)
 	result := resolveClean(t, resolver, []string{"app-misc/flex"})
 
-	slotResult := result
 	appKey := pkg.SlotKey{Name: "app-misc/flex", Slot: "0"}
-	p, ok := slotResult[appKey]
+	entry, ok := result[appKey]
 	if !ok {
 		t.Fatal("expected app in result")
 	}
+	p := entry.Package
 	if p.Version != "1.0" {
 		t.Errorf("expected v1.0 (backtracked from unsatisfiable v2), got %s", p.Version)
 	}
@@ -829,19 +822,17 @@ func TestFix_ORGroupDepsExplored(t *testing.T) {
 	resolver := NewResolver(r)
 	result := resolveClean(t, resolver, []string{"app-misc/orapp"})
 
-	slotResult := result
-
 	// App must be in result
 	appKey := pkg.SlotKey{Name: "app-misc/orapp", Slot: "0"}
-	if _, ok := slotResult[appKey]; !ok {
+	if _, ok := result[appKey]; !ok {
 		t.Fatal("expected orapp in result")
 	}
 
 	// At least one of a or b must be in result (SAT picks one)
 	aKey := pkg.SlotKey{Name: "dev-libs/a", Slot: "0"}
 	bKey := pkg.SlotKey{Name: "dev-libs/b", Slot: "0"}
-	_, hasA := slotResult[aKey]
-	_, hasB := slotResult[bKey]
+	_, hasA := result[aKey]
+	_, hasB := result[bKey]
 	if !hasA && !hasB {
 		t.Error("expected at least one of a or b in result (OR-group)")
 	}
@@ -849,13 +840,13 @@ func TestFix_ORGroupDepsExplored(t *testing.T) {
 	// Selected alternative's transitive dep must be present
 	if hasA {
 		xKey := pkg.SlotKey{Name: "dev-libs/x", Slot: "0"}
-		if _, ok := slotResult[xKey]; !ok {
+		if _, ok := result[xKey]; !ok {
 			t.Error("a selected but its dep x missing — OR deps not explored")
 		}
 	}
 	if hasB {
 		yKey := pkg.SlotKey{Name: "dev-libs/y", Slot: "0"}
-		if _, ok := slotResult[yKey]; !ok {
+		if _, ok := result[yKey]; !ok {
 			t.Error("b selected but its dep y missing — OR deps not explored")
 		}
 	}
@@ -873,12 +864,12 @@ func TestFix_RootRespectsAtomConstraint(t *testing.T) {
 	resolver := NewResolver(r)
 	result := resolveClean(t, resolver, []string{"=app-misc/pinned-1.0"})
 
-	slotResult := result
 	key := pkg.SlotKey{Name: "app-misc/pinned", Slot: "0"}
-	p, ok := slotResult[key]
+	entry, ok := result[key]
 	if !ok {
 		t.Fatal("expected pinned in result")
 	}
+	p := entry.Package
 	if p.Version != "1.0" {
 		t.Errorf("expected 1.0 (exact atom), got %s — root at-least-one ignores atom", p.Version)
 	}
@@ -899,9 +890,8 @@ func TestFix_PostSATPassAddsNothing(t *testing.T) {
 	result := resolveClean(t, resolver, []string{"app-misc/complete"})
 
 	// dep should already be in result from SAT, not added by post-pass
-	slotResult := result
 	depKey := pkg.SlotKey{Name: "dev-libs/dep", Slot: "0"}
-	if _, ok := slotResult[depKey]; !ok {
+	if _, ok := result[depKey]; !ok {
 		t.Error("dep should be in SAT result directly, not requiring post-pass")
 	}
 
@@ -922,18 +912,18 @@ func TestFix_RootRespectsSlotAtom(t *testing.T) {
 	resolver := NewResolver(r)
 	result := resolveClean(t, resolver, []string{"dev-lang/py:3.13"})
 
-	slotResult := result
 	key := pkg.SlotKey{Name: "dev-lang/py", Slot: "3.13"}
-	p, ok := slotResult[key]
+	entry, ok := result[key]
 	if !ok {
-		t.Fatalf("expected py:3.13 in result, got keys: %v", slotResult)
+		t.Fatalf("expected py:3.13 in result, got keys: %v", result)
 	}
+	p := entry.Package
 	if p.Version != "3.13.0" {
 		t.Errorf("expected 3.13.0, got %s", p.Version)
 	}
 
 	// Other slots must NOT be in result
-	for k := range slotResult {
+	for k := range result {
 		if k.Name == "dev-lang/py" && k.Slot != "3.13" {
 			t.Errorf("unexpected slot %s in result — only :3.13 requested", k.Slot)
 		}
@@ -967,9 +957,8 @@ func TestFix_SlotOperatorResolves(t *testing.T) {
 	resolver := NewResolver(r)
 	result := resolveClean(t, resolver, []string{"app-misc/ssluser"})
 
-	slotResult := result
 	sslKey := pkg.SlotKey{Name: "dev-libs/openssl", Slot: "0"}
-	if _, ok := slotResult[sslKey]; !ok {
+	if _, ok := result[sslKey]; !ok {
 		t.Error("openssl should be in result — := means any slot, not literal '='")
 	}
 }
@@ -994,9 +983,8 @@ func TestFix_SlotStarOperatorResolves(t *testing.T) {
 	resolver := NewResolver(r)
 	result := resolveClean(t, resolver, []string{"app-misc/staruser"})
 
-	slotResult := result
 	libKey := pkg.SlotKey{Name: "dev-libs/mylib", Slot: "5"}
-	if _, ok := slotResult[libKey]; !ok {
+	if _, ok := result[libKey]; !ok {
 		t.Error("mylib should be in result — :* means any slot")
 	}
 }
@@ -1022,12 +1010,12 @@ func TestFix_VersionedSlotOperatorResolves(t *testing.T) {
 	resolver := NewResolver(r)
 	result := resolveClean(t, resolver, []string{"app-misc/versslot"})
 
-	slotResult := result
 	sslKey := pkg.SlotKey{Name: "dev-libs/openssl", Slot: "0"}
-	p, ok := slotResult[sslKey]
+	entry, ok := result[sslKey]
 	if !ok {
 		t.Fatal("openssl should be in result")
 	}
+	p := entry.Package
 	if pkg.CompareVersions(p.Version, "3.0") < 0 {
 		t.Errorf("expected openssl >= 3.0, got %s", p.Version)
 	}
@@ -1572,10 +1560,11 @@ func TestBlocker_VersionedBlockerMatchesCorrectly(t *testing.T) {
 	// foo must be in result (it's a dependency), but ONLY version 1.0
 	// because >=2.0 are blocked
 	fooKey := pkg.SlotKey{Name: "dev-libs/foo", Slot: "0"}
-	p, ok := result[fooKey]
+	entry, ok := result[fooKey]
 	if !ok {
 		t.Fatal("expected foo in result (it's a dep of bar)")
 	}
+	p := entry.Package
 	if p.Version != "1.0" {
 		t.Errorf("expected foo 1.0 (>=2.0 blocked), got %s", p.Version)
 	}
@@ -1723,18 +1712,18 @@ func TestBlocker_OldVersionBlocksNewDoesNot(t *testing.T) {
 	resolver := NewResolver(r)
 	result := resolveClean(t, resolver, []string{"app/a"})
 
-	slotResult := result
 	aKey := pkg.SlotKey{Name: "app/a", Slot: "0"}
-	p, ok := slotResult[aKey]
+	entry, ok := result[aKey]
 	if !ok {
 		t.Fatal("expected app/a in result")
 	}
+	p := entry.Package
 	if p.Version != "2.0" {
 		t.Errorf("expected a-2.0 (no blocker), got %s — SAT should backtrack from a-1.0 which blocks b", p.Version)
 	}
 
 	bKey := pkg.SlotKey{Name: "dev-libs/b", Slot: "0"}
-	if _, ok := slotResult[bKey]; !ok {
+	if _, ok := result[bKey]; !ok {
 		t.Error("expected dev-libs/b in result — a-2.0 depends on it")
 	}
 }
@@ -1832,10 +1821,11 @@ func TestVDB_InstalledPackageAsCandidate(t *testing.T) {
 
 	// The solver should pick one of {3.0.13, 3.0.14, 3.0.15}
 	key := pkg.SlotKey{Name: "dev-libs/openssl", Slot: "0"}
-	p, ok := result[key]
+	entry, ok := result[key]
 	if !ok {
 		t.Fatal("expected openssl in result")
 	}
+	p := entry.Package
 
 	validVersions := map[string]bool{"3.0.13": true, "3.0.14": true, "3.0.15": true}
 	if !validVersions[p.Version] {
@@ -1871,10 +1861,11 @@ func TestVDB_InstalledOnlyVersion(t *testing.T) {
 	result := resolveClean(t, resolver, []string{"app-misc/user"})
 
 	legacyKey := pkg.SlotKey{Name: "dev-libs/legacy", Slot: "0"}
-	p, ok := result[legacyKey]
+	entry, ok := result[legacyKey]
 	if !ok {
 		t.Fatal("expected dev-libs/legacy in result — should be injected from VDB")
 	}
+	p := entry.Package
 	if p.Version != "1.0" {
 		t.Errorf("expected legacy 1.0, got %s", p.Version)
 	}
@@ -2008,10 +1999,11 @@ func TestUseDeps_RequireFlag(t *testing.T) {
 	resolver := NewResolver(r)
 	result := resolveClean(t, resolver, []string{"app-misc/myapp"})
 	key := pkg.SlotKey{Name: "dev-libs/openssl", Slot: "0"}
-	p, ok := result[key]
+	entry, ok := result[key]
 	if !ok {
 		t.Fatal("expected openssl in result")
 	}
+	p := entry.Package
 	if p.Version != "3.0.14" {
 		t.Errorf("expected openssl-3.0.14 (ssl=true), got %s", p.Version)
 	}
@@ -2038,10 +2030,11 @@ func TestUseDeps_BlockFlag(t *testing.T) {
 	resolver := NewResolver(r)
 	result := resolveClean(t, resolver, []string{"app-misc/myapp"})
 	key := pkg.SlotKey{Name: "dev-libs/openssl", Slot: "0"}
-	p, ok := result[key]
+	entry, ok := result[key]
 	if !ok {
 		t.Fatal("expected openssl in result")
 	}
+	p := entry.Package
 	if p.Version != "3.0.15" {
 		t.Errorf("expected openssl-3.0.15 (debug=false), got %s", p.Version)
 	}
@@ -2125,10 +2118,11 @@ func TestUseDeps_CombinedRequireAndBlock(t *testing.T) {
 	resolver := NewResolver(r)
 	result := resolveClean(t, resolver, []string{"app-misc/myapp"})
 	key := pkg.SlotKey{Name: "dev-libs/openssl", Slot: "0"}
-	p, ok := result[key]
+	entry, ok := result[key]
 	if !ok {
 		t.Fatal("expected openssl in result")
 	}
+	p := entry.Package
 	if p.Version != "3.0.15" {
 		t.Errorf("expected openssl-3.0.15 (ssl=true, debug=false), got %s", p.Version)
 	}
@@ -2158,10 +2152,11 @@ func TestUseDeps_SlotConstraint(t *testing.T) {
 	}
 	// PostPassAdded may be >0 for slot deps (known resolver behavior, not USE dep issue)
 	key := pkg.SlotKey{Name: "dev-lang/python", Slot: "3.12"}
-	p, ok := result[key]
+	entry, ok := result[key]
 	if !ok {
 		t.Fatal("expected python:3.12 in result")
 	}
+	p := entry.Package
 	if p.Version != "3.12.7" {
 		t.Errorf("expected python-3.12.7, got %s", p.Version)
 	}
@@ -2290,10 +2285,11 @@ func TestMAXSAT_PrefersNewestVersion(t *testing.T) {
 	result := resolveClean(t, resolver, []string{"sys-libs/zlib"})
 
 	key := pkg.SlotKey{Name: "sys-libs/zlib", Slot: "0"}
-	p, ok := result[key]
+	entry, ok := result[key]
 	if !ok {
 		t.Fatal("expected zlib in result")
 	}
+	p := entry.Package
 	if p.Version != "1.3.1" {
 		t.Errorf("MAX-SAT should prefer newest: got %s, want 1.3.1", p.Version)
 	}
@@ -2319,7 +2315,8 @@ func TestMAXSAT_Deterministic20Runs(t *testing.T) {
 		result := resolveClean(t, resolver, []string{"app/app"})
 
 		thisResult := make(map[pkg.SlotKey]string)
-		for k, p := range result {
+		for k, re := range result {
+			p := re.Package
 			thisResult[k] = p.Version
 		}
 
@@ -2350,10 +2347,11 @@ func TestMAXSAT_DepVersionPreference(t *testing.T) {
 	result := resolveClean(t, resolver, []string{"app/app"})
 
 	libKey := pkg.SlotKey{Name: "dev-libs/lib", Slot: "0"}
-	p, ok := result[libKey]
+	entry, ok := result[libKey]
 	if !ok {
 		t.Fatal("expected lib in result")
 	}
+	p := entry.Package
 	if p.Version != "3.0" {
 		t.Errorf("MAX-SAT should prefer newest dep: got %s, want 3.0", p.Version)
 	}
@@ -2409,7 +2407,8 @@ func TestMAXSAT_BacktrackStillWorks(t *testing.T) {
 	result := resolveClean(t, resolver, []string{"app/flex"})
 
 	appKey := pkg.SlotKey{Name: "app/flex", Slot: "0"}
-	p := result[appKey]
+	entry := result[appKey]
+	p := entry.Package
 	if p.Version != "1.0" {
 		t.Errorf("should backtrack to v1 (v2 unsatisfiable), got %s", p.Version)
 	}
@@ -2547,7 +2546,7 @@ func TestLazyOR_ClosureSizeReduced(t *testing.T) {
 	// With eager expansion: app + light + heavy + dep1 + dep2 + dep3 = 6 packages
 	t.Logf("result size: %d packages, explored: %d names", len(result), resolver.PackagesExplored)
 	for k, p := range result {
-		t.Logf("  %s: %s-%s", k, p.Name, p.Version)
+		t.Logf("  %s: %s-%s", k, p.Package.Name, p.Package.Version)
 	}
 	if len(result) > 3 {
 		t.Errorf("lazy OR should keep result small: got %d packages (expected ≤3)", len(result))
