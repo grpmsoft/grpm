@@ -103,154 +103,81 @@ func (pr *PortageRepository) SetProfile(prof *profile.Profile) {
 	pr.profile = prof
 }
 
+// portageUSEConfig adapts PortageRepository's config and profile to the
+// pkg.USEResolverConfig interface, bridging the infrastructure layer to
+// the domain-layer unified USE resolver.
+type portageUSEConfig struct {
+	config  *config.Config
+	profile *profile.Profile
+}
+
+func (c *portageUSEConfig) ProfileUSEFlags() []string {
+	if c.profile == nil {
+		return nil
+	}
+	return c.profile.GetUSEFlags()
+}
+
+func (c *portageUSEConfig) GlobalUSEFlags() []string {
+	if c.config == nil {
+		return nil
+	}
+	return c.config.GetGlobalUSE()
+}
+
+func (c *portageUSEConfig) PackageUSEFlags(category, name, version, slot string) []string {
+	if c.config == nil {
+		return nil
+	}
+	return c.config.GetPackageUSEForPackage(category, name, version, slot)
+}
+
+func (c *portageUSEConfig) USEExpandValue(varName string) string {
+	if c.config != nil {
+		if value := c.config.GetVariable(varName); value != "" {
+			return value
+		}
+	}
+	if c.profile != nil {
+		return c.profile.MakeDefaults[varName]
+	}
+	return ""
+}
+
+func (c *portageUSEConfig) ForcedUSE() []string {
+	if c.profile == nil {
+		return nil
+	}
+	return c.profile.GetForcedUSE()
+}
+
+func (c *portageUSEConfig) MaskedUSE() []string {
+	if c.profile == nil {
+		return nil
+	}
+	return c.profile.GetMaskedUSE()
+}
+
 // getEffectiveUSE computes the effective USE flags for a package.
-// The computation follows Portage priority (lowest to highest):
+// Delegates to the unified pkg.ResolveEffectiveUSE which implements
+// the canonical Portage priority chain:
 //  1. IUSE defaults (+flag means enabled, -flag means disabled)
 //  2. Profile USE flags (from make.defaults)
 //  3. make.conf global USE flags
-//  4. package.use per-package USE flags
-//
-// Parameters:
-//   - category: package category (e.g., "app-misc")
-//   - pkgName: package name without category (e.g., "mc")
-//   - version: package version (e.g., "4.8.33")
-//   - slot: package slot (e.g., "0")
-//   - iuseMap: map of IUSE flags with their default state (true = +flag default)
-//
-// Returns a set of enabled USE flags.
+//  4. USE_EXPAND variables (PYTHON_TARGETS, etc.)
+//  5. package.use per-package USE flags
 func (pr *PortageRepository) getEffectiveUSE(category, pkgName, version, slot string, iuseMap map[string]bool) map[string]bool {
-	effectiveUSE := make(map[string]bool)
-
-	// 1. Apply IUSE defaults
-	// In IUSE: "+flag" means enabled by default, "-flag" means disabled by default
-	// The iuseMap values: true = has + prefix, false = no prefix or - prefix
-	for flag, defaultEnabled := range iuseMap {
-		if defaultEnabled {
-			effectiveUSE[flag] = true
-		}
+	var cfg pkg.USEResolverConfig
+	if pr.config != nil || pr.profile != nil {
+		cfg = &portageUSEConfig{config: pr.config, profile: pr.profile}
 	}
-
-	// 2. Apply profile USE flags
-	if pr.profile != nil {
-		for _, flag := range pr.profile.GetUSEFlags() {
-			if strings.HasPrefix(flag, "-") {
-				delete(effectiveUSE, flag[1:])
-			} else {
-				effectiveUSE[flag] = true
-			}
-		}
-	}
-
-	// 3. Apply make.conf global USE flags
-	if pr.config != nil {
-		for _, flag := range pr.config.GetGlobalUSE() {
-			if strings.HasPrefix(flag, "-") {
-				delete(effectiveUSE, flag[1:])
-			} else {
-				effectiveUSE[flag] = true
-			}
-		}
-	}
-
-	// 3b. Apply USE_EXPAND variables (PYTHON_SINGLE_TARGET, PYTHON_TARGETS, etc.)
-	// Profile defines USE_EXPAND="PYTHON_SINGLE_TARGET PYTHON_TARGETS ..."
-	// make.conf sets PYTHON_SINGLE_TARGET="python3_12"
-	// This expands to USE flag: python_single_target_python3_12
-	pr.applyUSEExpand(effectiveUSE)
-
-	// 4. Apply package.use per-package USE flags
-	if pr.config != nil {
-		packageUSE := pr.config.GetPackageUSEForPackage(category, pkgName, version, slot)
-		for _, flag := range packageUSE {
-			if strings.HasPrefix(flag, "-") {
-				delete(effectiveUSE, flag[1:])
-			} else {
-				effectiveUSE[flag] = true
-			}
-		}
-	}
-
-	return effectiveUSE
+	return pkg.ResolveEffectiveUSE(iuseMap, category, pkgName, version, slot, cfg)
 }
 
 // isUSEConditionalActive checks if a USE conditional is active given effective USE flags.
-// Follows PMS (Package Manager Specification) USE conditional semantics:
-//   - "flag?" = active if flag is enabled
-//   - "!flag?" = active if flag is disabled
-//
-// Parameters:
-//   - useConditional: the USE flag condition (e.g., "ssl", "!ssl")
-//   - effectiveUSE: set of enabled USE flags
-//
-// Returns true if the conditional's dependencies should be included.
+// Delegates to the unified pkg.IsUSEConditionalActive.
 func (pr *PortageRepository) isUSEConditionalActive(useConditional string, effectiveUSE map[string]bool) bool {
-	if useConditional == "" {
-		// No USE conditional - always active
-		return true
-	}
-
-	// Handle negated conditionals: !flag
-	if strings.HasPrefix(useConditional, "!") {
-		flag := useConditional[1:]
-		// !flag? means include if flag is NOT enabled
-		return !effectiveUSE[flag]
-	}
-
-	// Regular conditional: flag
-	// flag? means include if flag IS enabled
-	return effectiveUSE[useConditional]
-}
-
-// applyUSEExpand expands critical USE_EXPAND variables into USE flags.
-//
-// In Portage, USE_EXPAND variables are expanded into lowercase USE flags:
-//
-//	PYTHON_SINGLE_TARGET="python3_12"   → python_single_target_python3_12
-//	PYTHON_TARGETS="python3_12"         → python_targets_python3_12
-//
-// Currently handles Python-related variables which are the most commonly used
-// in dependency conditions. Full USE_EXPAND support (ABI_X86, ELIBC, etc.)
-// requires additional implicit variable handling and is planned for later.
-//
-// Sources checked (in priority order):
-//  1. make.conf variables
-//  2. Profile make.defaults variables
-func (pr *PortageRepository) applyUSEExpand(effectiveUSE map[string]bool) {
-	// Expand only well-known USE_EXPAND variables that appear in dependency conditions.
-	// Full USE_EXPAND expansion requires proper handling of implicit variables
-	// (ELIBC, KERNEL, ARCH) and ABI flags, which is deferred.
-	useExpandVars := []string{
-		"PYTHON_SINGLE_TARGET",
-		"PYTHON_TARGETS",
-		"LUA_SINGLE_TARGET",
-		"LUA_TARGETS",
-		"RUBY_TARGETS",
-	}
-
-	for _, varName := range useExpandVars {
-		prefix := strings.ToLower(varName) + "_"
-
-		// Check make.conf first (higher priority)
-		var value string
-		if pr.config != nil {
-			value = pr.config.GetVariable(varName)
-		}
-
-		// Fall back to profile make.defaults
-		if value == "" && pr.profile != nil {
-			value = pr.profile.MakeDefaults[varName]
-		}
-
-		if value == "" {
-			continue
-		}
-
-		// Expand each value into a USE flag
-		for _, val := range strings.Fields(value) {
-			flag := prefix + strings.ToLower(val)
-			effectiveUSE[flag] = true
-		}
-	}
+	return pkg.IsUSEConditionalActive(useConditional, effectiveUSE)
 }
 
 func (pr *PortageRepository) LoadPackages(names []string) ([]*pkg.Package, error) {

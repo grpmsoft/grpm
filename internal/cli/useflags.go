@@ -6,7 +6,6 @@
 package cli
 
 import (
-	"path/filepath"
 	"sort"
 	"strings"
 
@@ -141,131 +140,90 @@ func FormatUSEFlags(p *pkg.Package, cfg *config.Config) string {
 	return strings.Join(parts, " ")
 }
 
+// cliUSEConfig adapts config.Config to the pkg.USEResolverConfig interface
+// for CLI-layer USE resolution. The CLI layer typically does not have access
+// to the profile (it was not wired through before this unification), so
+// ProfileUSEFlags returns nil. When profile support is added to the CLI,
+// it can be passed here.
+type cliUSEConfig struct {
+	cfg *config.Config
+}
+
+func (c *cliUSEConfig) ProfileUSEFlags() []string { return nil }
+func (c *cliUSEConfig) GlobalUSEFlags() []string {
+	if c.cfg == nil || c.cfg.MakeConf == nil {
+		return nil
+	}
+	return c.cfg.MakeConf.USE
+}
+func (c *cliUSEConfig) PackageUSEFlags(category, name, version, slot string) []string {
+	if c.cfg == nil {
+		return nil
+	}
+	return c.cfg.GetPackageUSEForPackage(category, name, version, slot)
+}
+func (c *cliUSEConfig) USEExpandValue(varName string) string {
+	if c.cfg == nil {
+		return ""
+	}
+	return c.cfg.GetVariable(varName)
+}
+func (c *cliUSEConfig) ForcedUSE() []string { return nil }
+func (c *cliUSEConfig) MaskedUSE() []string { return nil }
+
 // resolvePackageUSE determines the effective USE flags for a package.
-//
-// Resolution order (later overrides earlier):
-//  1. IUSE defaults from ebuild (+flag enables, -flag disables)
-//  2. Global USE from make.conf
-//  3. Profile USE defaults (not implemented yet)
-//  4. Per-package USE from package.use
+// Delegates to the unified pkg.ResolveEffectiveUSE for the canonical
+// Portage priority chain, then filters to only include flags in IUSE.
 //
 // Returns two slices: enabled flags and disabled flags.
-// Only flags present in IUSE are returned.
+// Only flags present in IUSE (p.UseFlags keys) are returned.
 func resolvePackageUSE(p *pkg.Package, cfg *config.Config) (enabled, disabled []string) {
 	if p == nil || len(p.UseFlags) == 0 {
 		return nil, nil
 	}
 
-	// Start with IUSE defaults
-	// The UseFlags map contains flags from IUSE with + and - prefixes stripped.
-	// Currently, the parser sets all flags to true (enabled by default in IUSE).
-	// We need to re-parse IUSE to get the real defaults.
-	flagState := make(map[string]bool) // true = enabled, false = disabled
+	// Extract category and package name
+	category := ""
+	pkgName := p.Name
+	if parts := strings.SplitN(p.Name, "/", 2); len(parts) == 2 {
+		category = parts[0]
+		pkgName = parts[1]
+	}
 
-	// Initialize from package's UseFlags (IUSE)
-	// By default, all IUSE flags are disabled unless they have + prefix
+	// Build IUSE defaults map from p.UseFlags (the keys are the IUSE flags,
+	// the values represent whether they were declared with + prefix).
+	// Note: by the time we reach CLI, portage.go has already resolved
+	// effective USE into p.UseFlags values. For display purposes we treat
+	// the UseFlags map as the IUSE set and re-resolve from config.
+	iuseDefaults := make(map[string]bool, len(p.UseFlags))
 	for flag := range p.UseFlags {
-		flagState[flag] = false
+		// UseFlags values at this point reflect parsed IUSE defaults
+		// (true = +flag in IUSE, false = bare or -flag)
+		iuseDefaults[flag] = false
 	}
 
-	// Apply global USE from make.conf
-	if cfg != nil && cfg.MakeConf != nil {
-		for _, flag := range cfg.MakeConf.USE {
-			if strings.HasPrefix(flag, "-") {
-				baseFlag := strings.TrimPrefix(flag, "-")
-				// Only apply if flag is in IUSE
-				if _, exists := p.UseFlags[baseFlag]; exists {
-					flagState[baseFlag] = false
-				}
-			} else {
-				// Only apply if flag is in IUSE
-				if _, exists := p.UseFlags[flag]; exists {
-					flagState[flag] = true
-				}
+	// Resolve via unified service
+	var resolverCfg pkg.USEResolverConfig
+	if cfg != nil {
+		resolverCfg = &cliUSEConfig{cfg: cfg}
+	}
+
+	effectiveUSE := pkg.ResolveEffectiveUSE(iuseDefaults, category, pkgName,
+		p.Version, p.Slot.String(), resolverCfg)
+
+	// Register USE_EXPAND flags into IUSE if not present
+	// (eclasses add python_targets_* dynamically, our IUSE may be incomplete)
+	for flag := range effectiveUSE {
+		if _, inIUSE := p.UseFlags[flag]; !inIUSE {
+			if prefix := getUSEExpandPrefix(flag); prefix != "" {
+				// This is a USE_EXPAND flag added by the resolver; include it
+				p.UseFlags[flag] = true
 			}
 		}
 	}
 
-	// Apply USE_EXPAND from make.conf (e.g., PYTHON_SINGLE_TARGET, PYTHON_TARGETS)
-	if cfg != nil {
-		applyUSEExpandToFlags(cfg, p.UseFlags, flagState)
-	}
-
-	// Apply per-package USE from package.use
-	if cfg != nil {
-		// Extract category and package name for pattern matching
-		category := ""
-		pkgName := p.Name
-		if parts := strings.SplitN(p.Name, "/", 2); len(parts) == 2 {
-			category = parts[0]
-			pkgName = parts[1]
-		}
-
-		// Get package-specific USE flags with pattern matching
-		pkgUSE := cfg.GetPackageUSEForPackage(category, pkgName, p.Version, p.Slot.String())
-		for _, flag := range pkgUSE {
-			if strings.HasPrefix(flag, "-") {
-				baseFlag := strings.TrimPrefix(flag, "-")
-				// Only apply if flag is in IUSE
-				if _, exists := p.UseFlags[baseFlag]; exists {
-					flagState[baseFlag] = false
-				}
-			} else {
-				// Only apply if flag is in IUSE
-				if _, exists := p.UseFlags[flag]; exists {
-					flagState[flag] = true
-				}
-			}
-		}
-	}
-
-	// Build result slices
-	for flag, isEnabled := range flagState {
-		if isEnabled {
-			enabled = append(enabled, flag)
-		} else {
-			disabled = append(disabled, flag)
-		}
-	}
-
-	return enabled, disabled
-}
-
-// useExpandMapping maps USE_EXPAND variable names to their flag prefixes.
-var useExpandMapping = []struct {
-	varName string
-	prefix  string
-}{
-	{"PYTHON_SINGLE_TARGET", "python_single_target_"},
-	{"PYTHON_TARGETS", "python_targets_"},
-	{"LUA_SINGLE_TARGET", "lua_single_target_"},
-	{"LUA_TARGETS", "lua_targets_"},
-	{"RUBY_TARGETS", "ruby_targets_"},
-}
-
-// applyUSEExpandToFlags enables USE_EXPAND flags in flagState based on
-// make.conf variables (e.g., PYTHON_TARGETS="python3_12" -> python_targets_python3_12=true).
-//
-// USE_EXPAND flags are always applied unconditionally because eclasses
-// dynamically add them to IUSE (e.g., python-r1.eclass adds
-// python_targets_* to IUSE from PYTHON_COMPAT). Since our eclass
-// processing may not capture all dynamic IUSE additions, we apply
-// USE_EXPAND flags regardless of IUSE presence — matching Portage behavior.
-func applyUSEExpandToFlags(cfg *config.Config, iuseFlags map[string]bool, flagState map[string]bool) {
-	for _, uev := range useExpandMapping {
-		value := cfg.GetVariable(uev.varName)
-		if value == "" {
-			continue
-		}
-		for _, val := range strings.Fields(value) {
-			flag := uev.prefix + strings.ToLower(val)
-			// Always apply USE_EXPAND flags — eclasses add them to IUSE
-			// dynamically (e.g., python-r1.eclass generates python_targets_*
-			// from PYTHON_COMPAT). Also register in iuseFlags for downstream.
-			iuseFlags[flag] = true
-			flagState[flag] = true
-		}
-	}
+	// Split into enabled/disabled, filtered to IUSE flags only
+	return pkg.SplitEnabledDisabled(effectiveUSE, p.UseFlags)
 }
 
 // getUSEExpandPrefix returns the USE_EXPAND prefix if the flag matches one,
@@ -294,9 +252,7 @@ func prefixToVarName(prefix string) string {
 // p.UseFlags in-place. This must be called before building a package so that
 // NewEnvironment() picks up the correct USE flags including USE_EXPAND conversions.
 //
-// This applies the same resolution as FormatUSEFlags but modifies the package
-// rather than just formatting for display. It also sets USE_EXPAND variables
-// (like PYTHON_TARGETS) in the package's ExtraEnv map for environment export.
+// Delegates to the unified pkg.ResolveEffectiveUSE for consistent resolution.
 //
 // Per Portage behavior: USE_EXPAND variables from make.conf (e.g.,
 // PYTHON_TARGETS="python3_12") are converted to USE flags
@@ -306,7 +262,7 @@ func ApplyEffectiveUSE(p *pkg.Package, cfg *config.Config) {
 		return
 	}
 
-	// Resolve effective USE flags (applies make.conf USE, USE_EXPAND, package.use)
+	// Resolve effective USE flags using the unified resolver
 	enabled, _ := resolvePackageUSE(p, cfg)
 
 	// Update p.UseFlags: set all to false first, then enable resolved ones
@@ -327,57 +283,19 @@ func GetUSEExpandVars(cfg *config.Config) map[string]string {
 	}
 
 	result := make(map[string]string)
-	for _, uev := range useExpandMapping {
-		value := cfg.GetVariable(uev.varName)
+	for _, varName := range pkg.USEExpandVars {
+		value := cfg.GetVariable(varName)
 		if value != "" {
-			result[uev.varName] = value
+			result[varName] = value
 		}
 	}
 	return result
 }
 
-// getEbuildIUSEDefaults reads the ebuild file and extracts IUSE defaults.
-// Returns a map of flag name -> default enabled state.
-//
-// IUSE format:
-//   - "flag" -> disabled by default
-//   - "+flag" -> enabled by default
-//   - "-flag" -> disabled by default (explicit)
-func getEbuildIUSEDefaults(ebuildPath string) map[string]bool {
-	// This is a placeholder for future enhancement.
-	// Currently, the portage.go parser strips +/- prefixes from IUSE,
-	// so we don't have access to the defaults.
-	// For now, we assume all flags are disabled by default (Portage behavior).
-	return nil
-}
-
 // FormatUSEFlagsFromEbuild formats USE flags by also reading IUSE defaults from ebuild.
 // This provides more accurate formatting by respecting IUSE +flag defaults.
-func FormatUSEFlagsFromEbuild(p *pkg.Package, cfg *config.Config, repoPath string) string {
-	if p == nil {
-		return `USE=""`
-	}
-
-	// Try to read ebuild for IUSE defaults
-	// If we can't read it, fall back to FormatUSEFlags
-	if repoPath == "" {
-		return FormatUSEFlags(p, cfg)
-	}
-
-	// Find ebuild path
-	category := ""
-	pkgName := p.Name
-	if parts := strings.SplitN(p.Name, "/", 2); len(parts) == 2 {
-		category = parts[0]
-		pkgName = parts[1]
-	}
-
-	ebuildPath := filepath.Join(repoPath, category, pkgName,
-		pkgName+"-"+p.Version+".ebuild")
-
-	// Get IUSE defaults (for future enhancement)
-	_ = getEbuildIUSEDefaults(ebuildPath)
-
-	// For now, use the standard formatter
+// Currently delegates to FormatUSEFlags since the unified resolver handles
+// IUSE defaults at parse time.
+func FormatUSEFlagsFromEbuild(p *pkg.Package, cfg *config.Config, _ string) string {
 	return FormatUSEFlags(p, cfg)
 }
