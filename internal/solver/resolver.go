@@ -248,6 +248,15 @@ func (r *PortageResolver) collectDependencies(p *pkg.Package, allPackages map[st
 	// Load all candidate versions for this package into allCandidates
 	r.addCandidateVersions(p.Name, allCandidates)
 
+	// Register blocker targets as candidates so they have SAT variables.
+	// Without this, packages referenced only by !atom (not by deps) never
+	// enter the graph → no conflict clause → ActionRemove won't fire.
+	for _, blocker := range p.Blockers {
+		if blocker.Atom != nil {
+			r.addCandidateVersions(blocker.Atom.CP(), allCandidates)
+		}
+	}
+
 	// Group dependencies by OrGroupID
 	requiredDeps, orGroups := groupDependenciesByOrGroupID(p.Deps)
 

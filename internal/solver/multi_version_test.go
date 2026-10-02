@@ -2756,3 +2756,49 @@ func TestAction_NewSlot_DoesNotRemoveOldSlot(t *testing.T) {
 		t.Error("python:3.12 must NOT be Remove — no blocker, old slot stays installed")
 	}
 }
+
+// TestAction_Remove_BlockerWithoutDep verifies that an installed package
+// blocked by !atom gets ActionRemove even when it's NOT a dependency.
+// This is the reviewer's pробник: install bzip2 with !pbzip2, pbzip2 installed.
+func TestAction_Remove_BlockerWithoutDep(t *testing.T) {
+	r := newMultiVersionRepo()
+
+	// pbzip2 exists in repo (blocked target)
+	pbzip2 := pkg.NewPackage("app-arch/pbzip2", "1.1.13", "0")
+	r.addVersion(pbzip2)
+
+	// bzip2 blocks pbzip2 (weak blocker) — NO dependency on pbzip2
+	blockerAtom, _ := pkg.ParseAtom("!app-arch/pbzip2")
+	bzip2 := pkg.NewPackage("app-alternatives/bzip2", "0.3", "0")
+	bzip2.AddBlocker(blockerAtom, false)
+	r.addVersion(bzip2)
+
+	// pbzip2 is INSTALLED
+	installed := &state.InstalledPackage{
+		Package: pkg.NewPackage("app-arch/pbzip2", "1.1.13", "0"),
+	}
+	db := state.NewPackageDatabase("/var/db/pkg")
+	if err := db.Add(installed); err != nil {
+		t.Fatalf("failed to add installed: %v", err)
+	}
+
+	resolver := NewResolver(r)
+	resolver.SetInstalledDB(db)
+	result := resolveClean(t, resolver, []string{"app-alternatives/bzip2"})
+
+	// bzip2 should be installed
+	bzip2Key := pkg.SlotKey{Name: "app-alternatives/bzip2", Slot: "0"}
+	if _, ok := result[bzip2Key]; !ok {
+		t.Fatal("expected bzip2 in result")
+	}
+
+	// pbzip2 should be ActionRemove — blocker conflict, even without dep
+	pbzip2Key := pkg.SlotKey{Name: "app-arch/pbzip2", Slot: "0"}
+	entry, ok := result[pbzip2Key]
+	if !ok {
+		t.Fatal("expected pbzip2 in result as ActionRemove")
+	}
+	if entry.Action != ActionRemove {
+		t.Errorf("pbzip2 should be Remove (blocker), got %s", entry.Action)
+	}
+}
