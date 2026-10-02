@@ -1,6 +1,7 @@
 package solver
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/grpmsoft/grpm/internal/pkg"
@@ -36,6 +37,19 @@ func (m *multiVersionRepo) GetAllVersions(name string) ([]*pkg.Package, error) {
 		return result, nil
 	}
 	return []*pkg.Package{}, nil
+}
+
+func (m *multiVersionRepo) LoadPackageVersion(name, version string) (*pkg.Package, error) {
+	if versions, ok := m.versions[name]; ok {
+		for _, v := range versions {
+			if v.Version == version {
+				cp := *v
+				return &cp, nil
+			}
+		}
+		return nil, fmt.Errorf("version %s not found for %s", version, name)
+	}
+	return nil, fmt.Errorf("package %s not found", name)
 }
 
 // toSlotKeyMap converts current string-keyed result to SlotKey-keyed for assertions.
