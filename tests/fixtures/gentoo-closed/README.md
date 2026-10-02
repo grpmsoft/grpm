@@ -1,13 +1,18 @@
 # Gentoo Closed Test Fixture
 
-Transitively closed package fixture extracted from a real Gentoo rsync snapshot.
-Every package's DEPEND/RDEPEND/BDEPEND can be satisfied within this fixture,
-so `Resolve()` returns `status=SAT` with `postPass=0`.
+Package fixture extracted from a real Gentoo rsync snapshot. Closed under
+default USE flags (no profile, no make.conf), ignoring blockers: at least
+one version of each package name resolves to SAT with `postPass=0`.
+
+Not every version is satisfiable — `gentoo-functions-1.7.4` needs meson/ninja
+(absent), `bzip2-9999` is a live ebuild, `verify-sig?` pulls gnupg (absent in
+89 entries). The SAT resolver backtracks to satisfiable versions. This is
+exactly the behavior `AllPackagesResolve` guards.
 
 **Source:** WSL2 Gentoo rsync snapshot
 **Timestamp:** Fri, 02 Oct 2026 12:45:00 +0000
 **Packages:** 16 names, 50 versions
-**Closure:** DEPEND + RDEPEND + BDEPEND (real md5-cache, unmodified)
+**Closure:** Under default USE, no blockers (real md5-cache, unmodified)
 
 ## Roots
 

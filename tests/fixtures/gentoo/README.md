@@ -24,10 +24,13 @@ trivial prohibit, not cost of full dependency closure.
 | app-misc/hello | 2 | Minimal test |
 | virtual/pkgconfig | 1 | Virtual package |
 
-## Verified on Full Tree (2026-10-02, independent review)
+## Verified on Full Tree (2026-10-02)
 
-Tested on WSL2 Gentoo rsync snapshot (`/var/db/repos/gentoo`, with md5-cache).
-No profile or make.conf — resolver used `NewResolver` without keyword filtering:
+Two environments tested independently. Package counts differ because
+md5-cache includes eclass-inherited BDEPEND that raw ebuild parsing misses.
+
+**Environment A: git checkout `gentoo/gentoo` (no md5-cache, no profile)**
+Resolver: `NewResolver` (no keyword filtering).
 
 | Package | Status | Packages | Notes |
 |---------|--------|----------|-------|
@@ -35,14 +38,16 @@ No profile or make.conf — resolver used `NewResolver` without keyword filterin
 | app-crypt/gpgme | OK | 4 | gpgme + libassuan + libgpg-error + gpg |
 | dev-db/sqlite | OK | 7 | sqlite + readline + ncurses + zlib + ... |
 | dev-libs/libxml2 | OK | 7 | libxml2 + zlib + libiconv + ... |
-| dev-libs/libgpg-error | OK | 5 | WSL2 verified |
-| dev-libs/libassuan | OK | 6 | WSL2 verified |
 
-`postPass=0` on all resolved packages.
+**Environment B: WSL2 rsync snapshot (`/var/db/repos/gentoo`, with md5-cache)**
+Resolver: `NewResolver` (no keyword filtering).
 
-Full-tree resolve with md5-cache not yet measured on this fixture (fixture is
-not transitively closed). Perf numbers require either a closed fixture subset
-or a CI harness with shallow clone of `gentoo/gentoo`.
+| Package | Status | Packages | Notes |
+|---------|--------|----------|-------|
+| dev-libs/libgpg-error | OK | 5 | Includes BDEPEND chain |
+| dev-libs/libassuan | OK | 6 | Includes BDEPEND chain |
+
+`postPass=0` on all resolved packages in both environments.
 
 ## Stub Ebuilds
 
