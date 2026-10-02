@@ -92,7 +92,7 @@ func TestResolveVersionedAtom(t *testing.T) {
 }
 
 // findPackageByName searches result map values for a package with matching Name.
-func findPackageByName(result map[string]*pkg.Package, name string) *pkg.Package {
+func findPackageByName(result ResolveResult, name string) *pkg.Package {
 	for _, p := range result {
 		if p.Name == name {
 			return p
@@ -101,10 +101,10 @@ func findPackageByName(result map[string]*pkg.Package, name string) *pkg.Package
 	return nil
 }
 
-func mapKeys(m map[string]*pkg.Package) []string {
+func mapKeys(m ResolveResult) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
-		keys = append(keys, k)
+		keys = append(keys, k.Name+":"+k.Slot)
 	}
 	return keys
 }
