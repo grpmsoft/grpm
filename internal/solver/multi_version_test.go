@@ -2277,3 +2277,140 @@ func TestUseDeps_NoDefault_ProviderWithoutFlag(t *testing.T) {
 		t.Error("expected UNSAT — x has no ssl flag and no default")
 	}
 }
+
+// --- Tests for v0.10.0-014: MAX-SAT optimization ---
+
+func TestMAXSAT_PrefersNewestVersion(t *testing.T) {
+	r := newMultiVersionRepo()
+	r.addVersion(pkg.NewPackage("sys-libs/zlib", "1.2.13", "0"))
+	r.addVersion(pkg.NewPackage("sys-libs/zlib", "1.3.0", "0"))
+	r.addVersion(pkg.NewPackage("sys-libs/zlib", "1.3.1", "0"))
+
+	resolver := NewResolver(r)
+	result := resolveClean(t, resolver, []string{"sys-libs/zlib"})
+
+	key := pkg.SlotKey{Name: "sys-libs/zlib", Slot: "0"}
+	p, ok := result[key]
+	if !ok {
+		t.Fatal("expected zlib in result")
+	}
+	if p.Version != "1.3.1" {
+		t.Errorf("MAX-SAT should prefer newest: got %s, want 1.3.1", p.Version)
+	}
+}
+
+func TestMAXSAT_Deterministic20Runs(t *testing.T) {
+	r := newMultiVersionRepo()
+	r.addVersion(pkg.NewPackage("sys-libs/zlib", "1.2.13", "0"))
+	r.addVersion(pkg.NewPackage("sys-libs/zlib", "1.3.0", "0"))
+	r.addVersion(pkg.NewPackage("sys-libs/zlib", "1.3.1", "0"))
+
+	dep := pkg.NewPackage("dev-libs/dep", "1.0", "0")
+	dep.Deps = []pkg.Constraint{{Name: "sys-libs/zlib", Type: pkg.ConstraintTypeVersion}}
+	r.addVersion(dep)
+
+	app := pkg.NewPackage("app/app", "1.0", "0")
+	app.Deps = []pkg.Constraint{{Name: "dev-libs/dep", Type: pkg.ConstraintTypeVersion}}
+	r.addVersion(app)
+
+	var firstResult map[pkg.SlotKey]string
+	for i := range 20 {
+		resolver := NewResolver(r)
+		result := resolveClean(t, resolver, []string{"app/app"})
+
+		thisResult := make(map[pkg.SlotKey]string)
+		for k, p := range result {
+			thisResult[k] = p.Version
+		}
+
+		if i == 0 {
+			firstResult = thisResult
+		} else {
+			for k, v := range firstResult {
+				if thisResult[k] != v {
+					t.Fatalf("run %d: non-deterministic at %v: %s vs %s", i, k, v, thisResult[k])
+				}
+			}
+		}
+	}
+}
+
+func TestMAXSAT_DepVersionPreference(t *testing.T) {
+	r := newMultiVersionRepo()
+
+	r.addVersion(pkg.NewPackage("dev-libs/lib", "1.0", "0"))
+	r.addVersion(pkg.NewPackage("dev-libs/lib", "2.0", "0"))
+	r.addVersion(pkg.NewPackage("dev-libs/lib", "3.0", "0"))
+
+	app := pkg.NewPackage("app/app", "1.0", "0")
+	app.Deps = []pkg.Constraint{{Name: "dev-libs/lib", Type: pkg.ConstraintTypeVersion}}
+	r.addVersion(app)
+
+	resolver := NewResolver(r)
+	result := resolveClean(t, resolver, []string{"app/app"})
+
+	libKey := pkg.SlotKey{Name: "dev-libs/lib", Slot: "0"}
+	p, ok := result[libKey]
+	if !ok {
+		t.Fatal("expected lib in result")
+	}
+	if p.Version != "3.0" {
+		t.Errorf("MAX-SAT should prefer newest dep: got %s, want 3.0", p.Version)
+	}
+}
+
+func TestMAXSAT_ORGroupPrefersLeftmost(t *testing.T) {
+	r := newMultiVersionRepo()
+
+	a := pkg.NewPackage("dev-libs/a", "1.0", "0")
+	b := pkg.NewPackage("dev-libs/b", "1.0", "0")
+	r.addVersion(a)
+	r.addVersion(b)
+
+	// app depends on || ( a b ) — leftmost (a) should always be preferred
+	app := pkg.NewPackage("app/app", "1.0", "0")
+	app.Deps = []pkg.Constraint{
+		{Name: "dev-libs/a", Type: pkg.ConstraintTypeVersion, OrGroupID: 1},
+		{Name: "dev-libs/b", Type: pkg.ConstraintTypeVersion, OrGroupID: 1},
+	}
+	r.addVersion(app)
+
+	for i := range 30 {
+		resolver := NewResolver(r)
+		result := resolveClean(t, resolver, []string{"app/app"})
+
+		aKey := pkg.SlotKey{Name: "dev-libs/a", Slot: "0"}
+		if _, ok := result[aKey]; !ok {
+			bKey := pkg.SlotKey{Name: "dev-libs/b", Slot: "0"}
+			if _, ok := result[bKey]; ok {
+				t.Fatalf("run %d: OR-group picked b instead of a (leftmost) — non-deterministic", i)
+			}
+			t.Fatalf("run %d: neither a nor b in result", i)
+		}
+	}
+}
+
+func TestMAXSAT_BacktrackStillWorks(t *testing.T) {
+	r := newMultiVersionRepo()
+
+	helper := pkg.NewPackage("dev-libs/helper", "1.0", "0")
+	r.addVersion(helper)
+
+	// v2 has unsatisfiable dep — MAX-SAT should still backtrack to v1
+	appV1 := pkg.NewPackage("app/flex", "1.0", "0")
+	appV1.Deps = []pkg.Constraint{{Name: "dev-libs/helper", Type: pkg.ConstraintTypeVersion}}
+	r.addVersion(appV1)
+
+	appV2 := pkg.NewPackage("app/flex", "2.0", "0")
+	appV2.Deps = []pkg.Constraint{{Name: "dev-libs/impossible", Type: pkg.ConstraintTypeVersion}}
+	r.addVersion(appV2)
+
+	resolver := NewResolver(r)
+	result := resolveClean(t, resolver, []string{"app/flex"})
+
+	appKey := pkg.SlotKey{Name: "app/flex", Slot: "0"}
+	p := result[appKey]
+	if p.Version != "1.0" {
+		t.Errorf("should backtrack to v1 (v2 unsatisfiable), got %s", p.Version)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/grpmsoft/grpm/internal/logging"
 	"github.com/grpmsoft/grpm/internal/mask"
@@ -59,6 +60,11 @@ type ResolveOptions struct {
 	// NewUse reinstalls packages if USE flags have changed.
 	// Equivalent to Portage's --newuse
 	NewUse bool
+
+	// Update prefers newer versions over installed ones.
+	// Without this, installed versions that satisfy constraints are preferred.
+	// Equivalent to Portage's --update/-u
+	Update bool
 
 	// EmptyTree assumes no packages are installed.
 	// Resolves the complete dependency tree from scratch.
@@ -631,8 +637,11 @@ func (r *PortageResolver) Resolve(packages []string) (ResolveResult, error) {
 
 	logging.Debug("Total clauses in SAT problem: %d", len(adapter.clauses))
 
-	// Solve
-	status, solution, err := adapter.Solve()
+	// Solve with MAX-SAT optimization for version preferences.
+	// Timeout with fallback to regular SAT — user sees a warning if optimization fails.
+	const maxsatTimeout = 5 * time.Second
+	updateMode := r.options.Update
+	status, solution, err := adapter.SolveOptimal(maxsatTimeout, updateMode)
 	if err != nil {
 		return nil, err
 	}
