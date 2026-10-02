@@ -53,8 +53,8 @@ func (s *PackageService) ResolvePackage(packages []string) (*ResolutionResult, e
 
 	// Convert domain model to DTO
 	packagesToInstall := make(map[string]string)
-	for name, p := range solution {
-		packagesToInstall[name] = p.Version
+	for _, p := range solution {
+		packagesToInstall[p.Name] = p.Version
 	}
 
 	// Use Domain Service to find conflicts

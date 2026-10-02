@@ -295,7 +295,7 @@ func (a *App) runResolve(args []string) error {
 		}
 	}
 
-	solution, err := pkgResolver.Resolve(packages)
+	satResult, err := pkgResolver.Resolve(packages)
 	if err != nil {
 		// Wrap with user-friendly error
 		if len(packages) == 1 {
@@ -306,10 +306,13 @@ func (a *App) runResolve(args []string) error {
 		return WrapResolutionError(packages[0], err)
 	}
 
-	if len(solution) == 0 {
+	if len(satResult) == 0 {
 		a.log.Info("No packages found in solution")
 		return nil
 	}
+
+	// Convert to string-keyed map for downstream consumers
+	solution := satResult.StringKeyMap()
 
 	// Check for slot collisions if autounmask is enabled
 	if *autounmask || *autounmaskWrite {
@@ -543,17 +546,17 @@ func (a *App) resolvePackageDependencies(r repo.Repository, packages []string) (
 	// Create resolver with mask support if using real Portage repository
 	resolver := a.createResolverWithMasks(r)
 
-	solution, err := resolver.Resolve(packages)
+	satResult, err := resolver.Resolve(packages)
 	if err != nil {
 		return nil, fmt.Errorf("dependency resolution failed: %w", err)
 	}
 
-	if len(solution) == 0 {
+	if len(satResult) == 0 {
 		a.log.Info("No packages to install")
 		return nil, nil
 	}
 
-	return solution, nil
+	return satResult.StringKeyMap(), nil
 }
 
 // resolvePackageDependenciesWithOptions resolves dependencies with Portage-compatible filtering.
@@ -583,17 +586,17 @@ func (a *App) resolvePackageDependenciesWithOptions(r repo.Repository, packages 
 		}
 	}
 
-	solution, err := resolver.Resolve(packages)
+	satResult, err := resolver.Resolve(packages)
 	if err != nil {
 		return nil, fmt.Errorf("dependency resolution failed: %w", err)
 	}
 
-	if len(solution) == 0 {
+	if len(satResult) == 0 {
 		a.log.Info("No packages to install")
 		return nil, nil
 	}
 
-	return solution, nil
+	return satResult.StringKeyMap(), nil
 }
 
 // createResolverWithMasks creates a resolver with package.mask and KEYWORDS filtering.

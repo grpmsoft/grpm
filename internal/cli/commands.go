@@ -522,13 +522,13 @@ func (a *App) checkPackageForUpdate(pkgAtom string, r repo.Repository, db *state
 
 	// Check for newer version
 	resolver := a.createResolverWithMasks(r)
-	solution, err := resolver.Resolve([]string{pkgAtom})
+	satResult, err := resolver.Resolve([]string{pkgAtom})
 	if err != nil {
 		logging.Warn("Could not resolve %s: %v", pkgAtom, err)
 		return nil
 	}
 
-	for _, p := range solution {
+	for _, p := range satResult {
 		if p.Name == pkgAtom || p.Name == installedPkg.Package.Name {
 			return a.compareVersions(p, installedPkg, checkUse)
 		}

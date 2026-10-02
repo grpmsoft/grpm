@@ -12,6 +12,24 @@ import (
 	"github.com/grpmsoft/grpm/internal/state"
 )
 
+// ResolveResult is the result of dependency resolution: packages keyed by installation slot.
+// Two packages with the same SlotKey cannot coexist; different SlotKeys can.
+type ResolveResult map[pkg.SlotKey]*pkg.Package
+
+// StringKeyMap converts the ResolveResult to a string-keyed map for legacy consumers.
+// The string key is the package name for slot "0", or "name:slot" for non-zero slots.
+func (s ResolveResult) StringKeyMap() map[string]*pkg.Package {
+	result := make(map[string]*pkg.Package, len(s))
+	for key, p := range s {
+		if key.Slot != "" && key.Slot != "0" {
+			result[key.Name+":"+key.Slot] = p
+		} else {
+			result[key.Name] = p
+		}
+	}
+	return result
+}
+
 // ResolveOptions configures dependency resolution behavior.
 type ResolveOptions struct {
 	// WithBdeps includes build-time dependencies (BDEPEND) even for installed packages.
@@ -137,10 +155,10 @@ func groupDependenciesByOrGroupID(deps []pkg.Constraint) (requiredDeps []pkg.Con
 	return
 }
 
-
-//nolint:gocyclo // Complexity inherent to Portage-compatible dependency resolution algorithm
 // collectDependencies is best-effort: it explores the search space for SAT.
 // Missing deps are logged, not fatal — SAT encoding determines satisfiability.
+//
+//nolint:gocyclo // Complexity inherent to Portage-compatible dependency resolution algorithm
 func (r *PortageResolver) collectDependencies(p *pkg.Package, allPackages map[string]*pkg.Package, allCandidates map[string][]*pkg.Package) {
 	versionKey := p.Name + "@" + p.Version
 	if _, exists := allPackages[versionKey]; exists {
@@ -329,8 +347,8 @@ func (r *PortageResolver) addRootConstraints(adapter *GophersatAdapter, rootPack
 
 // buildResultFromSolution builds the final result map from the SAT solution.
 // The solution map contains package names as keys and selected versions as values.
-func (r *PortageResolver) buildResultFromSolution(solution map[string]string) (map[string]*pkg.Package, error) {
-	result := make(map[string]*pkg.Package)
+func (r *PortageResolver) buildResultFromSolution(solution map[string]string) (ResolveResult, error) {
+	result := make(ResolveResult)
 	for key, version := range solution {
 		// Parse package name from SAT variable key (name@version)
 		name := key
@@ -347,7 +365,7 @@ func (r *PortageResolver) buildResultFromSolution(solution map[string]string) (m
 				continue
 			}
 		}
-		result[packageSlotKey(p)] = p
+		result[pkg.SlotKeyOf(p)] = p
 	}
 	return result, nil
 }
@@ -409,7 +427,7 @@ func (r *PortageResolver) loadPackageFromAtom(atomStr string) (*pkg.Package, err
 }
 
 //nolint:gocyclo // Complexity inherent to multi-pass Portage-compatible resolution with OR-group support
-func (r *PortageResolver) Resolve(packages []string) (map[string]*pkg.Package, error) {
+func (r *PortageResolver) Resolve(packages []string) (ResolveResult, error) {
 	r.PostPassAdded = 0
 	adapter := NewGophersatAdapter()
 	allPackages := make(map[string]*pkg.Package)
@@ -529,7 +547,7 @@ func (r *PortageResolver) Resolve(packages []string) (map[string]*pkg.Package, e
 				if err != nil {
 					continue
 				}
-				depKey := packageSlotKey(depPkg)
+				depKey := pkg.SlotKeyOf(depPkg)
 				if _, inResult := result[depKey]; inResult {
 					continue
 				}
@@ -546,7 +564,7 @@ func (r *PortageResolver) Resolve(packages []string) (map[string]*pkg.Package, e
 					if altErr != nil {
 						continue
 					}
-					if _, inResult := result[packageSlotKey(altPkg)]; inResult {
+					if _, inResult := result[pkg.SlotKeyOf(altPkg)]; inResult {
 						satisfied = true
 						break
 					}
@@ -560,7 +578,7 @@ func (r *PortageResolver) Resolve(packages []string) (map[string]*pkg.Package, e
 					if err != nil {
 						continue
 					}
-					result[packageSlotKey(altPkg)] = altPkg
+					result[pkg.SlotKeyOf(altPkg)] = altPkg
 					added++
 					break // Take first available
 				}
@@ -578,19 +596,10 @@ func (r *PortageResolver) Resolve(packages []string) (map[string]*pkg.Package, e
 	// Output formatted package list
 	logging.Info("Resolved packages:")
 	for key, p := range result {
-		logging.Debug("- %s-%s [slot:%s key:%s]", p.Name, p.Version, p.Slot.Name, key)
+		logging.Debug("- %s-%s [slot:%s key:%s:%s]", p.Name, p.Version, p.Slot.Name, key.Name, key.Slot)
 	}
 
 	return result, nil
-}
-
-// packageSlotKey returns a string key that distinguishes packages by slot.
-// Packages in different slots can coexist (e.g., python:3.12 and python:3.13).
-func packageSlotKey(p *pkg.Package) string {
-	if p.Slot.Name != "" && p.Slot.Name != "0" {
-		return p.Name + ":" + p.Slot.Name
-	}
-	return p.Name
 }
 
 func contains(slice []string, item string) bool {

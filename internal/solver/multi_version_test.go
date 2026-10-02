@@ -85,19 +85,8 @@ func (m *multiVersionRepo) LoadPackageVersion(name, version string) (*pkg.Packag
 	return nil, fmt.Errorf("package %s not found", name)
 }
 
-// toSlotKeyMap converts current string-keyed result to SlotKey-keyed for assertions.
-// This adapter will be removed when Resolve() returns map[SlotKey]*Package natively.
-func toSlotKeyMap(m map[string]*pkg.Package) map[pkg.SlotKey]*pkg.Package {
-	result := make(map[pkg.SlotKey]*pkg.Package, len(m))
-	for _, p := range m {
-		key := pkg.SlotKeyOf(p)
-		result[key] = p
-	}
-	return result
-}
-
 // resolveClean calls Resolve, checks error, and asserts PostPassAdded == 0.
-func resolveClean(t *testing.T, resolver *PortageResolver, atoms []string) map[string]*pkg.Package {
+func resolveClean(t *testing.T, resolver *PortageResolver, atoms []string) ResolveResult {
 	t.Helper()
 	result, err := resolver.Resolve(atoms)
 	if err != nil {
@@ -123,7 +112,7 @@ func TestMultiVersionSAT_ChoosesNewest(t *testing.T) {
 	resolver := NewResolver(r)
 	result := resolveClean(t, resolver, []string{"sys-libs/zlib"})
 
-	slotResult := toSlotKeyMap(result)
+	slotResult := result
 	key := pkg.SlotKey{Name: "sys-libs/zlib", Slot: "0"}
 	p, ok := slotResult[key]
 	if !ok {
@@ -171,7 +160,7 @@ func TestMultiVersionSAT_MultiSlotCoexist(t *testing.T) {
 
 	result := resolveClean(t, resolver, []string{"app-misc/myapp"})
 
-	slotResult := toSlotKeyMap(result)
+	slotResult := result
 
 	// MUST FAIL: current resolver stores one version per cat/pkg name.
 	// With multi-slot, both python:3.12 and python:3.13 should coexist.
@@ -188,10 +177,10 @@ func TestMultiVersionSAT_MultiSlotCoexist(t *testing.T) {
 	}
 
 	if !has312 || !has313 {
-		// Debug: dump raw string-keyed result
-		t.Logf("raw result keys:")
+		// Debug: dump result keys
+		t.Logf("result keys:")
 		for k, p := range result {
-			t.Logf("  key=%q → %s-%s slot=%s", k, p.Name, p.Version, p.Slot.Name)
+			t.Logf("  key={Name:%q Slot:%q} → %s-%s slot=%s", k.Name, k.Slot, p.Name, p.Version, p.Slot.Name)
 		}
 		t.Errorf("expected both python:3.12 and python:3.13 in result, got312=%v got313=%v",
 			has312, has313)
@@ -207,7 +196,7 @@ func TestMultiVersionSAT_AtMostOnePerSlot(t *testing.T) {
 	resolver := NewResolver(r)
 	result := resolveClean(t, resolver, []string{"dev-libs/openssl"})
 
-	slotResult := toSlotKeyMap(result)
+	slotResult := result
 	count := 0
 	for key := range slotResult {
 		if key.Name == "dev-libs/openssl" {
@@ -241,7 +230,7 @@ func TestMultiVersionSAT_ImplicationNotUnconditional(t *testing.T) {
 	resolver := NewResolver(r)
 	result := resolveClean(t, resolver, []string{"app-misc/app"})
 
-	slotResult := toSlotKeyMap(result)
+	slotResult := result
 
 	// Without MAX-SAT, SAT may pick v1 or v2. Check that whichever was picked
 	// has ONLY its own deps pulled (implication correctness).
@@ -308,7 +297,7 @@ func TestMultiVersionSAT_SATSeesMultipleCandidates(t *testing.T) {
 	// Verify that SAT actually considered multiple versions (not just one).
 	// The proof: if we resolve with >=2.13, older candidate is excluded.
 	// But first, basic: result should have the newest.
-	slotResult := toSlotKeyMap(result)
+	slotResult := result
 	key := pkg.SlotKey{Name: "dev-libs/libxml2", Slot: "0"}
 	p, ok := slotResult[key]
 	if !ok {
@@ -356,7 +345,7 @@ func TestImplication_MultiVersion_OnlySelectedVersionDepsPulled(t *testing.T) {
 	resolver := NewResolver(r)
 	result := resolveClean(t, resolver, []string{"app-misc/myutil"})
 
-	slotResult := toSlotKeyMap(result)
+	slotResult := result
 
 	// Without MAX-SAT, SAT may pick v1 or v2. Check that ONLY the selected
 	// version's deps are present (implication correctness).
@@ -424,13 +413,13 @@ func TestAtMostOnePerSlot_PairwiseExclusion(t *testing.T) {
 	if count != 1 {
 		t.Errorf("expected exactly 1 glibc in result, got %d", count)
 		for k, p := range result {
-			t.Logf("  key=%q %s-%s", k, p.Name, p.Version)
+			t.Logf("  key={Name:%q Slot:%q} %s-%s", k.Name, k.Slot, p.Name, p.Version)
 		}
 	}
 
 	// Without MAX-SAT, SAT may pick any valid version.
 	// Verify correctness: exactly one glibc, and it's one of the candidates.
-	slotResult := toSlotKeyMap(result)
+	slotResult := result
 	key := pkg.SlotKey{Name: "sys-libs/glibc", Slot: "0"}
 	p, ok := slotResult[key]
 	if !ok {
@@ -467,7 +456,7 @@ func TestMultiVersionSAT_DepVersionConstraintSatisfied(t *testing.T) {
 	resolver := NewResolver(r)
 	result := resolveClean(t, resolver, []string{"app-misc/sslapp"})
 
-	slotResult := toSlotKeyMap(result)
+	slotResult := result
 
 	// openssl should be in the result
 	opensslKey := pkg.SlotKey{Name: "dev-libs/openssl", Slot: "0"}
@@ -514,7 +503,7 @@ func TestMultiVersionSAT_TransitiveDeps(t *testing.T) {
 	resolver := NewResolver(r)
 	result := resolveClean(t, resolver, []string{"app-misc/transapp"})
 
-	slotResult := toSlotKeyMap(result)
+	slotResult := result
 
 	// App should be in result
 	appKey := pkg.SlotKey{Name: "app-misc/transapp", Slot: "0"}
@@ -708,7 +697,7 @@ func TestFix_AllCandidatesDepsLoaded(t *testing.T) {
 	resolver := NewResolver(r)
 	result := resolveClean(t, resolver, []string{"app-misc/constrained"})
 
-	slotResult := toSlotKeyMap(result)
+	slotResult := result
 
 	// SAT should pick lib v1 (only version satisfying <2.0)
 	libKey := pkg.SlotKey{Name: "dev-libs/lib", Slot: "0"}
@@ -796,8 +785,7 @@ func TestFix_RootBacktracksOnConflict(t *testing.T) {
 	resolver := NewResolver(r)
 	result := resolveClean(t, resolver, []string{"app-misc/flex"})
 
-
-	slotResult := toSlotKeyMap(result)
+	slotResult := result
 	appKey := pkg.SlotKey{Name: "app-misc/flex", Slot: "0"}
 	p, ok := slotResult[appKey]
 	if !ok {
@@ -840,7 +828,7 @@ func TestFix_ORGroupDepsExplored(t *testing.T) {
 	resolver := NewResolver(r)
 	result := resolveClean(t, resolver, []string{"app-misc/orapp"})
 
-	slotResult := toSlotKeyMap(result)
+	slotResult := result
 
 	// App must be in result
 	appKey := pkg.SlotKey{Name: "app-misc/orapp", Slot: "0"}
@@ -884,7 +872,7 @@ func TestFix_RootRespectsAtomConstraint(t *testing.T) {
 	resolver := NewResolver(r)
 	result := resolveClean(t, resolver, []string{"=app-misc/pinned-1.0"})
 
-	slotResult := toSlotKeyMap(result)
+	slotResult := result
 	key := pkg.SlotKey{Name: "app-misc/pinned", Slot: "0"}
 	p, ok := slotResult[key]
 	if !ok {
@@ -910,7 +898,7 @@ func TestFix_PostSATPassAddsNothing(t *testing.T) {
 	result := resolveClean(t, resolver, []string{"app-misc/complete"})
 
 	// dep should already be in result from SAT, not added by post-pass
-	slotResult := toSlotKeyMap(result)
+	slotResult := result
 	depKey := pkg.SlotKey{Name: "dev-libs/dep", Slot: "0"}
 	if _, ok := slotResult[depKey]; !ok {
 		t.Error("dep should be in SAT result directly, not requiring post-pass")
@@ -933,7 +921,7 @@ func TestFix_RootRespectsSlotAtom(t *testing.T) {
 	resolver := NewResolver(r)
 	result := resolveClean(t, resolver, []string{"dev-lang/py:3.13"})
 
-	slotResult := toSlotKeyMap(result)
+	slotResult := result
 	key := pkg.SlotKey{Name: "dev-lang/py", Slot: "3.13"}
 	p, ok := slotResult[key]
 	if !ok {
@@ -978,7 +966,7 @@ func TestFix_SlotOperatorResolves(t *testing.T) {
 	resolver := NewResolver(r)
 	result := resolveClean(t, resolver, []string{"app-misc/ssluser"})
 
-	slotResult := toSlotKeyMap(result)
+	slotResult := result
 	sslKey := pkg.SlotKey{Name: "dev-libs/openssl", Slot: "0"}
 	if _, ok := slotResult[sslKey]; !ok {
 		t.Error("openssl should be in result — := means any slot, not literal '='")
@@ -1005,7 +993,7 @@ func TestFix_SlotStarOperatorResolves(t *testing.T) {
 	resolver := NewResolver(r)
 	result := resolveClean(t, resolver, []string{"app-misc/staruser"})
 
-	slotResult := toSlotKeyMap(result)
+	slotResult := result
 	libKey := pkg.SlotKey{Name: "dev-libs/mylib", Slot: "5"}
 	if _, ok := slotResult[libKey]; !ok {
 		t.Error("mylib should be in result — :* means any slot")
@@ -1033,7 +1021,7 @@ func TestFix_VersionedSlotOperatorResolves(t *testing.T) {
 	resolver := NewResolver(r)
 	result := resolveClean(t, resolver, []string{"app-misc/versslot"})
 
-	slotResult := toSlotKeyMap(result)
+	slotResult := result
 	sslKey := pkg.SlotKey{Name: "dev-libs/openssl", Slot: "0"}
 	p, ok := slotResult[sslKey]
 	if !ok {
