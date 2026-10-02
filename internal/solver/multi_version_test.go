@@ -1592,7 +1592,7 @@ func TestBlocker_StrongBlockerSameAsWeak(t *testing.T) {
 	adapter1.AddPackage(b1)
 
 	strongAtom, _ := pkg.ParseAtom("!!app/b")
-	adapter1.AddBlockerConflict("app/a", strongAtom)
+	adapter1.AddBlockerConflict(adapter1.GetVarID("app/a@1.0"), strongAtom)
 
 	// Weak blocker
 	adapter2 := NewGophersatAdapter()
@@ -1602,7 +1602,7 @@ func TestBlocker_StrongBlockerSameAsWeak(t *testing.T) {
 	adapter2.AddPackage(b2)
 
 	weakAtom, _ := pkg.ParseAtom("!app/b")
-	adapter2.AddBlockerConflict("app/a", weakAtom)
+	adapter2.AddBlockerConflict(adapter2.GetVarID("app/a@1.0"), weakAtom)
 
 	// Both should produce the same clause count and same clause structure
 	if len(adapter1.clauses) != len(adapter2.clauses) {
@@ -1649,7 +1649,7 @@ func TestBlocker_ClauseConflictSourceInMeta(t *testing.T) {
 	adapter.AddPackage(b)
 
 	blockedAtom, _ := pkg.ParseAtom("!app/b")
-	adapter.AddBlockerConflict("app/a", blockedAtom)
+	adapter.AddBlockerConflict(adapter.GetVarID("app/a@1.0"), blockedAtom)
 
 	if len(adapter.clauses) != 1 {
 		t.Fatalf("expected 1 clause, got %d", len(adapter.clauses))
@@ -1687,7 +1687,7 @@ func TestBlocker_UNSATExplainerShowsBlocker(t *testing.T) {
 
 	// A blocks B
 	blockedAtom, _ := pkg.ParseAtom("!app/b")
-	adapter.AddBlockerConflict("app/a", blockedAtom)
+	adapter.AddBlockerConflict(aID, blockedAtom)
 
 	status, _, _ := adapter.Solve()
 	if status != pkg.StatusUnsat {
@@ -1699,5 +1699,45 @@ func TestBlocker_UNSATExplainerShowsBlocker(t *testing.T) {
 	joined := strings.Join(lines, "\n")
 	if !strings.Contains(joined, "conflict") {
 		t.Errorf("UNSAT explanation should mention conflict source, got:\n%s", joined)
+	}
+}
+
+// TestBlocker_OldVersionBlocksNewDoesNot verifies that when only an old version
+// declares a blocker, SAT backtracks to the new version that doesn't block.
+// This is the canonical Gentoo pattern: !<cat/old-pkg-N after a package rename.
+func TestBlocker_OldVersionBlocksNewDoesNot(t *testing.T) {
+	r := newMultiVersionRepo()
+
+	b := pkg.NewPackage("dev-libs/b", "1.0", "0")
+	r.addVersion(b)
+
+	// a-1.0 blocks b
+	aV1 := pkg.NewPackage("app/a", "1.0", "0")
+	aV1.Deps = []pkg.Constraint{{Name: "dev-libs/b", Type: pkg.ConstraintTypeVersion}}
+	blockerAtom, _ := pkg.ParseAtom("!dev-libs/b")
+	aV1.Blockers = []pkg.BlockerEntry{{Atom: blockerAtom, IsStrong: false}}
+	r.addVersion(aV1)
+
+	// a-2.0 depends on b, no blocker
+	aV2 := pkg.NewPackage("app/a", "2.0", "0")
+	aV2.Deps = []pkg.Constraint{{Name: "dev-libs/b", Type: pkg.ConstraintTypeVersion}}
+	r.addVersion(aV2)
+
+	resolver := NewResolver(r)
+	result := resolveClean(t, resolver, []string{"app/a"})
+
+	slotResult := result
+	aKey := pkg.SlotKey{Name: "app/a", Slot: "0"}
+	p, ok := slotResult[aKey]
+	if !ok {
+		t.Fatal("expected app/a in result")
+	}
+	if p.Version != "2.0" {
+		t.Errorf("expected a-2.0 (no blocker), got %s — SAT should backtrack from a-1.0 which blocks b", p.Version)
+	}
+
+	bKey := pkg.SlotKey{Name: "dev-libs/b", Slot: "0"}
+	if _, ok := slotResult[bKey]; !ok {
+		t.Error("expected dev-libs/b in result — a-2.0 depends on it")
 	}
 }

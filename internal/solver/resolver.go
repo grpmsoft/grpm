@@ -328,7 +328,7 @@ func (r *PortageResolver) addPackageConstraints(adapter *GophersatAdapter, p *pk
 			continue
 		}
 		logging.Debug("Adding blocker conflict from %s: blocks %s", pkgKey, blocker.Atom.String())
-		adapter.AddBlockerConflict(p.Name, blocker.Atom)
+		adapter.AddBlockerConflict(pkgVarID, blocker.Atom)
 	}
 }
 

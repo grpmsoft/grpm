@@ -577,58 +577,38 @@ func (g *GophersatAdapter) AddAtMostOnePerSlot() {
 	}
 }
 
-// AddBlockerConflict adds conflict clauses for a blocker dependency.
-// For each version of the blocking package crossed with each matching version
-// of the blocked package, emits clause (-A | -B): A and B cannot coexist.
-// Both weak (!) and strong (!!) blockers are treated as hard conflicts.
-func (g *GophersatAdapter) AddBlockerConflict(blockerPkgName string, blockedAtom *pkg.Atom) {
-	if blockedAtom == nil {
+// AddBlockerConflict adds conflict clauses for a specific candidate version that
+// declares a blocker. Emits (-blockerVarID | -B) for each matching version B
+// of the blocked package. Only the declaring version gets the conflict — other
+// versions of the same name that don't declare the blocker are unaffected.
+func (g *GophersatAdapter) AddBlockerConflict(blockerVarID int, blockedAtom *pkg.Atom) {
+	if blockedAtom == nil || blockerVarID == 0 {
 		return
 	}
 	blockedName := blockedAtom.CP()
+	blockerKey := g.varNames[blockerVarID]
 
-	// Collect all registered versions of the blocking package
-	blockerVersions := g.packages[blockerPkgName]
-	if len(blockerVersions) == 0 {
-		return
-	}
-
-	// Collect all registered versions of the blocked package that match the atom
 	blockedVersions := g.packages[blockedName]
 	if len(blockedVersions) == 0 {
-		logging.Debug("Blocker %s blocks %s but no versions of %s registered — vacuously true",
-			blockerPkgName, blockedAtom.String(), blockedName)
+		logging.Debug("Blocker %s blocks %s but no versions registered — vacuously true",
+			blockerKey, blockedAtom.String())
 		return
 	}
 
-	// For each blocker version x each matching blocked version, emit (-A | -B)
-	for _, bv := range blockerVersions {
-		blockerKey := bv.Name + "@" + bv.Version
-		blockerVarID, exists := g.vars[blockerKey]
-		if !exists {
+	for _, tv := range blockedVersions {
+		if !blockedAtom.Matches(tv) {
+			continue
+		}
+		targetKey := tv.Name + "@" + tv.Version
+		targetVarID, exists := g.vars[targetKey]
+		if !exists || targetVarID == blockerVarID {
 			continue
 		}
 
-		for _, tv := range blockedVersions {
-			if !blockedAtom.Matches(tv) {
-				continue
-			}
-			targetKey := tv.Name + "@" + tv.Version
-			targetVarID, exists := g.vars[targetKey]
-			if !exists {
-				continue
-			}
-
-			// Skip self-conflict (same package, same version — would be redundant with at-most-one)
-			if blockerVarID == targetVarID {
-				continue
-			}
-
-			reason := fmt.Sprintf("blocker: %s blocks %s (atom %s)", blockerKey, targetKey, blockedAtom.String())
-			g.withMeta(ClauseConflict, reason)
-			g.addClause([]int{-blockerVarID, -targetVarID})
-			logging.Debug("Added blocker conflict: %s vs %s", blockerKey, targetKey)
-		}
+		reason := fmt.Sprintf("blocker: %s blocks %s (atom %s)", blockerKey, targetKey, blockedAtom.String())
+		g.withMeta(ClauseConflict, reason)
+		g.addClause([]int{-blockerVarID, -targetVarID})
+		logging.Debug("Added blocker conflict: %s vs %s", blockerKey, targetKey)
 	}
 }
 
