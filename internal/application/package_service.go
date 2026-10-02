@@ -51,10 +51,14 @@ func (s *PackageService) ResolvePackage(packages []string) (*ResolutionResult, e
 		}, nil // Don't return error - return result with error message
 	}
 
-	// Convert domain model to DTO
+	// Convert domain model to DTO (name:slot → version for multi-slot support)
 	packagesToInstall := make(map[string]string)
-	for _, p := range solution {
-		packagesToInstall[p.Name] = p.Version
+	for key, p := range solution {
+		label := key.Name
+		if key.Slot != "" && key.Slot != "0" {
+			label = key.Name + ":" + key.Slot
+		}
+		packagesToInstall[label] = p.Version
 	}
 
 	// Use Domain Service to find conflicts
