@@ -2677,14 +2677,14 @@ func TestAction_Remove_BlockerDeselects(t *testing.T) {
 	resolver.SetInstalledDB(db)
 	result := resolveClean(t, resolver, []string{"app-alternatives/bzip2"})
 
-	// A should be in result (Keep — already installed)
+	// bzip2 is the root atom, same version installed → Reinstall (Portage semantics)
 	aKey := pkg.SlotKey{Name: "app-alternatives/bzip2", Slot: "0"}
 	aEntry, ok := result[aKey]
 	if !ok {
 		t.Fatal("expected bzip2 in result")
 	}
-	if aEntry.Action != ActionKeep {
-		t.Errorf("bzip2 should be Keep (already installed), got %s", aEntry.Action)
+	if aEntry.Action != ActionReinstall {
+		t.Errorf("root same-version should be Reinstall, got %s", aEntry.Action)
 	}
 
 	// B should be in result as ActionRemove — blocker prohibits coexistence,
@@ -2808,7 +2808,11 @@ func TestBDEPEND_SkipForInstalledKeep(t *testing.T) {
 	perl := pkg.NewPackage("dev-lang/perl", "5.40.0", "0")
 	r.addVersion(perl)
 
-	// lib has BDEPEND on elt-patches
+	// app depends on lib; lib has BDEPEND on elt-patches
+	app := pkg.NewPackage("app-misc/app", "1.0", "0")
+	app.Deps = []pkg.Constraint{{Name: "dev-libs/lib", Type: pkg.ConstraintTypeVersion}}
+	r.addVersion(app)
+
 	lib := pkg.NewPackage("dev-libs/lib", "1.0", "0")
 	lib.Deps = []pkg.Constraint{
 		{Name: "app-portage/elt-patches", Type: pkg.ConstraintTypeVersion, DepType: pkg.DepTypeBuildHost},
@@ -2826,13 +2830,14 @@ func TestBDEPEND_SkipForInstalledKeep(t *testing.T) {
 
 	resolver := NewResolver(r)
 	resolver.SetInstalledDB(db)
-	result := resolveClean(t, resolver, []string{"dev-libs/lib"})
+	// Resolve app (root) which depends on lib (dep, installed → Keep)
+	result := resolveClean(t, resolver, []string{"app-misc/app"})
 
-	// lib should be Keep (installed same version)
+	// lib should be Keep (dep, installed same version, not root)
 	libKey := pkg.SlotKey{Name: "dev-libs/lib", Slot: "0"}
 	entry := result[libKey]
 	if entry == nil || entry.Action != ActionKeep {
-		t.Fatalf("lib should be Keep, got %v", entry)
+		t.Fatalf("lib (dep) should be Keep, got %v", entry)
 	}
 
 	// elt-patches and perl should NOT be in result — BDEPEND of Keep package
@@ -2860,7 +2865,11 @@ func TestBDEPEND_SkipForInstalledKeep(t *testing.T) {
 func TestBDEPEND_NotSkippedWithNewUse(t *testing.T) {
 	r := newMultiVersionRepo()
 
-	// lib has BDEPEND on missingtool (not in repo)
+	// app depends on lib; lib has BDEPEND on missingtool (not in repo)
+	app := pkg.NewPackage("app-misc/app", "1.0", "0")
+	app.Deps = []pkg.Constraint{{Name: "dev-libs/lib", Type: pkg.ConstraintTypeVersion}}
+	r.addVersion(app)
+
 	lib := pkg.NewPackage("dev-libs/lib", "1.0", "0")
 	lib.Deps = []pkg.Constraint{
 		{Name: "dev-build/missingtool", Type: pkg.ConstraintTypeVersion, DepType: pkg.DepTypeBuildHost},
@@ -2875,20 +2884,20 @@ func TestBDEPEND_NotSkippedWithNewUse(t *testing.T) {
 		t.Fatalf("failed to add installed: %v", err)
 	}
 
-	// Without --newuse: lib=Keep, BDEPEND skipped, SAT OK
+	// Without --newuse: lib=Keep (dep, not root), BDEPEND skipped, SAT OK
 	resolver := NewResolver(r)
 	resolver.SetInstalledDB(db)
-	result := resolveClean(t, resolver, []string{"dev-libs/lib"})
+	result := resolveClean(t, resolver, []string{"app-misc/app"})
 	libKey := pkg.SlotKey{Name: "dev-libs/lib", Slot: "0"}
 	if entry := result[libKey]; entry == nil || entry.Action != ActionKeep {
-		t.Errorf("without --newuse: expected Keep, got %v", entry)
+		t.Errorf("without --newuse: expected Keep for dep, got %v", entry)
 	}
 
 	// With --newuse: lib rebuilds, BDEPEND required, missingtool → UNSAT
 	resolver2 := NewResolver(r)
 	resolver2.SetInstalledDB(db)
 	resolver2.SetOptions(ResolveOptions{NewUse: true})
-	_, err := resolver2.Resolve([]string{"dev-libs/lib"})
+	_, err := resolver2.Resolve([]string{"app-misc/app"})
 	if err == nil {
 		t.Error("with --newuse: expected UNSAT — BDEPEND missingtool not in repo")
 	}
@@ -3077,5 +3086,33 @@ func TestAction_UpdateWithoutDeep_DepKeeps(t *testing.T) {
 	}
 	if zlibEntry.Action != ActionKeep {
 		t.Errorf("-u without -D: dep should be Keep, got %s", zlibEntry.Action)
+	}
+}
+
+// TestAction_RootSameVersion_Reinstall verifies Portage semantics:
+// when the user explicitly requests an atom that is already installed at the
+// same version, Portage does a Reinstall (R), not Keep (K).
+// This is why `emerge app-alternatives/bzip2` shows [ebuild R] bzip2-1.
+func TestAction_RootSameVersion_Reinstall(t *testing.T) {
+	r := newMultiVersionRepo()
+	bzip := pkg.NewPackage("app-alternatives/bzip2", "1", "0")
+	r.addVersion(bzip)
+
+	db := state.NewPackageDatabase("/var/db/pkg")
+	if err := db.Add(&state.InstalledPackage{Package: pkg.NewPackage("app-alternatives/bzip2", "1", "0")}); err != nil {
+		t.Fatal(err)
+	}
+
+	resolver := NewResolver(r)
+	resolver.SetInstalledDB(db)
+	result := resolveClean(t, resolver, []string{"app-alternatives/bzip2"})
+
+	key := pkg.SlotKey{Name: "app-alternatives/bzip2", Slot: "0"}
+	entry, ok := result[key]
+	if !ok {
+		t.Fatal("expected bzip2 in result")
+	}
+	if entry.Action != ActionReinstall {
+		t.Errorf("root same-version should be Reinstall, got %s", entry.Action)
 	}
 }

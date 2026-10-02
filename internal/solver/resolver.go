@@ -138,6 +138,10 @@ type PortageResolver struct {
 	// On UNSAT retry, the level is incremented for groups whose preferred alternative
 	// was prohibited, allowing the next alternative's deps to be explored.
 	orExpansionLevel map[string]int
+
+	// rootNames stores explicitly requested atom names for the current Resolve call.
+	// Root atoms get different semantics: always upgrade, reinstall if same version.
+	rootNames map[string]bool
 }
 
 // NewResolver creates a new resolver without mask/keyword support.
@@ -558,7 +562,7 @@ func (r *PortageResolver) determineAction(p *pkg.Package) PackageAction {
 		return ActionInstall // new slot, nothing installed there
 	}
 	if installed.Version == p.Version {
-		if r.options.NewUse {
+		if r.options.NewUse || r.rootNames[p.Name] {
 			return ActionReinstall
 		}
 		return ActionKeep
@@ -690,6 +694,7 @@ const maxOrRetries = 10
 //nolint:gocyclo // Complexity inherent to multi-pass Portage-compatible resolution with OR-group support
 func (r *PortageResolver) Resolve(packages []string) (ResolveResult, error) {
 	r.PackagesExplored = 0
+	r.rootNames = make(map[string]bool)
 
 	// Track root packages: name -> the specific version selected by loadPackageFromAtom.
 	rootPackageNames := make([]string, 0, len(packages))
@@ -705,6 +710,7 @@ func (r *PortageResolver) Resolve(packages []string) (ResolveResult, error) {
 		rootPackageNames = append(rootPackageNames, p.Name)
 		rootPackagesMap[p.Name] = p
 		rootAtoms[p.Name] = pkgName
+		r.rootNames[p.Name] = true
 		logging.Debug("Resolving package: %s-%s with %d dependencies",
 			p.Name, p.Version, len(p.Deps))
 	}
