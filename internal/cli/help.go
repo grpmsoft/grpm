@@ -731,7 +731,7 @@ func (r *CommandRegistry) registerAllCommands() {
 func FormatMainHelp(version string, commands []CommandMeta) string {
 	var sb strings.Builder
 
-	fmt.Fprintf(&sb, "GRPM - Go Resource Package Manager %s\n", version)
+	fmt.Fprintf(&sb, "GRPM - Go Resource Package Manager v%s\n", strings.TrimPrefix(version, "v"))
 	sb.WriteString("\nUsage: grpm [global-options] <command> [command-options] [arguments...]\n")
 
 	sb.WriteString("\nGlobal Options:\n")

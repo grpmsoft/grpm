@@ -437,4 +437,51 @@ func TestTopologicalSort(t *testing.T) {
 			t.Errorf("expected empty, got %v", order)
 		}
 	})
+
+	t.Run("PDEPEND edges excluded — no false cycle", func(t *testing.T) {
+		// A depends on B (RDEPEND), B post-depends on A (PDEPEND)
+		a := pkg.NewPackage("cat/a", "1.0", "0")
+		b := pkg.NewPackage("cat/b", "1.0", "0")
+		a.Deps = []pkg.Constraint{{Name: "cat/b", DepType: pkg.DepTypeRuntime}}
+		b.Deps = []pkg.Constraint{{Name: "cat/a", DepType: pkg.DepTypePostMerge}}
+
+		solution := map[string]*pkg.Package{"cat/a": a, "cat/b": b}
+		order := topologicalSort(solution)
+
+		idx := make(map[string]int)
+		for i, k := range order {
+			idx[k] = i
+		}
+		if idx["cat/b"] >= idx["cat/a"] {
+			t.Errorf("b should come before a (PDEPEND excluded), got order: %v", order)
+		}
+	})
+
+	t.Run("real cycle — deterministic sorted fallback", func(t *testing.T) {
+		// A→B→C→A — true cycle (all RDEPEND), plus D→A outside cycle
+		a := pkg.NewPackage("cat/a", "1.0", "0")
+		b := pkg.NewPackage("cat/b", "1.0", "0")
+		c := pkg.NewPackage("cat/c", "1.0", "0")
+		d := pkg.NewPackage("cat/d", "1.0", "0")
+		a.Deps = []pkg.Constraint{{Name: "cat/b", DepType: pkg.DepTypeRuntime}}
+		b.Deps = []pkg.Constraint{{Name: "cat/c", DepType: pkg.DepTypeRuntime}}
+		c.Deps = []pkg.Constraint{{Name: "cat/a", DepType: pkg.DepTypeRuntime}}
+		d.Deps = []pkg.Constraint{{Name: "cat/a", DepType: pkg.DepTypeRuntime}}
+
+		solution := map[string]*pkg.Package{"cat/a": a, "cat/b": b, "cat/c": c, "cat/d": d}
+
+		// Run multiple times to verify determinism
+		first := topologicalSort(solution)
+		for i := 0; i < 20; i++ {
+			order := topologicalSort(solution)
+			for j, k := range order {
+				if k != first[j] {
+					t.Fatalf("non-deterministic: run %d got %v, expected %v", i, order, first)
+				}
+			}
+		}
+		if len(first) != 4 {
+			t.Errorf("expected 4 elements, got %d", len(first))
+		}
+	})
 }

@@ -134,10 +134,7 @@ func (a *App) runEmerge(args []string) error {
 	if *noDeps {
 		// --nodeps: skip resolution, just find the best acceptable version
 		logging.Action("Skipping dependency resolution (--nodeps)...")
-		acceptKeywords := []string{"amd64"}
-		if cfg != nil && len(cfg.MakeConf.ACCEPT_KEYWORDS) > 0 {
-			acceptKeywords = cfg.MakeConf.ACCEPT_KEYWORDS
-		}
+		acceptKeywords := a.getAcceptKeywords(cfg)
 		solution = make(map[string]*pkg.Package)
 		for _, name := range packages {
 			found, loadErr := a.loadBestAcceptableVersion(r, name, acceptKeywords)
@@ -185,14 +182,16 @@ func (a *App) runEmerge(args []string) error {
 		}
 	}
 
-	// Display build plan
+	// Display build plan in topological order
+	buildOrder := topologicalSort(solution)
 	fmt.Println("\n*** Build plan:")
 	fmt.Println("*** These are the packages that would be built from source:")
 	if *parallelBuilds > 1 {
 		fmt.Printf("*** Parallel builds: %d packages at a time\n", *parallelBuilds)
 	}
 	fmt.Println()
-	for _, p := range solution {
+	for _, key := range buildOrder {
+		p := solution[key]
 		useStr := FormatUSEFlags(p, cfg)
 		fmt.Printf("[ebuild  N    ] %s-%s %s\n", p.Name, p.Version, useStr)
 	}
@@ -503,15 +502,15 @@ func (a *App) createFetcher(distDir string) fetch.Fetcher {
 }
 
 // topologicalSort returns solution keys ordered so dependencies come before dependents.
-// Falls back to sorted order if the graph has cycles.
+// PDEPEND (post-merge) edges are excluded — Portage merges those after the dependent.
+// Falls back to deterministic sorted order for nodes in cycles.
 func topologicalSort(solution map[string]*pkg.Package) []string {
-	// Build adjacency: for each package, which solution keys must come first
 	depIndex := make(map[string]string, len(solution))
 	for key, p := range solution {
 		depIndex[p.Name] = key
 	}
 
-	// Kahn's algorithm
+	// Kahn's algorithm — skip PDEPEND edges to avoid false cycles
 	inDegree := make(map[string]int, len(solution))
 	edges := make(map[string][]string, len(solution))
 	for key := range solution {
@@ -519,6 +518,9 @@ func topologicalSort(solution map[string]*pkg.Package) []string {
 	}
 	for key, p := range solution {
 		for _, dep := range p.Deps {
+			if dep.DepType == pkg.DepTypePostMerge {
+				continue
+			}
 			if depKey, ok := depIndex[dep.Name]; ok && depKey != key {
 				edges[depKey] = append(edges[depKey], key)
 				inDegree[key]++
@@ -548,17 +550,20 @@ func topologicalSort(solution map[string]*pkg.Package) []string {
 		}
 	}
 
-	// Cycle fallback: append remaining in sorted order
+	// Cycle fallback: append remaining in deterministic sorted order
 	if len(result) < len(solution) {
 		seen := make(map[string]bool, len(result))
 		for _, k := range result {
 			seen[k] = true
 		}
+		var remaining []string
 		for key := range solution {
 			if !seen[key] {
-				result = append(result, key)
+				remaining = append(remaining, key)
 			}
 		}
+		sort.Strings(remaining)
+		result = append(result, remaining...)
 	}
 
 	return result
