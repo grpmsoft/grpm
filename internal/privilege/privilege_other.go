@@ -3,7 +3,6 @@
 package privilege
 
 import (
-	"fmt"
 	"os/exec"
 )
 
@@ -29,10 +28,8 @@ func (m *Manager) DropPrivilegesForFetch(cmd *exec.Cmd) error {
 	return nil
 }
 
-// lookupPortageUser is not supported on non-Linux platforms.
-func lookupPortageUser() (uid, gid uint32, err error) {
-	return 0, 0, fmt.Errorf("%w: not supported on this platform", ErrUserNotFound)
-}
+// initPortageUser is a no-op on non-Linux platforms.
+func initPortageUser(_ *Manager) {}
 
 // IsRoot returns false on non-Linux platforms.
 //

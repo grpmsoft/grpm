@@ -292,9 +292,24 @@ func TestFormatMainHelp(t *testing.T) {
 	registry := NewCommandRegistry()
 	help := FormatMainHelp("0.9.1", registry.All())
 
-	// Check version
-	if !strings.Contains(help, "0.9.1") {
-		t.Error("Missing version in main help")
+	// Check version — always shows v prefix
+	if !strings.Contains(help, "v0.9.1") {
+		t.Error("Missing v0.9.1 in main help")
+	}
+
+	// GoReleaser passes version without v — should still show v prefix
+	helpNoV := FormatMainHelp("0.9.4", registry.All())
+	if !strings.Contains(helpNoV, "v0.9.4") {
+		t.Error("Version without v prefix should be normalized to v0.9.4")
+	}
+
+	// Makefile passes version with v — should not double-v
+	helpWithV := FormatMainHelp("v0.1.0-dev", registry.All())
+	if strings.Contains(helpWithV, "vv0.1.0-dev") {
+		t.Error("Version with v prefix should not produce vv")
+	}
+	if !strings.Contains(helpWithV, "v0.1.0-dev") {
+		t.Error("Version v0.1.0-dev should appear as-is with v prefix")
 	}
 
 	// Check global options
