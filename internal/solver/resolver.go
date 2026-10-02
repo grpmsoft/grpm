@@ -787,7 +787,8 @@ func (r *PortageResolver) Resolve(packages []string) (ResolveResult, error) {
 		// Solve
 		const maxsatTimeout = 5 * time.Second
 		updateMode := r.options.Update
-		status, solution, err := adapter.SolveOptimal(maxsatTimeout, updateMode)
+		deepMode := r.options.Deep
+		status, solution, err := adapter.SolveOptimal(maxsatTimeout, updateMode, deepMode)
 		if err != nil {
 			return nil, err
 		}

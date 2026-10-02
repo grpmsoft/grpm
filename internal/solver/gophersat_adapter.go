@@ -475,7 +475,7 @@ type versionRank struct {
 // Root packages (explicitly requested atoms) always prefer the newest version,
 // matching Portage semantics: `emerge foo` always merges the best available
 // version, even without --update. Only dependencies keep installed versions.
-func (g *GophersatAdapter) buildVersionPreferences(updateMode bool) []versionRank {
+func (g *GophersatAdapter) buildVersionPreferences(updateMode bool, deepMode bool) []versionRank {
 	var preferences []versionRank
 
 	// Build set of root package names from rootVars
@@ -503,7 +503,7 @@ func (g *GophersatAdapter) buildVersionPreferences(updateMode bool) []versionRan
 		// Root packages always prefer newest (like update mode).
 		// Dependencies prefer installed version when not in update mode.
 		isRoot := rootNames[pkgName]
-		useNewest := updateMode || isRoot
+		useNewest := isRoot || (updateMode && deepMode)
 
 		if useNewest {
 			// Newest-first: rank 0 = newest (already sorted descending)
@@ -562,14 +562,14 @@ func (g *GophersatAdapter) buildVersionPreferences(updateMode bool) []versionRan
 // If false, installed version gets rank 0 (prefer keeping), then newest.
 //
 // Falls back to regular SAT result on timeout or if optimization fails.
-func (g *GophersatAdapter) SolveOptimal(timeout time.Duration, updateMode bool) (pkg.Status, map[string]string, error) {
+func (g *GophersatAdapter) SolveOptimal(timeout time.Duration, updateMode bool, deepMode bool) (pkg.Status, map[string]string, error) {
 	// First: regular SAT to check satisfiability
 	status, fallbackSolution, err := g.Solve()
 	if status != pkg.StatusSat {
 		return status, fallbackSolution, err
 	}
 
-	preferences := g.buildVersionPreferences(updateMode)
+	preferences := g.buildVersionPreferences(updateMode, deepMode)
 	if len(preferences) == 0 && len(g.orGroupPrefs) == 0 {
 		return pkg.StatusSat, fallbackSolution, nil
 	}

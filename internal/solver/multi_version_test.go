@@ -3024,3 +3024,58 @@ func TestAction_DepKeepsInstalled(t *testing.T) {
 		t.Errorf("dep should be ActionKeep, got %s", entry.Action)
 	}
 }
+
+// TestAction_UpdateWithoutDeep_DepKeeps verifies Portage -u semantics:
+// --update without --deep upgrades only root atoms, not their dependencies.
+// Portage: `emerge -u foo` upgrades foo but keeps deps at installed versions.
+// Only `emerge -uD foo` upgrades both foo and its transitive deps.
+func TestAction_UpdateWithoutDeep_DepKeeps(t *testing.T) {
+	r := newMultiVersionRepo()
+	root := pkg.NewPackage("dev-libs/libgpg-error", "1.56", "0")
+	rootNew := pkg.NewPackage("dev-libs/libgpg-error", "1.61", "0")
+	rootNew.Deps = []pkg.Constraint{{Name: "sys-libs/zlib", Type: pkg.ConstraintTypeVersion}}
+	root.Deps = []pkg.Constraint{{Name: "sys-libs/zlib", Type: pkg.ConstraintTypeVersion}}
+	zlib10 := pkg.NewPackage("sys-libs/zlib", "1.3", "0/1.3")
+	zlib20 := pkg.NewPackage("sys-libs/zlib", "1.3.2", "0/1.3.2")
+	r.addVersion(root)
+	r.addVersion(rootNew)
+	r.addVersion(zlib10)
+	r.addVersion(zlib20)
+
+	db := state.NewPackageDatabase("/var/db/pkg")
+	if err := db.Add(&state.InstalledPackage{Package: pkg.NewPackage("dev-libs/libgpg-error", "1.56", "0")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Add(&state.InstalledPackage{Package: pkg.NewPackage("sys-libs/zlib", "1.3", "0/1.3")}); err != nil {
+		t.Fatal(err)
+	}
+
+	resolver := NewResolver(r)
+	resolver.SetInstalledDB(db)
+	// --update WITHOUT --deep: root upgrades, dep keeps
+	resolver.SetOptions(ResolveOptions{Update: true, Deep: false})
+	result := resolveClean(t, resolver, []string{"dev-libs/libgpg-error"})
+
+	// Root should upgrade
+	rootKey := pkg.SlotKey{Name: "dev-libs/libgpg-error", Slot: "0"}
+	rootEntry, ok := result[rootKey]
+	if !ok {
+		t.Fatal("expected libgpg-error in result")
+	}
+	if rootEntry.Package.Version != "1.61" {
+		t.Errorf("root should upgrade to 1.61, got %s", rootEntry.Package.Version)
+	}
+
+	// Dep should keep installed — -u without -D doesn't touch deps
+	zlibKey := pkg.SlotKey{Name: "sys-libs/zlib", Slot: "0"}
+	zlibEntry, ok := result[zlibKey]
+	if !ok {
+		t.Fatal("expected zlib in result")
+	}
+	if zlibEntry.Package.Version != "1.3" {
+		t.Errorf("-u without -D: dep should keep 1.3, got %s", zlibEntry.Package.Version)
+	}
+	if zlibEntry.Action != ActionKeep {
+		t.Errorf("-u without -D: dep should be Keep, got %s", zlibEntry.Action)
+	}
+}
