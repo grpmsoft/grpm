@@ -1284,3 +1284,38 @@ func (g *GophersatAdapter) ExplainUNSATGeneric() []string {
 
 	return lines
 }
+
+// HasConflictWith returns true if the given varID has a ClauseConflict
+// with any selected variable in the result. Used to determine if an
+// installed package was deselected by a blocker.
+func (g *GophersatAdapter) HasConflictWith(varID int, result ResolveResult) bool {
+	for i, clause := range g.clauses {
+		if i >= len(g.clausesMeta) || g.clausesMeta[i].Source != ClauseConflict {
+			continue
+		}
+		// Conflict clause is (-A | -B), i.e., two negative literals
+		if len(clause) != 2 {
+			continue
+		}
+		var otherVarID int
+		if clause[0] == -varID {
+			otherVarID = -clause[1]
+		} else if clause[1] == -varID {
+			otherVarID = -clause[0]
+		} else {
+			continue
+		}
+		// Check if the other variable is selected (in result)
+		if otherName, ok := g.varNames[otherVarID]; ok {
+			parts := strings.SplitN(otherName, "@", 2)
+			if len(parts) == 2 {
+				for key, entry := range result {
+					if entry != nil && key.Name == parts[0] && entry.Package.Version == parts[1] {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
+}

@@ -93,9 +93,9 @@ func TestResolveVersionedAtom(t *testing.T) {
 
 // findPackageByName searches result map values for a package with matching Name.
 func findPackageByName(result ResolveResult, name string) *pkg.Package {
-	for _, p := range result {
-		if p.Name == name {
-			return p
+	for _, e := range result {
+		if e != nil && e.Package.Name == name {
+			return e.Package
 		}
 	}
 	return nil
