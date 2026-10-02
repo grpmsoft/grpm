@@ -2359,6 +2359,37 @@ func TestMAXSAT_DepVersionPreference(t *testing.T) {
 	}
 }
 
+func TestMAXSAT_ORGroupPrefersLeftmost(t *testing.T) {
+	r := newMultiVersionRepo()
+
+	a := pkg.NewPackage("dev-libs/a", "1.0", "0")
+	b := pkg.NewPackage("dev-libs/b", "1.0", "0")
+	r.addVersion(a)
+	r.addVersion(b)
+
+	// app depends on || ( a b ) — leftmost (a) should always be preferred
+	app := pkg.NewPackage("app/app", "1.0", "0")
+	app.Deps = []pkg.Constraint{
+		{Name: "dev-libs/a", Type: pkg.ConstraintTypeVersion, OrGroupID: 1},
+		{Name: "dev-libs/b", Type: pkg.ConstraintTypeVersion, OrGroupID: 1},
+	}
+	r.addVersion(app)
+
+	for i := range 30 {
+		resolver := NewResolver(r)
+		result := resolveClean(t, resolver, []string{"app/app"})
+
+		aKey := pkg.SlotKey{Name: "dev-libs/a", Slot: "0"}
+		if _, ok := result[aKey]; !ok {
+			bKey := pkg.SlotKey{Name: "dev-libs/b", Slot: "0"}
+			if _, ok := result[bKey]; ok {
+				t.Fatalf("run %d: OR-group picked b instead of a (leftmost) — non-deterministic", i)
+			}
+			t.Fatalf("run %d: neither a nor b in result", i)
+		}
+	}
+}
+
 func TestMAXSAT_BacktrackStillWorks(t *testing.T) {
 	r := newMultiVersionRepo()
 

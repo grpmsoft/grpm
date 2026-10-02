@@ -61,6 +61,11 @@ type ResolveOptions struct {
 	// Equivalent to Portage's --newuse
 	NewUse bool
 
+	// Update prefers newer versions over installed ones.
+	// Without this, installed versions that satisfy constraints are preferred.
+	// Equivalent to Portage's --update/-u
+	Update bool
+
 	// EmptyTree assumes no packages are installed.
 	// Resolves the complete dependency tree from scratch.
 	// Equivalent to Portage's --emptytree
@@ -635,7 +640,7 @@ func (r *PortageResolver) Resolve(packages []string) (ResolveResult, error) {
 	// Solve with MAX-SAT optimization for version preferences.
 	// Timeout with fallback to regular SAT — user sees a warning if optimization fails.
 	const maxsatTimeout = 5 * time.Second
-	updateMode := r.options.Deep || r.options.NewUse // --deep/--newuse imply prefer newest
+	updateMode := r.options.Update
 	status, solution, err := adapter.SolveOptimal(maxsatTimeout, updateMode)
 	if err != nil {
 		return nil, err

@@ -72,6 +72,8 @@ func (a *App) runEmerge(args []string) error {
 	showInfo := fs.Bool("info", false, "Show system environment information")
 
 	// Dependency resolution options (Portage-compatible)
+	update := fs.Bool("update", false, "Prefer newer versions over installed ones")
+	fs.BoolVar(update, "u", false, "Alias for --update")
 	deep := fs.Bool("deep", false, "Traverse dependencies of already-installed packages")
 	fs.BoolVar(deep, "D", false, "Alias for --deep")
 	withBdeps := fs.Bool("with-bdeps", false, "Include build-time dependencies for installed packages")
@@ -149,6 +151,7 @@ func (a *App) runEmerge(args []string) error {
 		logging.Action("Calculating dependencies...")
 		var resolveErr error
 		solution, resolveErr = a.resolvePackageDependenciesWithOptions(r, packages, solver.ResolveOptions{
+			Update:    *update,
 			Deep:      *deep,
 			WithBdeps: *withBdeps,
 			EmptyTree: *emptyTree || *useMock, // Mock mode implies emptytree

@@ -68,9 +68,12 @@ type GophersatAdapter struct {
 	rootVars     []int                     // var IDs from root at-least-one clauses
 
 	// installed tracks which SAT variable IDs represent packages from VDB
-	// (already installed on the system). Used by MAX-SAT (task 014) to assign
-	// preference weights for keeping installed versions.
 	installed map[int]bool
+
+	// orGroupPrefs tracks OR-group alternative preferences for MAX-SAT.
+	// Key: varID of provider, Value: position in OR-group (0 = first/preferred).
+	// When multiple OR-groups mention the same var, the lowest position wins.
+	orGroupPrefs map[int]int
 }
 
 func NewGophersatAdapter() *GophersatAdapter {
@@ -79,9 +82,10 @@ func NewGophersatAdapter() *GophersatAdapter {
 		varNames:     make(map[int]string),
 		packages:     make(map[string][]*pkg.Package),
 		addedClauses: make(map[string]struct{}),
-		implications: make(map[int][]implicationEdge),
-		prohibits:    make(map[int]string),
-		installed:    make(map[int]bool),
+		implications:  make(map[int][]implicationEdge),
+		prohibits:     make(map[int]string),
+		installed:     make(map[int]bool),
+		orGroupPrefs:  make(map[int]int),
 	}
 }
 
@@ -521,26 +525,11 @@ func (g *GophersatAdapter) SolveOptimal(timeout time.Duration, updateMode bool) 
 	}
 
 	preferences := g.buildVersionPreferences(updateMode)
-	if len(preferences) == 0 {
+	if len(preferences) == 0 && len(g.orGroupPrefs) == 0 {
 		return pkg.StatusSat, fallbackSolution, nil
 	}
 
-	// Build optimization problem: all existing hard clauses + soft preference clauses.
-	// For each version var, add soft clause (var) with weight = maxRank - rank + 1.
-	// Higher weight = more important to satisfy = more preferred version.
-	// Minimize counts violated soft clauses weighted inversely.
-	maxRank := 0
-	for _, p := range preferences {
-		if p.rank > maxRank {
-			maxRank = p.rank
-		}
-	}
-
-	// Construct clauses: all hard clauses + soft penalties for non-preferred versions.
-	// Soft clause: (-var OR relaxLit) — if var IS selected, relaxLit must be true (costs weight).
-	// Preferred version (rank 0) has no soft clause — zero cost.
-	// This way: selecting nothing = cost 0, selecting preferred = cost 0,
-	// selecting non-preferred = cost proportional to rank.
+	// Build soft penalty clauses for non-preferred choices.
 	allClauses := make([][]int, len(g.clauses))
 	copy(allClauses, g.clauses)
 
@@ -548,15 +537,39 @@ func (g *GophersatAdapter) SolveOptimal(timeout time.Duration, updateMode bool) 
 	var relaxLits []solver.Lit
 	var weights []int
 
+	// Version preferences: penalize non-preferred versions
+	maxVersionRank := 0
+	for _, p := range preferences {
+		if p.rank > maxVersionRank {
+			maxVersionRank = p.rank
+		}
+	}
 	for _, p := range preferences {
 		if p.rank == 0 {
-			continue // preferred version = no penalty
+			continue
 		}
 		relaxVar := nextVar
 		nextVar++
 		allClauses = append(allClauses, []int{-p.varID, relaxVar})
 		relaxLits = append(relaxLits, solver.IntToLit(int32(relaxVar)))
 		weights = append(weights, p.rank)
+	}
+
+	// OR-group preferences: penalize non-first alternatives.
+	// Weight dominates version preferences to prevent OR choice flip.
+	orWeight := maxVersionRank + 1
+	if orWeight < 2 {
+		orWeight = 2
+	}
+	for varID, pos := range g.orGroupPrefs {
+		if pos == 0 {
+			continue
+		}
+		relaxVar := nextVar
+		nextVar++
+		allClauses = append(allClauses, []int{-varID, relaxVar})
+		relaxLits = append(relaxLits, solver.IntToLit(int32(relaxVar)))
+		weights = append(weights, orWeight*pos)
 	}
 
 	if len(relaxLits) == 0 {
@@ -590,6 +603,7 @@ func (g *GophersatAdapter) SolveOptimal(timeout time.Duration, updateMode bool) 
 			return pkg.StatusSat, fallbackSolution, nil
 		}
 		logging.Debug("MAX-SAT optimal cost: %d", r.cost)
+
 		solution := g.extractSolution(r.model)
 		return pkg.StatusSat, solution, nil
 
@@ -599,6 +613,7 @@ func (g *GophersatAdapter) SolveOptimal(timeout time.Duration, updateMode bool) 
 	}
 }
 
+// solveTieBreak fixes the optimal cost as a hard constraint and re-solves.
 // AddImplication adds an implication clause: if dependent is selected,
 // then at least one of the providers must be selected.
 // Encodes as: (-dependent | provider1 | provider2 | ...)
@@ -680,13 +695,16 @@ func (g *GophersatAdapter) AddImplicationSlotConstraint(dependentVarID int, c pk
 // to only those whose effective USE flags satisfy the requirements.
 func (g *GophersatAdapter) AddImplicationOrGroup(dependentVarID int, alternatives []pkg.Constraint) error {
 	var allSatisfyingVars []int
-	for _, alt := range alternatives {
+	for altIdx, alt := range alternatives {
 		if alt.Version != nil {
 			for _, p := range g.packages[alt.Name] {
 				if alt.Version.Satisfies(p.Version) && alt.PackageSatisfiesUseDeps(p.UseFlags) {
 					key := p.Name + "@" + p.Version
 					varID := g.getVarID(key)
 					allSatisfyingVars = append(allSatisfyingVars, varID)
+					if prev, exists := g.orGroupPrefs[varID]; !exists || altIdx < prev {
+						g.orGroupPrefs[varID] = altIdx
+					}
 				}
 			}
 		} else {
@@ -695,6 +713,9 @@ func (g *GophersatAdapter) AddImplicationOrGroup(dependentVarID int, alternative
 					key := p.Name + "@" + p.Version
 					varID := g.getVarID(key)
 					allSatisfyingVars = append(allSatisfyingVars, varID)
+					if prev, exists := g.orGroupPrefs[varID]; !exists || altIdx < prev {
+						g.orGroupPrefs[varID] = altIdx
+					}
 				}
 			}
 		}
