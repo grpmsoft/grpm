@@ -694,13 +694,13 @@ func parseAtomVersion(atom string) (pkg.Constraint, error) {
 		Type: pkg.ConstraintTypeVersion,
 	}
 
-	// Special case: =* operator (glob pattern)
+	// Special case: =* operator (PMS 8.3.1: prefix glob)
 	if strings.HasPrefix(atom, "=") && strings.Contains(atom, "*") {
 		atom = strings.TrimPrefix(atom, "=")
 		name, version := splitAtomNameVersion(atom)
 		versionPattern := strings.TrimSuffix(version, "*")
 		constraint.Name = name
-		constraint.Version = pkg.NewMinVersionConstraint(versionPattern)
+		constraint.Version = pkg.NewVersionConstraint(pkg.OpEqualGlob, versionPattern)
 		return constraint, nil
 	}
 

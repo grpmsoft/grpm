@@ -805,8 +805,10 @@ func (a *Atom) ToConstraint() Constraint {
 	if a.Version != "" {
 		var op VersionOperator
 		switch a.Operator {
-		case "=", "=*":
+		case "=":
 			op = OpEqual
+		case "=*":
+			op = OpEqualGlob
 		case ">":
 			op = OpGreater
 		case ">=":
