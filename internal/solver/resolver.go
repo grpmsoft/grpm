@@ -18,10 +18,11 @@ import (
 type PackageAction int
 
 const (
-	ActionInstall PackageAction = iota
-	ActionUpgrade
-	ActionKeep
-	ActionRemove
+	ActionInstall   PackageAction = iota
+	ActionUpgrade                 // version > installed, same slot
+	ActionDowngrade               // version < installed, same slot (Portage "UD")
+	ActionKeep                    // same version and slot, already installed
+	ActionRemove                  // installed but deselected (blocker, slot removal)
 )
 
 func (a PackageAction) String() string {
@@ -30,6 +31,8 @@ func (a PackageAction) String() string {
 		return "N"
 	case ActionUpgrade:
 		return "U"
+	case ActionDowngrade:
+		return "UD"
 	case ActionKeep:
 		return "K"
 	case ActionRemove:
@@ -515,14 +518,38 @@ func (r *PortageResolver) determineAction(p *pkg.Package) PackageAction {
 	if r.installedDB == nil {
 		return ActionInstall
 	}
-	installed := r.installedDB.GetInstalledVersion(p.Name)
-	if installed == nil || installed.Package == nil {
-		return ActionInstall
+	// Find installed package in the SAME slot.
+	// GetInstalledVersion returns first by name regardless of slot, so we scan
+	// the full list to find a match in the same slot.
+	installed := r.findInstalledInSlot(p.Name, p.Slot.Name)
+	if installed == nil {
+		return ActionInstall // new slot, nothing installed there
 	}
-	if installed.Package.Version == p.Version && installed.Package.Slot.Name == p.Slot.Name {
+	if installed.Version == p.Version {
 		return ActionKeep
 	}
-	return ActionUpgrade
+	cmp := pkg.CompareVersions(p.Version, installed.Version)
+	if cmp > 0 {
+		return ActionUpgrade
+	}
+	return ActionDowngrade
+}
+
+// findInstalledInSlot returns the installed package matching name AND slot.
+// Returns nil if no match. This is slot-aware unlike GetInstalledVersion.
+func (r *PortageResolver) findInstalledInSlot(name, slot string) *pkg.Package {
+	if r.installedDB == nil {
+		return nil
+	}
+	for _, ip := range r.installedDB.List() {
+		if ip.Package == nil {
+			continue
+		}
+		if ip.Package.Name == name && ip.Package.Slot.Name == slot {
+			return ip.Package
+		}
+	}
+	return nil
 }
 
 // buildResultFromSolution builds the final result map from the SAT solution.
@@ -888,6 +915,13 @@ func (r *PortageResolver) postSATSafetyNet(result ResolveResult) (ResolveResult,
 		}
 	}
 
+	// Add ActionRemove entries for installed packages whose slot has no selected
+	// version in the result. This handles blocker-deselected packages: SAT may
+	// set ¬B_installed = false, removing the installed package from the solution.
+	// Without an explicit Remove entry, the CLI won't unmerge it, violating the
+	// blocker constraint on disk.
+	r.addRemovedPackages(result)
+
 	logging.Info("Resolved packages:")
 	for key, ent := range result {
 		p := ent.Package
@@ -895,6 +929,41 @@ func (r *PortageResolver) postSATSafetyNet(result ResolveResult) (ResolveResult,
 	}
 
 	return result, nil
+}
+
+// addRemovedPackages checks VDB for installed packages that are in the
+// dependency graph but NOT in the result. If an installed package's slot
+// has no selected version, it is added as ActionRemove. This ensures the
+// CLI will unmerge packages deselected by blocker conflict clauses.
+func (r *PortageResolver) addRemovedPackages(result ResolveResult) {
+	if r.installedDB == nil || r.options.EmptyTree {
+		return
+	}
+	for _, ip := range r.installedDB.List() {
+		if ip.Package == nil {
+			continue
+		}
+		key := pkg.SlotKeyOf(ip.Package)
+		// Only consider packages whose name appears somewhere in the result
+		// (i.e., they are part of the dependency graph). Don't add Remove for
+		// packages completely unrelated to the current resolution.
+		nameInGraph := false
+		slotOccupied := false
+		for rk := range result {
+			if rk.Name == key.Name {
+				nameInGraph = true
+				if rk.Slot == key.Slot {
+					slotOccupied = true
+					break
+				}
+			}
+		}
+		if nameInGraph && !slotOccupied {
+			result[key] = &ResolveEntry{Package: ip.Package, Action: ActionRemove}
+			logging.Debug("Added ActionRemove for installed %s-%s (slot %s not in solution)",
+				ip.Package.Name, ip.Package.Version, key.Slot)
+		}
+	}
 }
 
 func contains(slice []string, item string) bool {

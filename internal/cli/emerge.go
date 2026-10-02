@@ -304,9 +304,13 @@ func (a *App) buildPackagesParallel(solution solver.ResolveResult, parallelJobs 
 
 	scheduler := daemon.NewBuildScheduler(config)
 
-	// Create tasks for all packages (keyed by SlotKey to avoid slot collapse)
+	// Create tasks for all packages (keyed by SlotKey to avoid slot collapse).
+	// Skip ActionKeep — already installed, nothing to build.
 	taskMap := make(map[pkg.SlotKey]*daemon.BuildTask)
 	for key, e := range solution {
+		if e.Action == solver.ActionKeep {
+			continue
+		}
 		p := e.Package
 		task := daemon.NewBuildTask(p)
 		taskMap[key] = task
@@ -623,6 +627,9 @@ func (a *App) buildAndInstallPackages(solution solver.ResolveResult, repoPath, d
 		e := solution[key]
 		if e == nil {
 			continue
+		}
+		if e.Action == solver.ActionKeep {
+			continue // Already installed, skip build
 		}
 		p := e.Package
 		pkgNum++
