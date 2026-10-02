@@ -587,3 +587,164 @@ func TestGophersatAdapter_FindSatisfyingVars(t *testing.T) {
 		t.Errorf("expected 1 var for =1.1.1, got %d", len(exactVars))
 	}
 }
+
+// --- Fable review fixes: tests that expose real bugs ---
+
+// Fix #1: UNSAT must work WITHOUT Required=true (parser never sets it).
+// OrGroupID==0 deps should be treated as required by default.
+func TestFix_UNSATWithoutRequiredFlag(t *testing.T) {
+	r := newMultiVersionRepo()
+
+	app := pkg.NewPackage("app-misc/broken", "1.0", "0")
+	// NOTE: Required=false (default) — same as what the parser produces
+	app.Deps = []pkg.Constraint{
+		{Name: "dev-libs/nonexistent", Type: pkg.ConstraintTypeVersion},
+	}
+	r.addVersion(app)
+
+	resolver := NewResolver(r)
+	_, err := resolver.Resolve([]string{"app-misc/broken"})
+
+	if err == nil {
+		t.Error("Resolve should return error for missing dep even without Required=true")
+	}
+}
+
+// Fix #2: All candidate versions' deps must be loaded, not just the highest.
+// SAT may choose an older version whose transitive deps were never explored.
+func TestFix_AllCandidatesDepsLoaded(t *testing.T) {
+	r := newMultiVersionRepo()
+
+	// old-only is a dep of lib v1 only
+	oldOnly := pkg.NewPackage("dev-libs/old-only", "1.0", "0")
+	r.addVersion(oldOnly)
+
+	// new-only is a dep of lib v2 only
+	newOnly := pkg.NewPackage("dev-libs/new-only", "1.0", "0")
+	r.addVersion(newOnly)
+
+	// lib v1 depends on old-only
+	libV1 := pkg.NewPackage("dev-libs/lib", "1.0", "0")
+	libV1.Deps = []pkg.Constraint{{Name: "dev-libs/old-only", Type: pkg.ConstraintTypeVersion}}
+	r.addVersion(libV1)
+
+	// lib v2 depends on new-only
+	libV2 := pkg.NewPackage("dev-libs/lib", "2.0", "0")
+	libV2.Deps = []pkg.Constraint{{Name: "dev-libs/new-only", Type: pkg.ConstraintTypeVersion}}
+	r.addVersion(libV2)
+
+	// app depends on <lib-2 (forces lib v1)
+	app := pkg.NewPackage("app-misc/constrained", "1.0", "0")
+	app.Deps = []pkg.Constraint{
+		{
+			Name:    "dev-libs/lib",
+			Type:    pkg.ConstraintTypeVersion,
+			Version: pkg.NewMaxVersionConstraint("2.0"),
+		},
+	}
+	r.addVersion(app)
+
+	resolver := NewResolver(r)
+	result, err := resolver.Resolve([]string{"app-misc/constrained"})
+	if err != nil {
+		t.Fatalf("Resolve failed: %v", err)
+	}
+
+	slotResult := toSlotKeyMap(result)
+
+	// SAT should pick lib v1 (only version satisfying <2.0)
+	libKey := pkg.SlotKey{Name: "dev-libs/lib", Slot: "0"}
+	p, ok := slotResult[libKey]
+	if !ok {
+		t.Fatal("expected lib in result")
+	}
+	if p.Version != "1.0" {
+		t.Errorf("expected lib 1.0 (constrained by <2.0), got %s", p.Version)
+	}
+
+	// old-only MUST be in result — it's lib v1's dep, loaded by SAT (not post-pass)
+	oldKey := pkg.SlotKey{Name: "dev-libs/old-only", Slot: "0"}
+	if _, ok := slotResult[oldKey]; !ok {
+		t.Error("old-only should be in result — dep of selected lib v1")
+	}
+
+	// new-only should NOT be in result — lib v2 wasn't selected
+	newKey := pkg.SlotKey{Name: "dev-libs/new-only", Slot: "0"}
+	if _, ok := slotResult[newKey]; ok {
+		t.Error("new-only should NOT be in result — dep of unselected lib v2")
+	}
+}
+
+// Fix #3: Recursive dep errors must propagate, not be swallowed.
+func TestFix_RecursiveErrorPropagates(t *testing.T) {
+	r := newMultiVersionRepo()
+
+	// leaf has a missing required dep
+	leaf := pkg.NewPackage("dev-libs/leaf", "1.0", "0")
+	leaf.Deps = []pkg.Constraint{
+		{Name: "dev-libs/ghost", Type: pkg.ConstraintTypeVersion},
+	}
+	r.addVersion(leaf)
+
+	// mid depends on leaf
+	mid := pkg.NewPackage("dev-libs/mid", "1.0", "0")
+	mid.Deps = []pkg.Constraint{{Name: "dev-libs/leaf", Type: pkg.ConstraintTypeVersion}}
+	r.addVersion(mid)
+
+	// app depends on mid
+	app := pkg.NewPackage("app-misc/deep", "1.0", "0")
+	app.Deps = []pkg.Constraint{{Name: "dev-libs/mid", Type: pkg.ConstraintTypeVersion}}
+	r.addVersion(app)
+
+	resolver := NewResolver(r)
+	_, err := resolver.Resolve([]string{"app-misc/deep"})
+
+	// Error from ghost (missing) should propagate through mid → app
+	if err == nil {
+		t.Error("Resolve should propagate error from transitive missing dep")
+	}
+}
+
+// Fix #5: Root should be at-least-one matching atom, not unit clause for highest.
+// This allows SAT to backtrack root on conflict.
+func TestFix_RootBacktracksOnConflict(t *testing.T) {
+	r := newMultiVersionRepo()
+
+	// blocker-lib conflicts with app v2 (simulated via deps)
+	blockerLib := pkg.NewPackage("dev-libs/blocker", "1.0", "0")
+	r.addVersion(blockerLib)
+
+	// app v2 depends on something that doesn't exist when blocker is present
+	// (simplified: app v2 has an unsatisfiable dep)
+	appV2 := pkg.NewPackage("app-misc/flex", "2.0", "0")
+	appV2.Deps = []pkg.Constraint{
+		{Name: "dev-libs/impossible", Type: pkg.ConstraintTypeVersion},
+	}
+	r.addVersion(appV2)
+
+	// app v1 has satisfiable deps
+	appV1 := pkg.NewPackage("app-misc/flex", "1.0", "0")
+	appV1.Deps = []pkg.Constraint{
+		{Name: "dev-libs/blocker", Type: pkg.ConstraintTypeVersion},
+	}
+	r.addVersion(appV1)
+
+	resolver := NewResolver(r)
+	result, err := resolver.Resolve([]string{"app-misc/flex"})
+
+	// v2 is highest but unsatisfiable. SAT should backtrack to v1.
+	// With unit clause for v2, this would be UNSAT.
+	if err != nil {
+		t.Fatalf("Resolve should find solution via v1 backtrack, got error: %v", err)
+	}
+
+	slotResult := toSlotKeyMap(result)
+	appKey := pkg.SlotKey{Name: "app-misc/flex", Slot: "0"}
+	p, ok := slotResult[appKey]
+	if !ok {
+		t.Fatal("expected app in result")
+	}
+	if p.Version != "1.0" {
+		t.Errorf("expected v1.0 (backtracked from unsatisfiable v2), got %s", p.Version)
+	}
+}

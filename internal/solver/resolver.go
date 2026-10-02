@@ -198,16 +198,13 @@ func (r *PortageResolver) collectDependencies(p *pkg.Package, allPackages map[st
 		// to collect transitive deps from the best candidate)
 		depPkg, err := r.loadDependencyPackage(dep)
 		if err != nil {
-			if dep.Required {
-				return fmt.Errorf("unsatisfiable dependency: %s requires %s: %w", p.Name, dep.Name, err)
-			}
-			logging.Debug("Warning: dependency %s for %s not found: %v", dep.Name, p.Name, err)
-			continue
+			// OrGroupID==0 deps are required — parser doesn't set Required field
+			return fmt.Errorf("unsatisfiable: %s requires %s: %w", p.Name, dep.Name, err)
 		}
 
-		// Recursively collect dependencies
+		// Recursively collect dependencies — propagate errors
 		if err := r.collectDependencies(depPkg, allPackages, allCandidates); err != nil {
-			logging.Debug("Warning: %v", err)
+			return fmt.Errorf("resolving deps of %s: %w", dep.Name, err)
 		}
 	}
 
