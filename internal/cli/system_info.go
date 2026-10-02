@@ -151,27 +151,27 @@ func FormatSystemInfo(info *SystemInfo) string {
 	var sb strings.Builder
 
 	// Header line (like Portage)
-	sb.WriteString(fmt.Sprintf("GRPM %s (%s, %s)\n",
-		info.GRPMVersion, info.GoVersion, info.Platform))
+	fmt.Fprintf(&sb, "GRPM %s (%s, %s)\n",
+		info.GRPMVersion, info.GoVersion, info.Platform)
 	sb.WriteString(strings.Repeat("=", 65) + "\n")
 
 	// System info
 	if info.Uname != "" {
-		sb.WriteString(fmt.Sprintf("System uname: %s\n", info.Uname))
+		fmt.Fprintf(&sb, "System uname: %s\n", info.Uname)
 	}
 
 	// Memory info (Linux only)
 	if info.Memory.Total > 0 {
-		sb.WriteString(fmt.Sprintf("KiB Mem:  %10d total", info.Memory.Total/1024))
+		fmt.Fprintf(&sb, "KiB Mem:  %10d total", info.Memory.Total/1024)
 		if info.Memory.Free > 0 {
-			sb.WriteString(fmt.Sprintf(",%10d free", info.Memory.Free/1024))
+			fmt.Fprintf(&sb, ",%10d free", info.Memory.Free/1024)
 		}
 		sb.WriteString("\n")
 	}
 	if info.Memory.SwapTotal > 0 {
-		sb.WriteString(fmt.Sprintf("KiB Swap: %10d total", info.Memory.SwapTotal/1024))
+		fmt.Fprintf(&sb, "KiB Swap: %10d total", info.Memory.SwapTotal/1024)
 		if info.Memory.SwapFree > 0 {
-			sb.WriteString(fmt.Sprintf(",%10d free", info.Memory.SwapFree/1024))
+			fmt.Fprintf(&sb, ",%10d free", info.Memory.SwapFree/1024)
 		}
 		sb.WriteString("\n")
 	}
@@ -190,9 +190,9 @@ func FormatSystemInfo(info *SystemInfo) string {
 
 		for _, pkg := range info.InstalledPkgs {
 			if pkg.Version != "" {
-				sb.WriteString(fmt.Sprintf("%-*s %s\n", maxLen+1, pkg.CP+":", pkg.Version))
+				fmt.Fprintf(&sb, "%-*s %s\n", maxLen+1, pkg.CP+":", pkg.Version)
 			} else {
-				sb.WriteString(fmt.Sprintf("%-*s [Not installed]\n", maxLen+1, pkg.CP+":"))
+				fmt.Fprintf(&sb, "%-*s [Not installed]\n", maxLen+1, pkg.CP+":")
 			}
 		}
 	}
@@ -201,20 +201,20 @@ func FormatSystemInfo(info *SystemInfo) string {
 	if len(info.Repositories) > 0 {
 		sb.WriteString("\nRepositories:\n")
 		for _, r := range info.Repositories {
-			sb.WriteString(fmt.Sprintf("    %s\n", r.Name))
-			sb.WriteString(fmt.Sprintf("        location: %s\n", r.Location))
+			fmt.Fprintf(&sb, "    %s\n", r.Name)
+			fmt.Fprintf(&sb, "        location: %s\n", r.Location)
 			if r.SyncType != "" {
-				sb.WriteString(fmt.Sprintf("        sync-type: %s\n", r.SyncType))
+				fmt.Fprintf(&sb, "        sync-type: %s\n", r.SyncType)
 			}
 			if r.Timestamp != "" {
-				sb.WriteString(fmt.Sprintf("        timestamp: %s\n", r.Timestamp))
+				fmt.Fprintf(&sb, "        timestamp: %s\n", r.Timestamp)
 			}
 		}
 	}
 
 	// Profile
 	if info.Profile != "" {
-		sb.WriteString(fmt.Sprintf("\nProfile: %s\n", info.Profile))
+		fmt.Fprintf(&sb, "\nProfile: %s\n", info.Profile)
 	}
 
 	// Configuration variables
@@ -222,7 +222,7 @@ func FormatSystemInfo(info *SystemInfo) string {
 	varOrder := []string{"USE", "CFLAGS", "CXXFLAGS", "LDFLAGS", "MAKEOPTS", "ACCEPT_KEYWORDS", "ACCEPT_LICENSE", "FEATURES"}
 	for _, key := range varOrder {
 		if val, ok := info.ConfigVars[key]; ok && val != "" {
-			sb.WriteString(fmt.Sprintf("%s=\"%s\"\n", key, val))
+			fmt.Fprintf(&sb, "%s=\"%s\"\n", key, val)
 		}
 	}
 

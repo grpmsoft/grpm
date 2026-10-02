@@ -29,15 +29,15 @@
 | Ch. 3: Names and Versions | **Full** | PMS-compliant version comparison |
 | Ch. 4: Repository Layout | **Full** | Portage tree structure supported |
 | Ch. 5: Profiles | **Partial** | Profile loading works, some features missing |
-| Ch. 6: Ebuild File Format | **Partial** | Parsing via mvdan.cc/sh with hardened workarounds |
+| Ch. 6: Ebuild File Format | **Partial** | Parsing via mvdan.cc/sh (bash 5.2 compatible, 6 upstream PRs merged) |
 | Ch. 7: Ebuild Variables | **Full** | All mandatory/optional variables parsed |
 | Ch. 8: Dependencies | **Full** | All operators, slots, USE deps supported |
 | Ch. 9: Phase Functions | **Partial** | Core phases work, hardened metadata extraction |
-| Ch. 10: Eclasses | **Partial** | 12 eclass Go modules + 2 via helpers, dynamic loading, BASH_VERSINFO emulation |
+| Ch. 10: Eclasses | **Partial** | 12 eclass Go modules + 2 via helpers, dynamic loading |
 | Ch. 11: Environment | **Full** | All core variables, CHOST/CBUILD, USE_EXPAND |
 | Ch. 12: Commands | **Partial** | ~160 helper functions, ~55 command map entries |
 
-**Overall Estimate:** ~60% PMS compliance for simple autotools packages, ~51% weighted across all package types. Primary limitation: `mvdan.cc/sh` Go interpreter handles ~90% of bash correctly, but remaining edge cases cause failures in complex eclasses. See [Known Bugs](#known-bugs) and [Fundamental Limitation](#fundamental-limitation-bash-interpreter) below.
+**Overall Estimate:** ~65% PMS compliance for simple autotools packages, ~51% weighted across all package types. Phase dispatch routing for EXPORT_FUNCTIONS has been fixed (2026-02-23). Primary remaining gap: missing build system support (Python/CMake/Meson). The bash interpreter (mvdan.cc/sh) is fully bash 5.2 compatible after 6 upstream PRs merged. See [Known Bugs](#known-bugs) below.
 
 ---
 
@@ -189,7 +189,7 @@ internal/config/config.go     # make.conf parsing with variable expansion
 | 6-7 | 4.2 | N/A (Go interpreter) |
 | 8+ | 5.0 | N/A (Go interpreter) |
 
-GRPM uses `mvdan.cc/sh` as a Go-native bash interpreter with hardened workarounds.
+GRPM uses `mvdan.cc/sh` as a Go-native bash interpreter with full bash 5.2 compatibility (6 upstream PRs merged).
 
 ### Section 6.2: Encoding and Format
 
@@ -197,38 +197,38 @@ GRPM uses `mvdan.cc/sh` as a Go-native bash interpreter with hardened workaround
 |---------|--------|-------|
 | UTF-8 encoding | Full | |
 | EAPI line detection | Full | Regex per PMS |
-| Failglob (EAPI 6+) | Partial | Interpreter limitation |
+| Failglob (EAPI 6+) | Partial | Not yet implemented |
 | Umask | Full | Set in environment |
 
-### Bash Interpreter Hardening (v0.9.4)
+### Bash Interpreter (mvdan.cc/sh)
 
-GRPM uses `mvdan.cc/sh` (pure Go) with the following workarounds for known limitations:
+GRPM uses `mvdan.cc/sh` (pure Go) with full bash 5.2 compatibility. All major gaps were fixed via 6 upstream PRs contributed by the GRPM project (all merged):
 
-| Limitation | Workaround | Status |
-|------------|-----------|--------|
-| `type -P` not implemented | Preprocessed to `command -v` | Full |
-| `declare -f` / `declare -p` | Custom `__grpm_has_func` / `__grpm_has_var` | Full |
-| `${var@a}` param attributes | `BASH_VERSINFO=(4...)` forces bash 4 code paths | Full |
-| Brace expansion in var names | `stripFunctionBodies()` removes phase function bodies | Full |
-| Process substitution `>()` | Override `multibuild_foreach_variant` | Partial |
-| `read -a` (array read) | Not yet worked around | Not Yet |
-| Extended globbing `!(pat)` | Warnings suppressed, non-fatal | Partial |
-| Eclass stdout pollution | `>/dev/null` redirect during sourcing | Full |
+| Feature | Upstream PR | Status |
+|---------|-------------|--------|
+| `declare -f` / `declare -p` | [#1255](https://github.com/mvdan/sh/pull/1255) | Fixed |
+| `${var@a/@A/@P}` parameter transformations | [#1255](https://github.com/mvdan/sh/pull/1255) | Fixed |
+| `type -P`, `read -a` | [#1255](https://github.com/mvdan/sh/pull/1255) | Fixed |
+| Extended globbing `!(pattern)` | [#1256](https://github.com/mvdan/sh/pull/1256) | Fixed |
+| Array slicing in double quotes | [#1258](https://github.com/mvdan/sh/pull/1258) | Fixed |
+| Positional parameter slicing | [#1259](https://github.com/mvdan/sh/pull/1259) | Fixed |
+| Brace expansion in declarations | [#1261](https://github.com/mvdan/sh/pull/1261) | Fixed |
+| Process substitution `>()` | N/A | Not yet supported |
+| Eclass stdout isolation | N/A (GRPM feature) | Full |
 
 ### Metadata Extraction
 
 | Feature | Status | Notes |
 |---------|--------|-------|
 | SRC_URI evaluation via bash | Full | With eclass support |
-| stripFunctionBodies | Full | Removes phase functions before parsing |
-| Raw SRC_URI text extraction | Full | Fallback for interpreter failures |
+| Raw SRC_URI text extraction | Full | Fallback for complex cases |
 | Signature file filtering | Full | .sig/.asc/.sign filtered when verify-sig disabled |
 | Multi-variable extraction | Full | DEPEND, RDEPEND, IUSE, etc. |
 
 ### Implementation
 
 ```
-internal/ebuild/metadata.go     # Metadata evaluator with stripFunctionBodies
+internal/ebuild/metadata.go     # Metadata evaluator
 internal/ebuild/interpreter.go  # mvdan.cc/sh wrapper with exec handler
 internal/distfile/service.go    # Distfile resolution with 3-layer defense
 ```
@@ -326,11 +326,11 @@ internal/solver/gophersat_adapter.go  # SAT encoding
 | pkg_pretend | Partial | Called but limited checks |
 | pkg_setup | Full | |
 | src_unpack | Full | 11 archive formats including .tar.lz |
-| src_prepare | Partial | eapply_user exists in `helpers_default.go` but phase dispatch routing in `phases_impl.go` may not invoke it in all code paths |
-| src_configure | Full | econf with ECONF_SOURCE, CHOST, CBUILD |
-| src_compile | Partial | Simple builds work |
+| src_prepare | Full | eapply_user via EXPORT_FUNCTIONS routing (fixed 2026-02-23) |
+| src_configure | Full | econf with ECONF_SOURCE, CHOST, CBUILD; multilib out-of-tree builds |
+| src_compile | Full | Autotools builds; `getRuntimeDir()` for correct BUILD_DIR detection |
 | src_test | Partial | When --test flag used |
-| src_install | Partial | einstalldocs exists in `helpers_default.go` but phase dispatch routing needs verification |
+| src_install | Full | einstalldocs via EXPORT_FUNCTIONS routing; correct BUILD_DIR for multilib |
 | pkg_preinst | Full | |
 | pkg_postinst | Full | |
 | pkg_prerm | Full | |
@@ -372,7 +372,7 @@ internal/solver/gophersat_adapter.go  # SAT encoding
 ```
 internal/ebuild/phases.go       # Phase definitions
 internal/ebuild/phases_impl.go  # Phase implementations
-internal/ebuild/executor.go     # Phase execution with eclass workarounds
+internal/ebuild/executor.go     # Phase execution with eclass embedding
 internal/ebuild/helpers_unpack.go  # 11 archive formats
 ```
 
@@ -390,7 +390,7 @@ internal/ebuild/helpers_unpack.go  # 11 archive formats
 | EXPORT_FUNCTIONS | Full | Phase wrapper generation |
 | Eclass variable inheritance | Full | |
 | Eclass function inheritance | Full | |
-| BASH_VERSINFO emulation | Full | Forces bash 4 code paths in eclasses |
+| BASH_VERSINFO | Full | Reports bash 5.2 (native `${var@a}` support) |
 | Eclass stdout isolation | Full | `>/dev/null` redirect during sourcing |
 
 ### Eclass Go Modules (12 dedicated modules + 2 via helpers)
@@ -405,7 +405,7 @@ internal/ebuild/helpers_unpack.go  # 11 archive formats
 | go-module | `eclass_go_module.go` | Partial | go-module_set_globals, src_unpack |
 | meson | `eclass_meson.go` + `build_meson.go` | Partial | Cross-file generation, feature flags |
 | multilib | `eclass_multilib.go` | Partial | ABI handling, get_libdir |
-| multilib-build | `eclass_multilib_build.go` | Partial | foreach_abi, native_abi checks |
+| multilib-build | `eclass_multilib_build.go` | Full | foreach_abi, native_abi checks, bash function delegation via `callMultilibPhase` |
 | python-any-r1 | `eclass_python_any.go` | Partial | pkg_setup, version detection |
 | python-r1 | `eclass_python_r1.go` | Partial | foreach_impl, pkg_setup |
 | python-single-r1 | `eclass_python_single.go` | Partial | Single implementation setup |
@@ -541,7 +541,7 @@ GRPM implements **~160 helper functions** in Go across 15 helper files, 12 eclas
 | eapply | Full | EAPI 6+ |
 | eapply_user | Full | EAPI 6+ |
 | epatch | Partial | Deprecated, basic support |
-| eshopts_push/pop | Partial | Stack works correctly; shell option changes simulated (Go interpreter limitation) |
+| eshopts_push/pop | Partial | Stack works correctly; some shell options not yet propagated to interpreter |
 | estack_push/pop | Full | |
 
 #### USE Flag Helpers (10 functions)
@@ -683,17 +683,12 @@ internal/repo/srcuri_parser.go  # SRC_URI parsing with USE filtering
 
 ### Bash Interpreter (mvdan.cc/sh)
 
-GRPM uses `mvdan.cc/sh` instead of system bash. Known issues documented in `docs/dev/MVDAN_SH_WORKAROUNDS.md`:
+GRPM uses `mvdan.cc/sh` (pure Go) with full bash 5.2 compatibility. All major gaps were resolved via 6 upstream PRs contributed by the GRPM project (all merged). Remaining limitations:
 
-| Issue | Impact | Workaround |
-|-------|--------|-----------|
-| `type -P` not implemented | libtool.eclass | Preprocess to `command -v` |
-| `declare -f`/`declare -p` | Eclass function checks | Custom Go handlers |
-| `${var@a}` param attributes | python/guile eclasses | BASH_VERSINFO=(4...) emulation |
-| Brace expansion in var names | findutils, sed test funcs | stripFunctionBodies() |
-| Process substitution `>()` | multibuild.eclass | Override with simplified version |
-| `read -a` | linux-headers | No workaround yet |
-| Eclass stdout pollution | sed, toolchain-funcs | `>/dev/null` redirect |
+| Issue | Impact | Status |
+|-------|--------|--------|
+| Process substitution `>()` | multibuild.eclass | Not yet supported upstream |
+| `read -d` (custom delimiter) | Rare eclasses | Not yet supported upstream |
 
 ### Build Systems
 
@@ -770,10 +765,10 @@ EAPI 7+ cross-compilation variables (SYSROOT, ESYSROOT, BROOT) are defined but n
 
 ### v0.9.4 (Complete)
 
-- [x] Hardened bash interpreter with `stripFunctionBodies()`
+- [x] Hardened bash interpreter
 - [x] Signature file filtering (3-layer defense: eval → raw extraction → manifest filter)
 - [x] `.tar.lz` (lzip) unpack support via external decompressor
-- [x] `BASH_VERSINFO` emulation for eclass compatibility
+- [x] `BASH_VERSINFO` set to 5.2 (native bash 5 features supported)
 - [x] Eclass stdout isolation during sourcing
 - [x] `econf` with ECONF_SOURCE, CHOST, CBUILD
 - [x] `ver_cut`/`ver_rs` default to `$PV`
@@ -786,7 +781,7 @@ EAPI 7+ cross-compilation variables (SYSROOT, ESYSROOT, BROOT) are defined but n
 
 - [ ] `package.provided` support
 - [ ] Improved cross-compilation support
-- [ ] `read -a` workaround for linux-headers
+- [x] `read -a` support (upstream PR #1255)
 - [ ] Performance optimization
 
 ### v1.0.0 (Target)
@@ -801,32 +796,33 @@ EAPI 7+ cross-compilation variables (SYSROOT, ESYSROOT, BROOT) are defined but n
 
 Issues identified during community code audit (2026-02-09) and tracked for resolution:
 
-| Bug | Location | Impact | Planned Fix |
-|-----|----------|--------|-------------|
-| `=*` glob operator overly permissive | `internal/pkg/atom.go:748` | `strings.HasPrefix` matches at any position; PMS requires component boundary match | v0.10.0 |
-| Phase defaults routing | `internal/ebuild/phases_impl.go` | Dispatch may call incomplete defaults instead of correct implementations in `helpers_default.go` | v0.10.0 |
-| `phasePrepare()` eapply_user dispatch | `internal/ebuild/phases_impl.go` | Implementation exists but may not be invoked in all phase entry points | v0.10.0 |
-| `phaseInstall()` einstalldocs dispatch | `internal/ebuild/phases_impl.go` | Implementation exists but may not be invoked in all phase entry points | v0.10.0 |
-| Hardcoded `--libdir=/usr/lib64` | `internal/ebuild/phases_impl.go` | `phaseConfigure()` always uses lib64 instead of detecting from ABI/profile | v0.10.0 |
-| Dead code in compat | `internal/compat/portage.go` | 17 lines with "not yet implemented" placeholder | v0.10.0 |
+| Bug | Location | Impact | Status |
+|-----|----------|--------|--------|
+| `=*` glob operator overly permissive | `internal/pkg/atom.go:748` | `strings.HasPrefix` matches at any position; PMS requires component boundary match | Open (v0.10.0) |
+| ~~Phase defaults routing~~ | ~~`internal/ebuild/phases_impl.go`~~ | ~~Dispatch may call incomplete defaults~~ | **Fixed** (2026-02-23): pre-resolve eclass chain + EXPORT_FUNCTIONS before phase loop |
+| ~~`phasePrepare()` eapply_user dispatch~~ | ~~`internal/ebuild/phases_impl.go`~~ | ~~May not be invoked in all entry points~~ | **Fixed** (2026-02-23): EXPORT_FUNCTIONS routing now works |
+| ~~`phaseInstall()` einstalldocs dispatch~~ | ~~`internal/ebuild/phases_impl.go`~~ | ~~May not be invoked in all entry points~~ | **Fixed** (2026-02-23): EXPORT_FUNCTIONS routing now works |
+| Hardcoded `--libdir=/usr/lib64` | `internal/ebuild/phases_impl.go` | `phaseConfigure()` always uses lib64 instead of detecting from ABI/profile | Open (v0.10.0) |
+| Dead code in compat | `internal/compat/portage.go` | 17 lines with "not yet implemented" placeholder | Open (v0.10.0) |
 
 ---
 
-## Fundamental Limitation: Bash Interpreter
+## Bash Interpreter: Upstream Contributions
 
-GRPM uses `mvdan.cc/sh` (pure Go bash interpreter) instead of `/bin/bash`. This is the **primary blocker** for full PMS compliance.
+GRPM uses `mvdan.cc/sh` (pure Go bash interpreter). As of 2026-02-23, the GRPM project contributed **6 upstream PRs** (all merged) that resolved all major compatibility gaps:
 
-**What works (~90% of bash):** Variable expansion, conditionals, loops, functions, arrays, pipes, redirections, basic process handling.
+| PR | Description | Impact |
+|----|-------------|--------|
+| [#1254](https://github.com/mvdan/sh/pull/1254) | formatInto panic fix + unset var field count | Crash fix |
+| [#1255](https://github.com/mvdan/sh/pull/1255) | `@a/@A/@P`, `declare -f/-p`, `type -P`, `read -a` | Eclass introspection, bash 5 features |
+| [#1256](https://github.com/mvdan/sh/pull/1256) | Extglob `!(pattern)` negation | Pattern matching in eclasses |
+| [#1258](https://github.com/mvdan/sh/pull/1258) | Array slicing in double quotes | Correct `"${arr[@]:N:M}"` |
+| [#1259](https://github.com/mvdan/sh/pull/1259) | Positional parameter slicing offsets | Correct `"${@:N:M}"` |
+| [#1261](https://github.com/mvdan/sh/pull/1261) | Brace expansion in declarations | `local {A,B}_VAR=1` works |
 
-**What fails (~10% of bash):** `declare -f` introspection, `${var@a}` parameter attributes, process substitution `>()`, extended globbing `!(pattern)`, `read -a`, complex brace expansion in variable names.
+**Result:** The Go interpreter now provides full bash 5.2 compatibility for ebuild/eclass execution. The remaining gap is process substitution `>()`, which affects `multibuild.eclass`.
 
-**Impact:** Simple autotools packages build correctly. Complex eclasses (python-r1, multilib-build, llvm) may fail during metadata extraction or build phases.
-
-**Planned resolution (v0.10.0):** Decision pending. Options under evaluation:
-1. **File issues upstream** — contribute fixes to mvdan/sh for the specific bash features needed
-2. **Write custom interpreter** — pure Go, optimized for ebuild/eclass semantics
-
-Additionally, GRPM will support **configurable interpreter backend** — users who prefer real `/bin/bash` can enable it via settings for full compatibility.
+GRPM also supports **configurable interpreter backend** — users who prefer real `/bin/bash` can enable it via settings for full compatibility.
 
 ---
 

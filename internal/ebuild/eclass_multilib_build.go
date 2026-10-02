@@ -48,36 +48,77 @@ func (e *MultilibBuildEclass) Variables() map[string]string {
 
 // MultilibBuildSrcConfigure configures for each enabled ABI.
 //
-// This is the src_configure phase exported by multilib-build.
+// Calls the ebuild's multilib_src_configure() bash function for each ABI.
+// Falls back to default econf if the function is not defined.
 func (h *Helpers) MultilibBuildSrcConfigure(args []string) error {
 	return h.multilibForeachABIDo(func(abi ABI) error {
 		h.writeStdout(fmt.Sprintf(">>> Configuring for ABI: %s\n", abi.Name))
-		return h.multilibSrcConfigure(abi)
+		return h.callMultilibPhase("multilib_src_configure", func() error {
+			return h.Econf(nil)
+		})
 	})
 }
 
 // MultilibBuildSrcCompile compiles for each enabled ABI.
+//
+// Calls the ebuild's multilib_src_compile() bash function for each ABI.
+// Falls back to default emake if the function is not defined.
 func (h *Helpers) MultilibBuildSrcCompile(args []string) error {
 	return h.multilibForeachABIDo(func(abi ABI) error {
 		h.writeStdout(fmt.Sprintf(">>> Compiling for ABI: %s\n", abi.Name))
-		return h.multilibSrcCompile(abi)
+		return h.callMultilibPhase("multilib_src_compile", func() error {
+			return h.Emake(nil)
+		})
 	})
 }
 
 // MultilibBuildSrcTest tests for each enabled ABI.
+//
+// Calls the ebuild's multilib_src_test() bash function for each ABI.
+// Falls back to no-op if the function is not defined.
 func (h *Helpers) MultilibBuildSrcTest(args []string) error {
 	return h.multilibForeachABIDo(func(abi ABI) error {
 		h.writeStdout(fmt.Sprintf(">>> Testing for ABI: %s\n", abi.Name))
-		return h.multilibSrcTest(abi)
+		return h.callMultilibPhase("multilib_src_test", func() error {
+			return nil
+		})
 	})
 }
 
 // MultilibBuildSrcInstall installs for each enabled ABI.
+//
+// Calls the ebuild's multilib_src_install() bash function for each ABI.
+// Falls back to default emake install DESTDIR=$D if the function is not defined.
 func (h *Helpers) MultilibBuildSrcInstall(args []string) error {
 	return h.multilibForeachABIDo(func(abi ABI) error {
 		h.writeStdout(fmt.Sprintf(">>> Installing for ABI: %s\n", abi.Name))
-		return h.multilibSrcInstall(abi)
+		return h.callMultilibPhase("multilib_src_install", func() error {
+			return h.Emake([]string{"install", "DESTDIR=" + h.getEnvOrDefault("D", "")})
+		})
 	})
+}
+
+// callMultilibPhase calls an ebuild's multilib phase function via the bash
+// interpreter. If the function is not defined, falls back to the provided
+// default implementation.
+//
+// Uses hasBashFunction to check existence before calling, avoiding the
+// side effect of runner.Run() modifying exit status for undefined commands.
+func (h *Helpers) callMultilibPhase(funcName string, fallback func() error) error {
+	// No interpreter available — use fallback directly.
+	if h.functionCaller == nil {
+		return fallback()
+	}
+
+	// Check if the bash function is defined before calling it.
+	// Calling an undefined function through runner.Run() would set exit
+	// status 127, which leaks back to the outer runner.
+	if !h.hasBashFunction(funcName) {
+		return fallback()
+	}
+
+	// Function exists — call it. Errors here are real failures.
+	return h.callBashFunction(funcName, nil)
 }
 
 // ============================================================================
@@ -87,6 +128,11 @@ func (h *Helpers) MultilibBuildSrcInstall(args []string) error {
 // MultilibForeachABI runs a command for each enabled ABI.
 //
 // Usage: multilib_foreach_abi emake
+// Usage: multilib_foreach_abi multilib_src_configure
+//
+// The command can be a bash function defined in the ebuild, a Go helper,
+// or an external command. We try the bash interpreter first (which resolves
+// shell functions), falling back to the Go command dispatcher.
 func (h *Helpers) MultilibForeachABI(args []string) error {
 	if len(args) < 1 {
 		return &DieError{Message: "multilib_foreach_abi: requires command argument"}
@@ -96,6 +142,12 @@ func (h *Helpers) MultilibForeachABI(args []string) error {
 	cmdArgs := args[1:]
 
 	return h.multilibForeachABIDo(func(abi ABI) error {
+		// Prefer bash interpreter — resolves bash functions, Go helpers, and
+		// external commands through the interpreter's normal resolution chain.
+		if h.functionCaller != nil {
+			return h.callBashFunction(command, cmdArgs)
+		}
+		// No interpreter available (unit tests) — use Go command dispatcher.
 		return h.executeCommand(command, cmdArgs)
 	})
 }
@@ -143,33 +195,10 @@ func (h *Helpers) multilibForeachABIDo(fn func(abi ABI) error) error {
 	return nil
 }
 
-// ============================================================================
-// Multilib Phase Implementations
-// ============================================================================
-
-// multilibSrcConfigure runs configure for a specific ABI.
-func (h *Helpers) multilibSrcConfigure(abi ABI) error {
-	// Default: run econf
-	return h.Econf(nil)
-}
-
-// multilibSrcCompile runs compilation for a specific ABI.
-func (h *Helpers) multilibSrcCompile(abi ABI) error {
-	// Default: run emake
-	return h.Emake(nil)
-}
-
-// multilibSrcTest runs tests for a specific ABI.
-func (h *Helpers) multilibSrcTest(_ ABI) error {
-	// Default: no test
-	return nil
-}
-
-// multilibSrcInstall runs installation for a specific ABI.
-func (h *Helpers) multilibSrcInstall(_ ABI) error {
-	// Default: run emake install
-	return h.Emake([]string{"install", "DESTDIR=" + h.getEnvOrDefault("D", "")})
-}
+// Note: multilib phase implementations (multilibSrcConfigure, etc.) were
+// removed. The multilib-minimal phase functions now call the ebuild's bash
+// functions (multilib_src_configure, etc.) via callMultilibPhase, with
+// default fallbacks (econf, emake, etc.) when the function is not defined.
 
 // ============================================================================
 // Multilib Dependency Generation
@@ -249,6 +278,8 @@ func (h *Helpers) MultilibDolibs(args []string) error {
 // MultilibNativeUseBuild runs command only for native ABI.
 //
 // Usage: multilib_native_use_build command args...
+//
+// The command can be a bash function, Go helper, or external command.
 func (h *Helpers) MultilibNativeUseBuild(args []string) error {
 	// Check if we're building native ABI
 	currentABI := h.getEnvOrDefault("ABI", "")
@@ -262,6 +293,12 @@ func (h *Helpers) MultilibNativeUseBuild(args []string) error {
 		return nil
 	}
 
+	// Prefer bash interpreter — resolves bash functions, Go helpers,
+	// and external commands through the interpreter's resolution chain.
+	if h.functionCaller != nil {
+		return h.callBashFunction(args[0], args[1:])
+	}
+	// No interpreter available (unit tests) — use Go command dispatcher.
 	return h.executeCommand(args[0], args[1:])
 }
 

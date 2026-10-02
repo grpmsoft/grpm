@@ -90,6 +90,11 @@ type Executor struct {
 
 	// currentPhase tracks the currently executing phase for EBUILD_PHASE
 	currentPhase Phase
+
+	// resolvedEclasses caches the resolved eclass chain from resolveEclassChain.
+	// Pre-resolved at the start of ExecutePhases so that HasPhaseFunction can
+	// detect phases exported by eclasses (e.g., multilib-minimal's src_configure).
+	resolvedEclasses []eclassRef
 }
 
 // ExecutorOptions configures ebuild execution.
@@ -264,6 +269,20 @@ func (e *Executor) ExecutePhases(phases []Phase) ([]PhaseResult, error) {
 				}
 			}
 		}()
+	}
+
+	// Pre-resolve eclass chain so that EXPORT_FUNCTIONS are registered
+	// BEFORE the phase dispatch loop. Without this, HasPhaseFunction()
+	// cannot detect phases exported by eclasses (e.g., multilib-minimal's
+	// src_configure), and all phases fall through to Go defaults.
+	if e.ParsedEbuild != nil && len(e.ParsedEbuild.InheritedEclasses) > 0 && e.eclassCache != nil {
+		if e.interpreter == nil {
+			if err := e.initInterpreter(); err != nil {
+				return nil, fmt.Errorf("initializing interpreter for eclass resolution: %w", err)
+			}
+		}
+		e.resolvedEclasses = e.resolveEclassChain(e.ParsedEbuild.InheritedEclasses)
+		logging.Debug("[ebuild] pre-resolved %d eclasses for phase dispatch", len(e.resolvedEclasses))
 	}
 
 	results := make([]PhaseResult, 0, len(phases))
@@ -619,8 +638,17 @@ func (e *Executor) ParseEbuild() error {
 		return fmt.Errorf("checking ebuild file: %w", err)
 	}
 
-	// Parse the ebuild script
-	parsed, err := ParseEbuildScript(e.EbuildPath)
+	// Parse the ebuild script with known variables for conditional evaluation.
+	// This ensures inherit calls inside "if [[ ${PV} == 9999 ]]" blocks
+	// are skipped when PV doesn't match (e.g., git-r3 for non-live ebuilds).
+	ebuildVars := map[string]string{
+		"PV":  e.Env.PV,
+		"PVR": e.Env.PVR,
+		"PN":  e.Env.PN,
+		"P":   e.Env.P,
+		"PF":  e.Env.PF,
+	}
+	parsed, err := ParseEbuildScript(e.EbuildPath, ebuildVars)
 	if err != nil {
 		return fmt.Errorf("parsing ebuild: %w", err)
 	}
@@ -817,7 +845,7 @@ func (e *Executor) HasPhaseFunction(phase Phase) bool {
 // This is necessary because mvdan.cc/sh doesn't persist function definitions
 // between runs.
 //
-//nolint:gocyclo // Phase orchestrator: builds combined script with eclass workarounds — inherently complex.
+//nolint:gocyclo // Phase orchestrator: builds combined script with eclass embedding — inherently complex.
 func (e *Executor) RunPhaseFunction(phase Phase) (string, error) {
 	funcName := phaseFunctionName(phase)
 	if funcName == "" {
@@ -874,8 +902,8 @@ func (e *Executor) RunPhaseFunction(phase Phase) (string, error) {
 	// doesn't persist function definitions between runs.
 	var combinedScript bytes.Buffer
 	combinedScript.WriteString("#!/bin/bash\n")
-	combinedScript.WriteString(fmt.Sprintf("EBUILD_PHASE=%s\n", phase))
-	combinedScript.WriteString(fmt.Sprintf("EBUILD_PHASE_FUNC=%s\n", funcName))
+	fmt.Fprintf(&combinedScript, "EBUILD_PHASE=%s\n", phase)
+	fmt.Fprintf(&combinedScript, "EBUILD_PHASE_FUNC=%s\n", funcName)
 
 	// Define bash-level inherit() and EXPORT_FUNCTIONS() so that eclasses
 	// are sourced in the CURRENT bash scope. Without this, eclasses loaded
@@ -914,21 +942,13 @@ func (e *Executor) RunPhaseFunction(phase Phase) (string, error) {
 		// Set EAPI before eclasses — they check it with `case ${EAPI} in 7|8)`.
 		// Without this, die() is called and no functions get defined.
 		if e.Env != nil && e.Env.EAPI != "" {
-			combinedScript.WriteString(fmt.Sprintf("EAPI=%s\n", e.Env.EAPI))
+			fmt.Fprintf(&combinedScript, "EAPI=%s\n", e.Env.EAPI)
 		}
 
-		// Set BASH_VERSINFO to bash 4 so eclasses that check the version
-		// (e.g., python-utils-r1 `${BASH_VERSINFO[0]} -ge 5`) take the
-		// bash 4 code path which uses `declare -p` (replaced by __grpm_has_var)
-		// instead of bash 5+ parameter attributes (`${var@a}`) that mvdan.cc/sh
-		// doesn't support.
-		combinedScript.WriteString("BASH_VERSINFO=(4 4 0 0 release x86_64-pc-linux-gnu)\n")
-
-		// Initialize multilib arrays to empty to prevent mvdan.cc/sh from
-		// expanding unset "${arr[@]}" to a single empty string (which causes
-		// spurious loop iterations in multilib_prepare_wrappers).
-		combinedScript.WriteString("MULTILIB_CHOST_TOOLS=()\n")
-		combinedScript.WriteString("MULTILIB_WRAPPED_HEADERS=()\n")
+		// Set BASH_VERSINFO to bash 5.2 — mvdan.cc/sh now supports all the
+		// bash 5 features eclasses rely on: ${var@a} parameter attributes,
+		// declare -f/-p, type -P, ${var@A/@P}, read -a, etc.
+		combinedScript.WriteString("BASH_VERSINFO=(5 2 0 0 release x86_64-pc-linux-gnu)\n")
 
 		// EXPORT_FUNCTIONS: creates wrapper functions per PMS.
 		// When eclass "cmake" calls EXPORT_FUNCTIONS src_configure,
@@ -946,31 +966,25 @@ func (e *Executor) RunPhaseFunction(phase Phase) (string, error) {
 }
 `)
 
-		// Resolve and embed all eclasses from the ebuild's inherit line.
-		// We pre-resolve the entire chain (including sub-inherits) using
-		// the eclass cache, then embed each eclass in dependency order.
+		// Embed all eclasses from the ebuild's inherit line.
+		// Use pre-resolved chain if available (from ExecutePhases pre-resolution),
+		// otherwise resolve now (for standalone RunPhaseFunction calls).
 		if e.ParsedEbuild != nil && len(e.ParsedEbuild.InheritedEclasses) > 0 {
-			resolved := e.resolveEclassChain(e.ParsedEbuild.InheritedEclasses)
-			logging.Debug("[ebuild] resolved %d eclasses for embedding", len(resolved))
+			resolved := e.resolvedEclasses
+			if len(resolved) == 0 {
+				resolved = e.resolveEclassChain(e.ParsedEbuild.InheritedEclasses)
+			}
+			logging.Debug("[ebuild] embedding %d eclasses", len(resolved))
 			for _, ec := range resolved {
 				content, err := os.ReadFile(ec.path)
 				if err != nil {
 					logging.Debug("[ebuild] warning: cannot read eclass %s: %v", ec.name, err)
 					continue
 				}
-				// Preprocess eclass content for mvdan.cc/sh compatibility:
-				// 1. Replace 'declare -f' with '__grpm_has_func' (declare -f unsupported)
-				// 2. Replace 'declare -p' with '__grpm_has_var' (declare -p unsupported)
-				processed := bytes.ReplaceAll(content, []byte("declare -f "), []byte("__grpm_has_func "))
-				processed = bytes.ReplaceAll(processed, []byte("declare -p "), []byte("__grpm_has_var "))
-				// mvdan.cc/sh: `type -P` returns "NOT IMPLEMENTED" (exit 3).
-				// `command -v` is functionally equivalent and supported.
-				// See: https://github.com/mvdan/sh/issues/XXX (TODO: file upstream)
-				processed = bytes.ReplaceAll(processed, []byte("type -P "), []byte("command -v "))
-				combinedScript.WriteString(fmt.Sprintf("\n# --- BEGIN ECLASS: %s ---\n", ec.name))
-				combinedScript.WriteString(fmt.Sprintf("ECLASS=%s\n", ec.name))
-				combinedScript.Write(processed)
-				combinedScript.WriteString(fmt.Sprintf("\n# --- END ECLASS: %s ---\n", ec.name))
+				fmt.Fprintf(&combinedScript, "\n# --- BEGIN ECLASS: %s ---\n", ec.name)
+				fmt.Fprintf(&combinedScript, "ECLASS=%s\n", ec.name)
+				combinedScript.Write(content)
+				fmt.Fprintf(&combinedScript, "\n# --- END ECLASS: %s ---\n", ec.name)
 			}
 		}
 
@@ -1063,7 +1077,7 @@ multibuild_foreach_variant() {
 	}
 
 	// Call the phase function
-	combinedScript.WriteString(fmt.Sprintf("%s\n", targetFunc))
+	fmt.Fprintf(&combinedScript, "%s\n", targetFunc)
 
 	// Debug: dump combined script for configure phase
 	if phase == PhaseConfigure {

@@ -129,8 +129,8 @@ func FormatMissingTools(missing []*Tool) string {
 	sb.WriteString("Missing required tools:\n")
 
 	for _, tool := range missing {
-		sb.WriteString(fmt.Sprintf("  - %s: %s\n", tool.Name, tool.Description))
-		sb.WriteString(fmt.Sprintf("    Install: grpm install %s\n", tool.Package))
+		fmt.Fprintf(&sb, "  - %s: %s\n", tool.Name, tool.Description)
+		fmt.Fprintf(&sb, "    Install: grpm install %s\n", tool.Package)
 	}
 
 	sb.WriteString("\nInstall all missing tools:\n")
@@ -138,7 +138,7 @@ func FormatMissingTools(missing []*Tool) string {
 	for i, tool := range missing {
 		packages[i] = tool.Package
 	}
-	sb.WriteString(fmt.Sprintf("  grpm install %s\n", strings.Join(packages, " ")))
+	fmt.Fprintf(&sb, "  grpm install %s\n", strings.Join(packages, " "))
 
 	return sb.String()
 }
@@ -151,12 +151,12 @@ func FormatCheckResult(result *CheckResult) string {
 	sb.WriteString("=================\n\n")
 
 	if len(result.Eclasses) > 0 {
-		sb.WriteString(fmt.Sprintf("Eclasses: %s\n\n", strings.Join(result.Eclasses, ", ")))
+		fmt.Fprintf(&sb, "Eclasses: %s\n\n", strings.Join(result.Eclasses, ", "))
 	}
 
-	sb.WriteString(fmt.Sprintf("Required tools: %d\n", len(result.Required)))
-	sb.WriteString(fmt.Sprintf("Available: %d\n", len(result.Available)))
-	sb.WriteString(fmt.Sprintf("Missing: %d\n\n", len(result.Missing)))
+	fmt.Fprintf(&sb, "Required tools: %d\n", len(result.Required))
+	fmt.Fprintf(&sb, "Available: %d\n", len(result.Available))
+	fmt.Fprintf(&sb, "Missing: %d\n\n", len(result.Missing))
 
 	if result.CanBuild {
 		sb.WriteString("Status: READY TO BUILD\n")

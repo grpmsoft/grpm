@@ -1,7 +1,6 @@
 package ebuild
 
 import (
-	"strings"
 	"testing"
 )
 
@@ -177,71 +176,4 @@ EXPORT_FUNCTIONS src_install`,
 			}
 		})
 	}
-}
-
-func TestEclassPreprocessing(t *testing.T) {
-	// Test that the preprocessing replacements work correctly.
-	// These are applied to eclass content before embedding in the combined script.
-	tests := []struct {
-		name    string
-		input   string
-		check   string // substring that must be present in output
-		noCheck string // substring that must NOT be present in output
-	}{
-		{
-			name:    "declare -f replaced with __grpm_has_func",
-			input:   `if declare -f my_func >/dev/null; then`,
-			check:   `if __grpm_has_func my_func >/dev/null; then`,
-			noCheck: `declare -f`,
-		},
-		{
-			name:    "declare -p replaced with __grpm_has_var",
-			input:   `[[ $(declare -p PYTHON_COMPAT) == "declare -a"* ]]`,
-			check:   `[[ $(__grpm_has_var PYTHON_COMPAT) == "declare -a"* ]]`,
-			noCheck: `declare -p`,
-		},
-		{
-			name:  "type -P replaced with command -v",
-			input: `type -P eltpatch &>/dev/null || die`,
-			// mvdan.cc/sh: type -P returns "NOT IMPLEMENTED" (exit 3)
-			// command -v is equivalent and supported
-			check:   `command -v eltpatch &>/dev/null || die`,
-			noCheck: `type -P`,
-		},
-		{
-			name:    "unrelated declare not replaced",
-			input:   `declare MY_VAR="test"`,
-			check:   `declare MY_VAR="test"`,
-			noCheck: "__grpm_has",
-		},
-		{
-			name:    "declare -a not replaced",
-			input:   `declare -a MY_ARRAY=()`,
-			check:   `declare -a MY_ARRAY=()`,
-			noCheck: "__grpm_has",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Apply the same replacements as in RunPhaseFunction
-			content := []byte(tt.input)
-			content = replaceBytes(content, "declare -f ", "__grpm_has_func ")
-			content = replaceBytes(content, "declare -p ", "__grpm_has_var ")
-			content = replaceBytes(content, "type -P ", "command -v ")
-			result := string(content)
-
-			if !strings.Contains(result, tt.check) {
-				t.Errorf("expected output to contain %q, got: %q", tt.check, result)
-			}
-			if tt.noCheck != "" && strings.Contains(result, tt.noCheck) {
-				t.Errorf("expected output NOT to contain %q, got: %q", tt.noCheck, result)
-			}
-		})
-	}
-}
-
-// replaceBytes mirrors bytes.ReplaceAll for test purposes.
-func replaceBytes(s []byte, old, new string) []byte {
-	return []byte(strings.ReplaceAll(string(s), old, new))
 }

@@ -280,7 +280,7 @@ func (l *EclassLoader) Inherit(ctx context.Context, eclasses []string) error {
 
 // loadEclass loads a single eclass.
 //
-// Panics from unsupported bash constructs within eclass code are caught
+// Panics from unexpected interpreter failures within eclass code are caught
 // and converted to errors. The eclass is still marked as loaded to prevent
 // repeated failures on the same eclass.
 func (l *EclassLoader) loadEclass(ctx context.Context, name string) (loadErr error) {
@@ -303,10 +303,10 @@ func (l *EclassLoader) loadEclass(ctx context.Context, name string) (loadErr err
 	l.registry.SetCurrentEclass(name)
 	defer l.registry.SetCurrentEclass(previousEclass)
 
-	// Recover from panics in eclass execution (unsupported bash constructs).
+	// Recover from panics in eclass execution (unexpected interpreter failures).
 	defer func() {
 		if r := recover(); r != nil {
-			loadErr = fmt.Errorf("eclass %s: interpreter panic: %v (unsupported bash construct)", name, r)
+			loadErr = fmt.Errorf("eclass %s: interpreter panic: %v", name, r)
 			// Mark as loaded to prevent retry loops on the same broken eclass
 			l.registry.MarkLoaded(name, "")
 		}

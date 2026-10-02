@@ -39,7 +39,7 @@ v0.9.4 ← LATEST RELEASE (Bash Interpreter Hardening)
 v0.10.x ← CURRENT PHASE (Audit-Driven Quality & Bash Evolution)
     │
     │   Wave 1: Audit bug fixes (=* glob, phase defaults, dead code)
-    │   Wave 2: Bash interpreter evolution (fix mvdan/sh or custom interpreter)
+    │   Wave 2: Build system expansion, eclass compatibility
     │   Wave 3: @world 90%+ build success, community validation
     ↓
 v0.11.x — Community Testing & Feedback
@@ -73,13 +73,12 @@ Following the community code audit (2026-02-09), development is organized in thr
 
 | Task | Priority | Blocked By |
 |------|----------|------------|
-| Bash interpreter hardening (Phase 2+) | P0 | — |
-| Bash interpreter evolution (fix mvdan/sh or custom) | P1 | Bash hardening |
-| Reduce Go command map shadowing | P1 | Interpreter evolution |
-| Python/distutils build system | P1 | Interpreter evolution |
-| Top 20 eclass compatibility | P1 | Bash hardening |
+| mvdan.cc/sh upstream integration | P0 | — | **DONE** (6 PRs merged, workarounds removed) |
+| Reduce Go command map shadowing | P1 | — |
+| Python/distutils build system | P1 | — |
+| Top 20 eclass compatibility | P1 | — |
 
-**Key architectural decision pending:** Either fix `mvdan.cc/sh` upstream (contribute PRs for needed bash features) or write a custom Go bash interpreter optimized for ebuild/eclass semantics. Additionally, the interpreter backend will be **configurable** — users who prefer real `/bin/bash` can enable it via settings for full compatibility.
+**Architectural decision resolved:** All 6 upstream PRs to `mvdan.cc/sh` were merged (2026-02-23), resolving all major interpreter gaps. The interpreter now provides full bash 5.2 compatibility. The interpreter backend is **configurable** — users who prefer real `/bin/bash` can enable it via settings.
 
 ### Wave 3: Validation & Community
 
@@ -106,10 +105,9 @@ See [PMS_COMPLIANCE.md](docs/PMS_COMPLIANCE.md) for the full compliance matrix.
 
 ### v0.9.4 — Bash Interpreter Hardening (2026-02-09)
 
-- **stripFunctionBodies** — removes phase functions before metadata extraction
 - **3-layer .sig file filtering** — eval → regex fallback → manifest filter
 - **`.tar.lz` unpack support** — xz/plzip/lzip, matching Portage unpacker.eclass
-- **Eclass stdout isolation**, BASH_VERSINFO emulation
+- **Eclass stdout isolation**
 - **ver_cut/ver_rs** default to PV, econf ECONF_SOURCE, S variable resolution
 - **33 new tests**, golangci-lint clean (0 issues)
 
@@ -202,10 +200,10 @@ See [PMS_COMPLIANCE.md](docs/PMS_COMPLIANCE.md) for the full compliance matrix.
 
 | Limitation | Impact | Planned Resolution |
 |------------|--------|-------------------|
-| mvdan.cc/sh interpreter | ~10% bash features unsupported | Fix upstream or custom interpreter (v0.10.0) |
+| Process substitution `>()` | multibuild.eclass affected | Not yet supported in mvdan.cc/sh |
 | ~160 Go command map entries shadow eclass functions | Correctness concern for custom overlays | Reduce shadowing (v0.10.0) |
-| PMS compliance ~60% (simple) / ~51% (weighted) | Complex eclasses may fail | Interpreter evolution + audit fixes (v0.10.0) |
-| @world build success ~20% | Only autotools packages pass | Interpreter evolution + build system improvements |
+| PMS compliance ~60% (simple) / ~51% (weighted) | Complex eclasses may fail | Audit fixes + build system expansion (v0.10.0) |
+| @world build success ~20% | Only autotools packages pass | Build system improvements (v0.10.0) |
 | Daemon scaffolding | Functional but not production-hardened | Production hardening (v0.11.0) |
 
 ---

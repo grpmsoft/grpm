@@ -281,7 +281,7 @@ func buildExtractionScript(ebuildContent string, varNames []string) string {
 		"pkg_config", "pkg_info",
 	}
 	for _, fn := range phaseFuncs {
-		script.WriteString(fmt.Sprintf("%s() { :; }\n", fn))
+		fmt.Fprintf(&script, "%s() { :; }\n", fn)
 	}
 	script.WriteString("\n")
 
@@ -292,7 +292,7 @@ func buildExtractionScript(ebuildContent string, varNames []string) string {
 
 	// Output each variable
 	for _, name := range varNames {
-		script.WriteString(fmt.Sprintf("echo \"%s=$%s\"\n", name, name))
+		fmt.Fprintf(&script, "echo \"%s=$%s\"\n", name, name)
 	}
 
 	return script.String()

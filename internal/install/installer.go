@@ -127,35 +127,48 @@ func (i *Installer) Install(p *pkg.Package, opts InstallOptions) error {
 		return fmt.Errorf("work directory does not exist: %s", opts.WorkDir)
 	}
 
-	// Check if already installed
+	// Check if already installed (Portage-compatible behavior):
+	// - Same version without --replace → skip gracefully
+	// - Different version → auto-upgrade (unmerge old + install new)
+	// - Same version with --replace → reinstall
 	atom := fmt.Sprintf("%s-%s", p.Name, p.Version)
 	existingAtom := i.findInstalledVersion(p.Name)
 
-	if existingAtom != "" && !opts.Replace {
-		return fmt.Errorf("package already installed: %s (use --replace or -R)", existingAtom)
-	}
+	if existingAtom != "" {
+		sameVersion := existingAtom == atom
 
-	// Pretend mode - just validate and return
-	if opts.Pretend || i.DryRun {
-		if existingAtom != "" {
-			i.progress("[pretend] Would replace %s with %s", existingAtom, atom)
-		} else {
-			i.progress("[pretend] Would install %s", atom)
+		if sameVersion && !opts.Replace {
+			i.progress("Already installed: %s (skipping)", atom)
+			return nil
 		}
-		return nil
-	}
 
-	// If replacing, unmerge old version first
-	// This ensures clean replacement without file collisions from old package
-	if existingAtom != "" && opts.Replace {
-		i.progress("Replacing %s with %s", existingAtom, atom)
+		// Different version → auto-upgrade; same version + Replace → reinstall
+		if opts.Pretend || i.DryRun {
+			if sameVersion {
+				i.progress("[pretend] Would reinstall %s", atom)
+			} else {
+				i.progress("[pretend] Would upgrade %s → %s", existingAtom, atom)
+			}
+			return nil
+		}
 
-		// Unmerge old package (keep config files via CONFIG_PROTECT)
+		if sameVersion {
+			i.progress("Reinstalling %s", atom)
+		} else {
+			i.progress("Upgrading %s → %s", existingAtom, atom)
+		}
+
 		if err := i.Uninstall(existingAtom, UninstallOptions{
 			SkipHooks: opts.SkipHooks,
 		}); err != nil {
 			return fmt.Errorf("failed to remove old package %s: %w", existingAtom, err)
 		}
+	}
+
+	// Pretend mode for new installations
+	if opts.Pretend || i.DryRun {
+		i.progress("[pretend] Would install %s", atom)
+		return nil
 	}
 
 	// Create merger for this package

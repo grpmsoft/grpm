@@ -435,7 +435,7 @@ func FormatDepcleanResult(result *DepcleanResult, pretend bool) string {
 
 	if len(result.Orphans) == 0 {
 		sb.WriteString("No orphaned packages found.\n")
-		sb.WriteString(fmt.Sprintf("Protected packages: %d\n", len(result.Protected)))
+		fmt.Fprintf(&sb, "Protected packages: %d\n", len(result.Protected))
 		return sb.String()
 	}
 
@@ -447,12 +447,12 @@ func FormatDepcleanResult(result *DepcleanResult, pretend bool) string {
 	}
 
 	for _, orphan := range result.Orphans {
-		sb.WriteString(fmt.Sprintf("[uninstall   ] %s-%s (%s)\n",
-			orphan.Atom, orphan.Version, orphan.Reason))
+		fmt.Fprintf(&sb, "[uninstall   ] %s-%s (%s)\n",
+			orphan.Atom, orphan.Version, orphan.Reason)
 	}
 
-	sb.WriteString(fmt.Sprintf("\nTotal: %d package(s)\n", len(result.Orphans)))
-	sb.WriteString(fmt.Sprintf("Space to be freed: %s\n", formatBytes(result.TotalSize)))
+	fmt.Fprintf(&sb, "\nTotal: %d package(s)\n", len(result.Orphans))
+	fmt.Fprintf(&sb, "Space to be freed: %s\n", formatBytes(result.TotalSize))
 
 	return sb.String()
 }

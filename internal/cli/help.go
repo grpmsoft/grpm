@@ -125,7 +125,7 @@ func (h *HelpFormatter) Format(meta CommandMeta) string {
 	var sb strings.Builder
 
 	// Header: command name and short description
-	sb.WriteString(fmt.Sprintf("grpm %s - %s\n", meta.Name, meta.Short))
+	fmt.Fprintf(&sb, "grpm %s - %s\n", meta.Name, meta.Short)
 
 	// Long description (if provided)
 	if meta.Long != "" {
@@ -136,12 +136,12 @@ func (h *HelpFormatter) Format(meta CommandMeta) string {
 
 	// Usage
 	sb.WriteString("\nUsage:\n")
-	sb.WriteString(fmt.Sprintf("  grpm %s\n", meta.Usage))
+	fmt.Fprintf(&sb, "  grpm %s\n", meta.Usage)
 
 	// Aliases (if any)
 	if len(meta.Aliases) > 0 {
 		sb.WriteString("\nAliases:\n")
-		sb.WriteString(fmt.Sprintf("  %s\n", strings.Join(meta.Aliases, ", ")))
+		fmt.Fprintf(&sb, "  %s\n", strings.Join(meta.Aliases, ", "))
 	}
 
 	// Flags
@@ -155,14 +155,14 @@ func (h *HelpFormatter) Format(meta CommandMeta) string {
 	if len(meta.Examples) > 0 {
 		sb.WriteString("\nExamples:\n")
 		for _, example := range meta.Examples {
-			sb.WriteString(fmt.Sprintf("  %s\n", example))
+			fmt.Fprintf(&sb, "  %s\n", example)
 		}
 	}
 
 	// See also
 	if len(meta.SeeAlso) > 0 {
 		sb.WriteString("\nSee also:\n")
-		sb.WriteString(fmt.Sprintf("  %s\n", strings.Join(meta.SeeAlso, ", ")))
+		fmt.Fprintf(&sb, "  %s\n", strings.Join(meta.SeeAlso, ", "))
 	}
 
 	// Footer
@@ -244,13 +244,13 @@ func (h *HelpFormatter) formatSingleFlag(f FlagMeta, maxWidth int) string {
 
 	// Short flag
 	if f.Short != "" {
-		sb.WriteString(fmt.Sprintf("-%s, ", f.Short))
+		fmt.Fprintf(&sb, "-%s, ", f.Short)
 	} else {
 		sb.WriteString("    ")
 	}
 
 	// Long flag
-	sb.WriteString(fmt.Sprintf("--%s", f.Long))
+	fmt.Fprintf(&sb, "--%s", f.Long)
 
 	// Type suffix
 	switch f.Type {
@@ -273,7 +273,7 @@ func (h *HelpFormatter) formatSingleFlag(f FlagMeta, maxWidth int) string {
 
 	// Default value (for non-bool flags with non-empty defaults)
 	if f.Type != "bool" && f.Default != "" {
-		sb.WriteString(fmt.Sprintf(" (default %q)", f.Default))
+		fmt.Fprintf(&sb, " (default %q)", f.Default)
 	}
 
 	return sb.String()
@@ -731,7 +731,7 @@ func (r *CommandRegistry) registerAllCommands() {
 func FormatMainHelp(version string, commands []CommandMeta) string {
 	var sb strings.Builder
 
-	sb.WriteString(fmt.Sprintf("GRPM - Go Resource Package Manager v%s\n", version))
+	fmt.Fprintf(&sb, "GRPM - Go Resource Package Manager v%s\n", version)
 	sb.WriteString("\nUsage: grpm [global-options] <command> [command-options] [arguments...]\n")
 
 	sb.WriteString("\nGlobal Options:\n")
@@ -758,7 +758,7 @@ func FormatMainHelp(version string, commands []CommandMeta) string {
 	// Format commands
 	for _, cmd := range sortedCmds {
 		padding := strings.Repeat(" ", maxNameLen-len(cmd.Name)+2)
-		sb.WriteString(fmt.Sprintf("  %s%s%s\n", cmd.Name, padding, cmd.Short))
+		fmt.Fprintf(&sb, "  %s%s%s\n", cmd.Name, padding, cmd.Short)
 	}
 
 	sb.WriteString("\nRun 'grpm <command> --help' for command-specific help.\n")

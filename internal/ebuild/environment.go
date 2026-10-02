@@ -397,6 +397,11 @@ func (env *Environment) ToMap() map[string]string {
 		result[k] = v
 	}
 
+	// Portage build environment variables.
+	// FORCE_UNSAFE_CONFIGURE=1 — required for packages (tar, coreutils) whose
+	// configure scripts refuse to run as root. Portage sets this in ebuild.sh.
+	result["FORCE_UNSAFE_CONFIGURE"] = "1"
+
 	return result
 }
 

@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 
 	"github.com/grpmsoft/grpm/internal/eclass"
@@ -200,6 +201,20 @@ func (l *DynamicEclassLoader) GetExportedFunction(phase string) (string, bool) {
 // GetAccumulatedMetadata returns accumulated metadata from eclasses.
 func (l *DynamicEclassLoader) GetAccumulatedMetadata() map[string]string {
 	return l.hybridLoader.GetExecutor().GetAccumulatedMetadata()
+}
+
+// GetEclassContent returns the raw content of a loaded eclass file.
+// Returns empty string if the eclass is not found in the cache.
+func (l *DynamicEclassLoader) GetEclassContent(name string) string {
+	ec, err := l.hybridLoader.GetCache().Get(name)
+	if err != nil {
+		return ""
+	}
+	content, err := os.ReadFile(ec.Path)
+	if err != nil {
+		return ""
+	}
+	return string(content)
 }
 
 // FinalizeMetadata merges accumulated metadata into the environment.

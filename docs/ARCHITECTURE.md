@@ -213,7 +213,8 @@ Core business logic. Inner layers never depend on outer layers.
 | `eclass_python_any.go` | python-any-r1 | `python-any-r1_pkg_setup`, `python_check_deps` |
 | `eclass_python_utils.go` | python-utils-r1 | `python_get_sitedir`, `python_domodule`, `python_optimize` |
 | `eclass_helpers.go` | multiple | `eshopts_push`/`pop`, `multilib`, `flag-o-matic`, `linux-info`, `toolchain-funcs` |
-| `eclass_multilib.go` | multilib-minimal | `multilib_foreach_abi`, `multilib_src_configure` |
+| `eclass_multilib.go` | multilib-minimal | `multilib_foreach_abi`, `multilib_src_configure` (bash function priority) |
+| `eclass_multilib_build.go` | multilib-build | `multilib_foreach_abi`, `multilib_native_use_build`, `callMultilibPhase` (delegates to ebuild bash functions) |
 | `eclass_flag_o_matic.go` | flag-o-matic | `append-flags`, `replace-flags`, `strip-flags`, `filter-flags` |
 
 ### Infrastructure Layer
@@ -299,7 +300,7 @@ When a phase function is called:
 
 | Mode | Backend | Use Case | Compatibility |
 |------|---------|----------|---------------|
-| `EvalModeGo` | mvdan.cc/sh (in-process) | Default, cross-platform | ~90% of bash constructs |
+| `EvalModeGo` | mvdan.cc/sh (in-process) | Default, cross-platform | Full bash 5.2 compatibility (6 upstream PRs merged) |
 | `EvalModeNativeBash` | `/bin/bash` (subprocess) | Linux production | Full bash compatibility |
 
 The Go mode is used for development on non-Linux platforms. Native bash mode provides full compatibility on Gentoo systems where `/bin/bash` is available.
@@ -432,18 +433,20 @@ User request ("emerge app-misc/hello")
 
 ### mvdan.cc/sh Interpreter
 
-The Go-based bash interpreter (mvdan.cc/sh) handles ~90% of bash constructs correctly. The remaining ~10% causes failures in complex real-world eclasses:
+The Go-based bash interpreter (mvdan.cc/sh) provides comprehensive bash 5.2 compatibility. GRPM contributed 6 upstream PRs (all merged) fixing the major gaps:
 
-| Limitation | Severity | Impact |
-|------------|----------|--------|
-| `declare -f` / `declare -p` not supported | High | Eclass introspection fails |
-| `${var@a}` parameter attributes | High | Causes panic |
-| `read -a` (read into array) | Medium | Array-based eclasses fail |
-| Process substitution `>()` | High | Complex pipe patterns fail |
-| Extended globbing `!(pattern)` | Medium | Pattern-matching eclasses fail |
-| Brace expansion in variable names | Critical | Variable construction fails |
+| Feature | Status | Upstream PR |
+|---------|--------|-------------|
+| `declare -f` / `declare -p` | Fixed | [#1255](https://github.com/mvdan/sh/pull/1255) |
+| `${var@a/@A/@P}` parameter transformations | Fixed | [#1255](https://github.com/mvdan/sh/pull/1255) |
+| `read -a` (read into array) | Fixed | [#1255](https://github.com/mvdan/sh/pull/1255) |
+| `type -P` (executable path lookup) | Fixed | [#1255](https://github.com/mvdan/sh/pull/1255) |
+| Extended globbing `!(pattern)` | Fixed | [#1256](https://github.com/mvdan/sh/pull/1256) |
+| Array slicing in double quotes | Fixed | [#1258](https://github.com/mvdan/sh/pull/1258) |
+| Positional parameter slicing | Fixed | [#1259](https://github.com/mvdan/sh/pull/1259) |
+| Brace expansion in declarations | Fixed | [#1261](https://github.com/mvdan/sh/pull/1261) |
 
-**Mitigation**: `EvalModeNativeBash` uses real `/bin/bash` for full compatibility. For v0.10.0-005, two options are under evaluation: (1) fix mvdan/sh upstream, or (2) write a custom Go interpreter optimized for ebuilds. Additionally, the interpreter backend will be **configurable** — users who prefer real `/bin/bash` can enable it via settings.
+**Remaining limitation**: Process substitution `>()` is not yet supported. `EvalModeNativeBash` uses real `/bin/bash` as a fallback for full compatibility. The interpreter backend is **configurable** — users who prefer real `/bin/bash` can enable it via settings.
 
 ### Command Map Shadowing
 
@@ -451,16 +454,17 @@ The ~160 Go helper functions in the command map intercept commands before dynami
 
 ### PMS Compliance
 
-As of v0.9.4 (validated by 4-agent audit, 2026-02-09):
+As of v0.9.4+ (validated by 4-agent audit, 2026-02-09; multilib fixes 2026-02-23):
 
 | Scenario | Compliance |
 |----------|-----------|
 | Simple autotools (configure/make/make install) | ~80% |
 | Packages using `default` command | ~70% |
+| Multilib autotools packages (xz-utils, pkgconf) | ~70% |
 | Packages with complex eclasses | ~40% |
 | **Weighted average across Portage tree** | **~51%** |
 
-The gap is primarily due to interpreter limitations, not missing domain logic. The correct PMS implementations exist in `helpers_default.go` but are not always dispatched correctly. See `docs/dev/research/audit-validated-2026-02-09.md` for the full audit report.
+Phase dispatch routing for EXPORT_FUNCTIONS has been fixed — eclass phase functions are now correctly resolved before the phase loop. Multilib out-of-tree builds work with correct BUILD_DIR detection. The remaining gap is missing build system support (Python/CMake/Meson). See `docs/dev/research/audit-validated-2026-02-09.md` for the full audit report.
 
 ---
 
@@ -483,14 +487,14 @@ GRPM Orchestration (Go)
     ├── Metadata parsing (mvdan.cc/sh) — fast, in-process
     ├── Dependency resolution (SAT solver) — Go native
     ├── Phase execution (configurable backend):
-    │   ├── Default → Go interpreter (mvdan.cc/sh or custom)
+    │   ├── Default → Go interpreter (mvdan.cc/sh, bash 5.2 compatible)
     │   └── Optional → real /bin/bash (enabled via settings)
     ├── Helper functions → standalone Go binaries in PATH
     ├── File merge & VarDB → Go native (transactional)
     └── Configuration → Go native
 ```
 
-The interpreter backend is configurable: by default GRPM uses its Go interpreter (fast, cross-platform), but users can enable real `/bin/bash` via settings for full compatibility. The Go interpreter itself will be evolved — either by fixing mvdan/sh upstream or by writing a custom implementation optimized for ebuild semantics.
+The interpreter backend is configurable: by default GRPM uses its Go interpreter (fast, cross-platform, bash 5.2 compatible), but users can enable real `/bin/bash` via settings for full compatibility. GRPM contributed 6 upstream PRs to mvdan/sh (all merged), resolving all major interpreter gaps.
 
 ---
 

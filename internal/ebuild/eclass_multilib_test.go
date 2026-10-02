@@ -5,6 +5,7 @@ package ebuild
 
 import (
 	"bytes"
+	"context"
 	"strings"
 	"testing"
 )
@@ -379,5 +380,235 @@ func TestMultilibUsedep(t *testing.T) {
 	got := stdout.String()
 	if got == "" {
 		t.Error("expected non-empty usedep string")
+	}
+}
+
+// ============================================================================
+// CallFunction / callMultilibPhase Integration Tests
+// ============================================================================
+
+// createMultilibTestEnv creates an environment with CHOST set for multilib tests.
+func createMultilibTestEnv(t *testing.T) *Environment {
+	t.Helper()
+	env := createTestEnvironment(t)
+	env.SetVar("CHOST", "x86_64-pc-linux-gnu")
+	return env
+}
+
+func TestCallMultilibPhase_CallsBashFunction(t *testing.T) {
+	// Test that callMultilibPhase invokes a bash-defined function via the interpreter.
+	// Define a bash function, then call it through callMultilibPhase.
+	env := createMultilibTestEnv(t)
+	var stdout, stderr bytes.Buffer
+
+	interp := NewInterpreter(env, &stdout, &stderr)
+
+	// Define a function and call it through callMultilibPhase in one script.
+	script := `
+multilib_src_configure() {
+	echo "custom_configure_called"
+}
+# Now invoke multilib-minimal phase which should call our function.
+multilib-minimal_src_configure
+`
+	err := interp.Run(context.Background(), script)
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+
+	output := stdout.String()
+	if !strings.Contains(output, "custom_configure_called") {
+		t.Errorf("expected bash function to be called, got output: %s", output)
+	}
+}
+
+func TestCallMultilibPhase_FallbackWhenNotDefined(t *testing.T) {
+	// When multilib_src_test is not defined in the ebuild, callMultilibPhase
+	// should fall back to the default (no-op for src_test).
+	env := createMultilibTestEnv(t)
+	var stdout, stderr bytes.Buffer
+
+	interp := NewInterpreter(env, &stdout, &stderr)
+
+	// Call multilib-minimal_src_test WITHOUT defining multilib_src_test.
+	// The default fallback for src_test is no-op, so no error expected.
+	script := `multilib-minimal_src_test`
+	err := interp.Run(context.Background(), script)
+	if err != nil {
+		t.Fatalf("expected fallback to succeed, got: %v", err)
+	}
+}
+
+func TestCallMultilibPhase_PropagatesBashFunctionError(t *testing.T) {
+	// If the bash function exists but fails (returns non-zero),
+	// the error should be propagated, not swallowed.
+	env := createMultilibTestEnv(t)
+	var stdout, stderr bytes.Buffer
+
+	interp := NewInterpreter(env, &stdout, &stderr)
+
+	script := `
+multilib_src_configure() {
+	echo "will fail"
+	return 1
+}
+multilib-minimal_src_configure
+`
+	err := interp.Run(context.Background(), script)
+	if err == nil {
+		t.Fatal("expected error from failing bash function")
+	}
+}
+
+func TestCallBashFunction_NoInterpreter(t *testing.T) {
+	// Without a function caller (unit test mode), callBashFunction returns error.
+	env := &Environment{}
+	var stdout, stderr bytes.Buffer
+	h := NewHelpers(env, &stdout, &stderr)
+
+	err := h.callBashFunction("some_function", nil)
+	if err == nil {
+		t.Fatal("expected error when no interpreter available")
+	}
+	if !strings.Contains(err.Error(), "no interpreter") {
+		t.Errorf("expected 'no interpreter' in error, got: %s", err.Error())
+	}
+}
+
+func TestCallMultilibPhase_FallbackWithoutInterpreter(t *testing.T) {
+	// Without function caller, callMultilibPhase always uses fallback.
+	env := &Environment{}
+	var stdout, stderr bytes.Buffer
+	h := NewHelpers(env, &stdout, &stderr)
+
+	fallbackCalled := false
+	err := h.callMultilibPhase("nonexistent_func", func() error {
+		fallbackCalled = true
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !fallbackCalled {
+		t.Error("expected fallback to be called when no interpreter available")
+	}
+}
+
+func TestMultilibForeachABI_CallsBashFunction(t *testing.T) {
+	// Test that multilib_foreach_abi can invoke a bash-defined function.
+	env := createMultilibTestEnv(t)
+	var stdout, stderr bytes.Buffer
+
+	interp := NewInterpreter(env, &stdout, &stderr)
+
+	script := `
+my_custom_abi_func() {
+	echo "abi_func_for_${ABI}"
+}
+multilib_foreach_abi my_custom_abi_func
+`
+	err := interp.Run(context.Background(), script)
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+
+	output := stdout.String()
+	// Should have called the function for at least the native ABI
+	if !strings.Contains(output, "abi_func_for_") {
+		t.Errorf("expected bash function to be called per-ABI, got: %s", output)
+	}
+}
+
+func TestMultilibForeachABI_WithGoHelper(t *testing.T) {
+	// Test that multilib_foreach_abi works with Go helpers (like einfo).
+	env := createMultilibTestEnv(t)
+	var stdout, stderr bytes.Buffer
+
+	interp := NewInterpreter(env, &stdout, &stderr)
+
+	script := `multilib_foreach_abi einfo "building"`
+	err := interp.Run(context.Background(), script)
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+}
+
+func TestCallFunction_ActiveRunner(t *testing.T) {
+	// Verify CallFunction works during Run() and fails outside.
+	env := createTestEnvironment(t)
+	var stdout, stderr bytes.Buffer
+
+	interp := NewInterpreter(env, &stdout, &stderr)
+
+	// Outside Run(), CallFunction should fail.
+	err := interp.CallFunction("echo test")
+	if err == nil {
+		t.Fatal("expected error when calling CallFunction outside Run()")
+	}
+	if !strings.Contains(err.Error(), "no active runner") {
+		t.Errorf("expected 'no active runner' error, got: %s", err.Error())
+	}
+
+	// During Run(), it should succeed.
+	err = interp.Run(context.Background(), `
+test_func() {
+	echo "from_test_func"
+}
+test_func
+`)
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "from_test_func") {
+		t.Errorf("expected function output, got: %s", stdout.String())
+	}
+}
+
+func TestMultilibBuildSrcInstall_CallsEbuildFunction(t *testing.T) {
+	// Verify that multilib-minimal_src_install calls the ebuild's
+	// multilib_src_install function instead of the hardcoded default.
+	env := createMultilibTestEnv(t)
+	var stdout, stderr bytes.Buffer
+
+	interp := NewInterpreter(env, &stdout, &stderr)
+
+	script := `
+multilib_src_install() {
+	echo "custom_install_for_${ABI}"
+}
+multilib-minimal_src_install
+`
+	err := interp.Run(context.Background(), script)
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+
+	output := stdout.String()
+	if !strings.Contains(output, "custom_install_for_") {
+		t.Errorf("expected custom install function, got: %s", output)
+	}
+}
+
+func TestMultilibBuildSrcCompile_CallsEbuildFunction(t *testing.T) {
+	// Verify multilib-minimal_src_compile calls multilib_src_compile.
+	env := createMultilibTestEnv(t)
+	var stdout, stderr bytes.Buffer
+
+	interp := NewInterpreter(env, &stdout, &stderr)
+
+	script := `
+multilib_src_compile() {
+	echo "custom_compile_for_${ABI}"
+}
+multilib-minimal_src_compile
+`
+	err := interp.Run(context.Background(), script)
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+
+	output := stdout.String()
+	if !strings.Contains(output, "custom_compile_for_") {
+		t.Errorf("expected custom compile function, got: %s", output)
 	}
 }
