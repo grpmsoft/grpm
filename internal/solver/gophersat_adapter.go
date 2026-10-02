@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/crillab/gophersat/explain"
 	"github.com/crillab/gophersat/solver"
@@ -432,21 +433,7 @@ func (g *GophersatAdapter) Solve() (pkg.Status, map[string]string, error) {
 
 	if status == solver.Sat {
 		logging.Debug("SAT solution found")
-		solution := make(map[string]string)
-		model := s.Model()
-
-		// Iterate over all registered variables
-		// Key by name@version to support multi-slot (same name, different slots)
-		for key, varID := range g.vars {
-			if varID <= len(model) && model[varID-1] {
-				parts := strings.Split(key, "@")
-				if len(parts) == 2 {
-					// Use full key (name@version) to avoid multi-slot overwrites
-					solution[key] = parts[1]
-				}
-			}
-		}
-		return pkg.StatusSat, solution, nil
+		return pkg.StatusSat, g.extractSolution(s.Model()), nil
 	}
 
 	if status == solver.Unsat {
@@ -456,6 +443,160 @@ func (g *GophersatAdapter) Solve() (pkg.Status, map[string]string, error) {
 
 	logging.Debug("INDETERMINATE: solver timeout")
 	return pkg.StatusIndet, nil, fmt.Errorf("solver timeout")
+}
+
+// extractSolution reads the model from a solver and returns the solution map.
+func (g *GophersatAdapter) extractSolution(model []bool) map[string]string {
+	solution := make(map[string]string)
+	for key, varID := range g.vars {
+		if varID <= len(model) && model[varID-1] {
+			parts := strings.Split(key, "@")
+			if len(parts) == 2 {
+				solution[key] = parts[1]
+			}
+		}
+	}
+	return solution
+}
+
+// versionRank pairs a SAT variable ID with its preference rank (0 = most preferred).
+type versionRank struct {
+	varID int
+	rank  int
+}
+
+// buildVersionPreferences assigns preference ranks to each version of each package.
+// rank 0 = most preferred (newest in update mode, installed in keep mode).
+func (g *GophersatAdapter) buildVersionPreferences(updateMode bool) []versionRank {
+	var preferences []versionRank
+
+	for pkgName, versions := range g.packages {
+		if len(versions) <= 1 {
+			continue
+		}
+
+		sorted := make([]*pkg.Package, len(versions))
+		copy(sorted, versions)
+		sort.Slice(sorted, func(i, j int) bool {
+			return pkg.CompareVersions(sorted[i].Version, sorted[j].Version) > 0
+		})
+
+		// Check if any version is installed (for keep-mode preference)
+		installedRankAssigned := false
+		for rank, p := range sorted {
+			key := pkgName + "@" + p.Version
+			varID, exists := g.vars[key]
+			if !exists {
+				continue
+			}
+
+			actualRank := rank
+			if !updateMode && g.installed[varID] && !installedRankAssigned {
+				actualRank = 0
+				installedRankAssigned = true
+			} else if !updateMode && installedRankAssigned {
+				actualRank = rank + 1
+			}
+
+			preferences = append(preferences, versionRank{varID: varID, rank: actualRank})
+		}
+	}
+	return preferences
+}
+
+// SolveOptimal finds an optimal solution using MAX-SAT with version preferences.
+// Hard clauses (all existing clauses) are preserved. Soft clauses express version
+// preferences: for each package with multiple candidates, prefer the version with
+// lowest rank (0 = most preferred).
+//
+// If updateMode is true, newest version gets rank 0 (prefer upgrading).
+// If false, installed version gets rank 0 (prefer keeping), then newest.
+//
+// Falls back to regular SAT result on timeout or if optimization fails.
+func (g *GophersatAdapter) SolveOptimal(timeout time.Duration, updateMode bool) (pkg.Status, map[string]string, error) {
+	// First: regular SAT to check satisfiability
+	status, fallbackSolution, err := g.Solve()
+	if status != pkg.StatusSat {
+		return status, fallbackSolution, err
+	}
+
+	preferences := g.buildVersionPreferences(updateMode)
+	if len(preferences) == 0 {
+		return pkg.StatusSat, fallbackSolution, nil
+	}
+
+	// Build optimization problem: all existing hard clauses + soft preference clauses.
+	// For each version var, add soft clause (var) with weight = maxRank - rank + 1.
+	// Higher weight = more important to satisfy = more preferred version.
+	// Minimize counts violated soft clauses weighted inversely.
+	maxRank := 0
+	for _, p := range preferences {
+		if p.rank > maxRank {
+			maxRank = p.rank
+		}
+	}
+
+	// Construct clauses: all hard clauses + soft penalties for non-preferred versions.
+	// Soft clause: (-var OR relaxLit) — if var IS selected, relaxLit must be true (costs weight).
+	// Preferred version (rank 0) has no soft clause — zero cost.
+	// This way: selecting nothing = cost 0, selecting preferred = cost 0,
+	// selecting non-preferred = cost proportional to rank.
+	allClauses := make([][]int, len(g.clauses))
+	copy(allClauses, g.clauses)
+
+	nextVar := len(g.vars) + 1
+	var relaxLits []solver.Lit
+	var weights []int
+
+	for _, p := range preferences {
+		if p.rank == 0 {
+			continue // preferred version = no penalty
+		}
+		relaxVar := nextVar
+		nextVar++
+		allClauses = append(allClauses, []int{-p.varID, relaxVar})
+		relaxLits = append(relaxLits, solver.IntToLit(int32(relaxVar)))
+		weights = append(weights, p.rank)
+	}
+
+	if len(relaxLits) == 0 {
+		return pkg.StatusSat, fallbackSolution, nil
+	}
+
+	pb := solver.ParseSlice(allClauses)
+	pb.SetCostFunc(relaxLits, weights)
+	s := solver.New(pb)
+	s.Verbose = false
+
+	// Run Minimize with timeout
+	type result struct {
+		cost  int
+		model []bool
+	}
+	ch := make(chan result, 1)
+	go func() {
+		cost := s.Minimize()
+		var model []bool
+		if cost >= 0 {
+			model = s.Model()
+		}
+		ch <- result{cost: cost, model: model}
+	}()
+
+	select {
+	case r := <-ch:
+		if r.cost < 0 {
+			logging.Warn("MAX-SAT optimization found no solution, using SAT fallback")
+			return pkg.StatusSat, fallbackSolution, nil
+		}
+		logging.Debug("MAX-SAT optimal cost: %d", r.cost)
+		solution := g.extractSolution(r.model)
+		return pkg.StatusSat, solution, nil
+
+	case <-time.After(timeout):
+		logging.Warn("MAX-SAT optimization timed out after %v — using feasible (not optimal) solution", timeout)
+		return pkg.StatusSat, fallbackSolution, nil
+	}
 }
 
 // AddImplication adds an implication clause: if dependent is selected,

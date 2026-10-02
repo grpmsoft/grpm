@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/grpmsoft/grpm/internal/logging"
 	"github.com/grpmsoft/grpm/internal/mask"
@@ -631,8 +632,11 @@ func (r *PortageResolver) Resolve(packages []string) (ResolveResult, error) {
 
 	logging.Debug("Total clauses in SAT problem: %d", len(adapter.clauses))
 
-	// Solve
-	status, solution, err := adapter.Solve()
+	// Solve with MAX-SAT optimization for version preferences.
+	// Timeout with fallback to regular SAT — user sees a warning if optimization fails.
+	const maxsatTimeout = 5 * time.Second
+	updateMode := r.options.Deep || r.options.NewUse // --deep/--newuse imply prefer newest
+	status, solution, err := adapter.SolveOptimal(maxsatTimeout, updateMode)
 	if err != nil {
 		return nil, err
 	}
