@@ -95,6 +95,19 @@ func toSlotKeyMap(m map[string]*pkg.Package) map[pkg.SlotKey]*pkg.Package {
 	return result
 }
 
+// resolveClean calls Resolve, checks error, and asserts PostPassAdded == 0.
+func resolveClean(t *testing.T, resolver *PortageResolver, atoms []string) map[string]*pkg.Package {
+	t.Helper()
+	result, err := resolver.Resolve(atoms)
+	if err != nil {
+		t.Fatalf("Resolve(%v) failed: %v", atoms, err)
+	}
+	if resolver.PostPassAdded > 0 {
+		t.Errorf("post-SAT pass added %d packages — SAT encoding incomplete", resolver.PostPassAdded)
+	}
+	return result
+}
+
 // --- TDD tests for v0.10.0-011: Multi-Version SAT Resolver ---
 //
 // Tests cover: multi-version candidate loading, implication clauses,
@@ -107,10 +120,7 @@ func TestMultiVersionSAT_ChoosesNewest(t *testing.T) {
 	r.addVersion(pkg.NewPackage("sys-libs/zlib", "1.3.1", "0"))
 
 	resolver := NewResolver(r)
-	result, err := resolver.Resolve([]string{"sys-libs/zlib"})
-	if err != nil {
-		t.Fatalf("Resolve failed: %v", err)
-	}
+	result := resolveClean(t, resolver, []string{"sys-libs/zlib"})
 
 	slotResult := toSlotKeyMap(result)
 	key := pkg.SlotKey{Name: "sys-libs/zlib", Slot: "0"}
@@ -158,10 +168,7 @@ func TestMultiVersionSAT_MultiSlotCoexist(t *testing.T) {
 		t.Logf("  %s-%s slot=%s", v.Name, v.Version, v.Slot.Name)
 	}
 
-	result, err := resolver.Resolve([]string{"app-misc/myapp"})
-	if err != nil {
-		t.Fatalf("Resolve failed: %v", err)
-	}
+	result := resolveClean(t, resolver, []string{"app-misc/myapp"})
 
 	slotResult := toSlotKeyMap(result)
 
@@ -197,10 +204,7 @@ func TestMultiVersionSAT_AtMostOnePerSlot(t *testing.T) {
 	r.addVersion(pkg.NewPackage("dev-libs/openssl", "3.0.15", "0"))
 
 	resolver := NewResolver(r)
-	result, err := resolver.Resolve([]string{"dev-libs/openssl"})
-	if err != nil {
-		t.Fatalf("Resolve failed: %v", err)
-	}
+	result := resolveClean(t, resolver, []string{"dev-libs/openssl"})
 
 	slotResult := toSlotKeyMap(result)
 	count := 0
@@ -234,10 +238,7 @@ func TestMultiVersionSAT_ImplicationNotUnconditional(t *testing.T) {
 	r.addVersion(appV2)
 
 	resolver := NewResolver(r)
-	result, err := resolver.Resolve([]string{"app-misc/app"})
-	if err != nil {
-		t.Fatalf("Resolve failed: %v", err)
-	}
+	result := resolveClean(t, resolver, []string{"app-misc/app"})
 
 	slotResult := toSlotKeyMap(result)
 
@@ -301,10 +302,7 @@ func TestMultiVersionSAT_SATSeesMultipleCandidates(t *testing.T) {
 	r.addVersion(pkg.NewPackage("dev-libs/libxml2", "2.13.4", "0"))
 
 	resolver := NewResolver(r)
-	result, err := resolver.Resolve([]string{"dev-libs/libxml2"})
-	if err != nil {
-		t.Fatalf("Resolve failed: %v", err)
-	}
+	result := resolveClean(t, resolver, []string{"dev-libs/libxml2"})
 
 	// Verify that SAT actually considered multiple versions (not just one).
 	// The proof: if we resolve with >=2.13, older candidate is excluded.
@@ -355,10 +353,7 @@ func TestImplication_MultiVersion_OnlySelectedVersionDepsPulled(t *testing.T) {
 	r.addVersion(appV2)
 
 	resolver := NewResolver(r)
-	result, err := resolver.Resolve([]string{"app-misc/myutil"})
-	if err != nil {
-		t.Fatalf("Resolve failed: %v", err)
-	}
+	result := resolveClean(t, resolver, []string{"app-misc/myutil"})
 
 	slotResult := toSlotKeyMap(result)
 
@@ -415,10 +410,7 @@ func TestAtMostOnePerSlot_PairwiseExclusion(t *testing.T) {
 	r.addVersion(pkg.NewPackage("sys-libs/glibc", "2.39", "0"))
 
 	resolver := NewResolver(r)
-	result, err := resolver.Resolve([]string{"sys-libs/glibc"})
-	if err != nil {
-		t.Fatalf("Resolve failed: %v", err)
-	}
+	result := resolveClean(t, resolver, []string{"sys-libs/glibc"})
 
 	// Count how many glibc versions are in the result
 	count := 0
@@ -472,10 +464,7 @@ func TestMultiVersionSAT_DepVersionConstraintSatisfied(t *testing.T) {
 	r.addVersion(app)
 
 	resolver := NewResolver(r)
-	result, err := resolver.Resolve([]string{"app-misc/sslapp"})
-	if err != nil {
-		t.Fatalf("Resolve failed: %v", err)
-	}
+	result := resolveClean(t, resolver, []string{"app-misc/sslapp"})
 
 	slotResult := toSlotKeyMap(result)
 
@@ -522,10 +511,7 @@ func TestMultiVersionSAT_TransitiveDeps(t *testing.T) {
 	r.addVersion(app)
 
 	resolver := NewResolver(r)
-	result, err := resolver.Resolve([]string{"app-misc/transapp"})
-	if err != nil {
-		t.Fatalf("Resolve failed: %v", err)
-	}
+	result := resolveClean(t, resolver, []string{"app-misc/transapp"})
 
 	slotResult := toSlotKeyMap(result)
 
@@ -719,10 +705,7 @@ func TestFix_AllCandidatesDepsLoaded(t *testing.T) {
 	r.addVersion(app)
 
 	resolver := NewResolver(r)
-	result, err := resolver.Resolve([]string{"app-misc/constrained"})
-	if err != nil {
-		t.Fatalf("Resolve failed: %v", err)
-	}
+	result := resolveClean(t, resolver, []string{"app-misc/constrained"})
 
 	slotResult := toSlotKeyMap(result)
 
@@ -810,12 +793,8 @@ func TestFix_RootBacktracksOnConflict(t *testing.T) {
 	}
 
 	resolver := NewResolver(r)
-	result, err := resolver.Resolve([]string{"app-misc/flex"})
+	result := resolveClean(t, resolver, []string{"app-misc/flex"})
 
-	// v2 is highest but unsatisfiable. SAT should backtrack to v1.
-	if err != nil {
-		t.Fatalf("Resolve should find solution via v1 backtrack, got error: %v", err)
-	}
 
 	slotResult := toSlotKeyMap(result)
 	appKey := pkg.SlotKey{Name: "app-misc/flex", Slot: "0"}
@@ -858,10 +837,7 @@ func TestFix_ORGroupDepsExplored(t *testing.T) {
 	r.addVersion(app)
 
 	resolver := NewResolver(r)
-	result, err := resolver.Resolve([]string{"app-misc/orapp"})
-	if err != nil {
-		t.Fatalf("Resolve should succeed for OR-group with valid alternatives, got: %v", err)
-	}
+	result := resolveClean(t, resolver, []string{"app-misc/orapp"})
 
 	slotResult := toSlotKeyMap(result)
 
@@ -905,10 +881,7 @@ func TestFix_RootRespectsAtomConstraint(t *testing.T) {
 	r.addVersion(pkg.NewPackage("app-misc/pinned", "3.0", "0"))
 
 	resolver := NewResolver(r)
-	result, err := resolver.Resolve([]string{"=app-misc/pinned-1.0"})
-	if err != nil {
-		t.Fatalf("Resolve failed: %v", err)
-	}
+	result := resolveClean(t, resolver, []string{"=app-misc/pinned-1.0"})
 
 	slotResult := toSlotKeyMap(result)
 	key := pkg.SlotKey{Name: "app-misc/pinned", Slot: "0"}
@@ -933,10 +906,7 @@ func TestFix_PostSATPassAddsNothing(t *testing.T) {
 	r.addVersion(app)
 
 	resolver := NewResolver(r)
-	result, err := resolver.Resolve([]string{"app-misc/complete"})
-	if err != nil {
-		t.Fatalf("Resolve failed: %v", err)
-	}
+	result := resolveClean(t, resolver, []string{"app-misc/complete"})
 
 	// dep should already be in result from SAT, not added by post-pass
 	slotResult := toSlotKeyMap(result)
@@ -960,10 +930,7 @@ func TestFix_RootRespectsSlotAtom(t *testing.T) {
 	r.addVersion(pkg.NewPackage("dev-lang/py", "3.13.0", "3.13"))
 
 	resolver := NewResolver(r)
-	result, err := resolver.Resolve([]string{"dev-lang/py:3.13"})
-	if err != nil {
-		t.Fatalf("Resolve failed: %v", err)
-	}
+	result := resolveClean(t, resolver, []string{"dev-lang/py:3.13"})
 
 	slotResult := toSlotKeyMap(result)
 	key := pkg.SlotKey{Name: "dev-lang/py", Slot: "3.13"}
