@@ -1930,3 +1930,350 @@ func TestBlocker_WeakBlockerFiresWithoutVDB(t *testing.T) {
 		t.Error("expected UNSAT — weak blocker a(!b) + dep a→b = conflict in final state")
 	}
 }
+
+// --- Tests for v0.10.0-018: USE deps on atoms ---
+
+// TestConstraint_PackageSatisfiesUseDeps tests the domain-level USE dep check.
+func TestConstraint_PackageSatisfiesUseDeps(t *testing.T) {
+	tests := []struct {
+		name       string
+		useRequire []string
+		useBlock   []string
+		useFlags   map[string]bool
+		want       bool
+	}{
+		{"no USE deps — always satisfies", nil, nil, map[string]bool{"ssl": true}, true},
+		{"require ssl — provider has ssl", []string{"ssl"}, nil, map[string]bool{"ssl": true}, true},
+		{"require ssl — provider lacks ssl", []string{"ssl"}, nil, map[string]bool{"debug": true}, false},
+		{"require ssl — provider ssl=false", []string{"ssl"}, nil, map[string]bool{"ssl": false}, false},
+		{"block debug — debug disabled", nil, []string{"debug"}, map[string]bool{"debug": false}, true},
+		{"block debug — debug enabled", nil, []string{"debug"}, map[string]bool{"debug": true}, false},
+		{"require ssl + block debug — both ok", []string{"ssl"}, []string{"debug"}, map[string]bool{"ssl": true, "debug": false}, true},
+		{"require ssl + block debug — debug on", []string{"ssl"}, []string{"debug"}, map[string]bool{"ssl": true, "debug": true}, false},
+		{"require ssl + block debug — ssl off", []string{"ssl"}, []string{"debug"}, map[string]bool{"ssl": false, "debug": false}, false},
+		{"block flag — nil map", nil, []string{"debug"}, nil, true},
+		{"require flag — nil map", []string{"ssl"}, nil, nil, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := pkg.Constraint{UseRequire: tt.useRequire, UseBlock: tt.useBlock}
+			if got := c.PackageSatisfiesUseDeps(tt.useFlags); got != tt.want {
+				t.Errorf("PackageSatisfiesUseDeps() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestConstraint_HasUseDeps tests the HasUseDeps predicate.
+func TestConstraint_HasUseDeps(t *testing.T) {
+	tests := []struct {
+		name       string
+		useRequire []string
+		useBlock   []string
+		want       bool
+	}{
+		{"empty", nil, nil, false},
+		{"require only", []string{"ssl"}, nil, true},
+		{"block only", nil, []string{"debug"}, true},
+		{"both", []string{"ssl"}, []string{"debug"}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := pkg.Constraint{UseRequire: tt.useRequire, UseBlock: tt.useBlock}
+			if got := c.HasUseDeps(); got != tt.want {
+				t.Errorf("HasUseDeps() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestUseDeps_RequireFlag tests that dep openssl[ssl] only matches versions with ssl enabled.
+func TestUseDeps_RequireFlag(t *testing.T) {
+	r := newMultiVersionRepo()
+	ssl1 := pkg.NewPackage("dev-libs/openssl", "3.0.14", "0")
+	ssl1.UseFlags["ssl"] = true
+	r.addVersion(ssl1)
+
+	ssl2 := pkg.NewPackage("dev-libs/openssl", "3.0.15", "0")
+	ssl2.UseFlags["ssl"] = false
+	r.addVersion(ssl2)
+
+	app := pkg.NewPackage("app-misc/myapp", "1.0", "0")
+	app.Deps = []pkg.Constraint{{
+		Name: "dev-libs/openssl", Type: pkg.ConstraintTypeVersion,
+		UseRequire: []string{"ssl"},
+	}}
+	r.addVersion(app)
+
+	resolver := NewResolver(r)
+	result := resolveClean(t, resolver, []string{"app-misc/myapp"})
+	key := pkg.SlotKey{Name: "dev-libs/openssl", Slot: "0"}
+	p, ok := result[key]
+	if !ok {
+		t.Fatal("expected openssl in result")
+	}
+	if p.Version != "3.0.14" {
+		t.Errorf("expected openssl-3.0.14 (ssl=true), got %s", p.Version)
+	}
+}
+
+// TestUseDeps_BlockFlag tests that dep openssl[-debug] excludes versions with debug enabled.
+func TestUseDeps_BlockFlag(t *testing.T) {
+	r := newMultiVersionRepo()
+	v1 := pkg.NewPackage("dev-libs/openssl", "3.0.14", "0")
+	v1.UseFlags["debug"] = true
+	r.addVersion(v1)
+
+	v2 := pkg.NewPackage("dev-libs/openssl", "3.0.15", "0")
+	v2.UseFlags["debug"] = false
+	r.addVersion(v2)
+
+	app := pkg.NewPackage("app-misc/myapp", "1.0", "0")
+	app.Deps = []pkg.Constraint{{
+		Name: "dev-libs/openssl", Type: pkg.ConstraintTypeVersion,
+		UseBlock: []string{"debug"},
+	}}
+	r.addVersion(app)
+
+	resolver := NewResolver(r)
+	result := resolveClean(t, resolver, []string{"app-misc/myapp"})
+	key := pkg.SlotKey{Name: "dev-libs/openssl", Slot: "0"}
+	p, ok := result[key]
+	if !ok {
+		t.Fatal("expected openssl in result")
+	}
+	if p.Version != "3.0.15" {
+		t.Errorf("expected openssl-3.0.15 (debug=false), got %s", p.Version)
+	}
+}
+
+// TestUseDeps_NoUseDeps_BackwardCompat tests backward compat: no USE deps = all versions match.
+func TestUseDeps_NoUseDeps_BackwardCompat(t *testing.T) {
+	r := newMultiVersionRepo()
+	v1 := pkg.NewPackage("dev-libs/openssl", "3.0.14", "0")
+	v1.UseFlags["ssl"] = true
+	r.addVersion(v1)
+	v2 := pkg.NewPackage("dev-libs/openssl", "3.0.15", "0")
+	v2.UseFlags["ssl"] = false
+	r.addVersion(v2)
+
+	app := pkg.NewPackage("app-misc/myapp", "1.0", "0")
+	app.Deps = []pkg.Constraint{{Name: "dev-libs/openssl", Type: pkg.ConstraintTypeVersion}}
+	r.addVersion(app)
+
+	resolver := NewResolver(r)
+	result := resolveClean(t, resolver, []string{"app-misc/myapp"})
+	key := pkg.SlotKey{Name: "dev-libs/openssl", Slot: "0"}
+	if _, ok := result[key]; !ok {
+		t.Fatal("expected openssl in result — both versions are valid without USE deps")
+	}
+}
+
+// TestUseDeps_UNSAT_NoProvider tests that no provider with required USE flag causes UNSAT.
+func TestUseDeps_UNSAT_NoProvider(t *testing.T) {
+	r := newMultiVersionRepo()
+	v1 := pkg.NewPackage("dev-libs/openssl", "3.0.14", "0")
+	v1.UseFlags["ssl"] = false
+	r.addVersion(v1)
+	v2 := pkg.NewPackage("dev-libs/openssl", "3.0.15", "0")
+	v2.UseFlags["ssl"] = false
+	r.addVersion(v2)
+
+	app := pkg.NewPackage("app-misc/myapp", "1.0", "0")
+	app.Deps = []pkg.Constraint{{
+		Name: "dev-libs/openssl", Type: pkg.ConstraintTypeVersion,
+		UseRequire: []string{"ssl"},
+	}}
+	r.addVersion(app)
+
+	resolver := NewResolver(r)
+	result, err := resolver.Resolve([]string{"app-misc/myapp"})
+	if err != nil {
+		return // Error is acceptable — means UNSAT
+	}
+	if result != nil {
+		key := pkg.SlotKey{Name: "dev-libs/openssl", Slot: "0"}
+		if _, ok := result[key]; ok {
+			t.Error("openssl should NOT be in result since no version satisfies [ssl]")
+		}
+	}
+}
+
+// TestUseDeps_CombinedRequireAndBlock tests [ssl,-debug].
+func TestUseDeps_CombinedRequireAndBlock(t *testing.T) {
+	r := newMultiVersionRepo()
+	v1 := pkg.NewPackage("dev-libs/openssl", "3.0.14", "0")
+	v1.UseFlags["ssl"] = true
+	v1.UseFlags["debug"] = true
+	r.addVersion(v1)
+	v2 := pkg.NewPackage("dev-libs/openssl", "3.0.15", "0")
+	v2.UseFlags["ssl"] = true
+	v2.UseFlags["debug"] = false
+	r.addVersion(v2)
+	v3 := pkg.NewPackage("dev-libs/openssl", "3.1.0", "0")
+	v3.UseFlags["ssl"] = false
+	v3.UseFlags["debug"] = false
+	r.addVersion(v3)
+
+	app := pkg.NewPackage("app-misc/myapp", "1.0", "0")
+	app.Deps = []pkg.Constraint{{
+		Name: "dev-libs/openssl", Type: pkg.ConstraintTypeVersion,
+		UseRequire: []string{"ssl"}, UseBlock: []string{"debug"},
+	}}
+	r.addVersion(app)
+
+	resolver := NewResolver(r)
+	result := resolveClean(t, resolver, []string{"app-misc/myapp"})
+	key := pkg.SlotKey{Name: "dev-libs/openssl", Slot: "0"}
+	p, ok := result[key]
+	if !ok {
+		t.Fatal("expected openssl in result")
+	}
+	if p.Version != "3.0.15" {
+		t.Errorf("expected openssl-3.0.15 (ssl=true, debug=false), got %s", p.Version)
+	}
+}
+
+// TestUseDeps_SlotConstraint tests USE dep filtering on slot constraints.
+func TestUseDeps_SlotConstraint(t *testing.T) {
+	r := newMultiVersionRepo()
+	py1 := pkg.NewPackage("dev-lang/python", "3.12.7", "3.12")
+	py1.UseFlags["ssl"] = true
+	r.addVersion(py1)
+	py2 := pkg.NewPackage("dev-lang/python", "3.13.1", "3.13")
+	py2.UseFlags["ssl"] = false
+	r.addVersion(py2)
+
+	app := pkg.NewPackage("app-misc/myapp", "1.0", "0")
+	app.Deps = []pkg.Constraint{{
+		Name: "dev-lang/python", Slot: "3.12", Type: pkg.ConstraintTypeSlot,
+		UseRequire: []string{"ssl"},
+	}}
+	r.addVersion(app)
+
+	resolver := NewResolver(r)
+	result, err := resolver.Resolve([]string{"app-misc/myapp"})
+	if err != nil {
+		t.Fatalf("Resolve failed: %v", err)
+	}
+	// PostPassAdded may be >0 for slot deps (known resolver behavior, not USE dep issue)
+	key := pkg.SlotKey{Name: "dev-lang/python", Slot: "3.12"}
+	p, ok := result[key]
+	if !ok {
+		t.Fatal("expected python:3.12 in result")
+	}
+	if p.Version != "3.12.7" {
+		t.Errorf("expected python-3.12.7, got %s", p.Version)
+	}
+}
+
+// TestUseDeps_OrGroup tests USE dep filtering within OR-group alternatives.
+func TestUseDeps_OrGroup(t *testing.T) {
+	r := newMultiVersionRepo()
+	mysql := pkg.NewPackage("dev-db/mysql", "8.0", "0")
+	mysql.UseFlags["ssl"] = false
+	r.addVersion(mysql)
+	pg := pkg.NewPackage("dev-db/postgresql", "16.0", "0")
+	pg.UseFlags["ssl"] = true
+	r.addVersion(pg)
+
+	app := pkg.NewPackage("app-misc/myapp", "1.0", "0")
+	app.Deps = []pkg.Constraint{
+		{Name: "dev-db/mysql", Type: pkg.ConstraintTypeVersion, UseRequire: []string{"ssl"}, OrGroupID: 1},
+		{Name: "dev-db/postgresql", Type: pkg.ConstraintTypeVersion, UseRequire: []string{"ssl"}, OrGroupID: 1},
+	}
+	r.addVersion(app)
+
+	resolver := NewResolver(r)
+	result := resolveClean(t, resolver, []string{"app-misc/myapp"})
+	pgKey := pkg.SlotKey{Name: "dev-db/postgresql", Slot: "0"}
+	if _, ok := result[pgKey]; !ok {
+		t.Error("expected postgresql in result (only provider with ssl=true)")
+	}
+}
+
+// TestUseDeps_FindSatisfyingVars_AdapterLevel tests adapter-level USE dep filtering.
+func TestUseDeps_FindSatisfyingVars_AdapterLevel(t *testing.T) {
+	adapter := NewGophersatAdapter()
+	ssl1 := pkg.NewPackage("dev-libs/openssl", "3.0.14", "0")
+	ssl1.UseFlags["ssl"] = true
+	ssl1.UseFlags["debug"] = false
+	adapter.AddPackage(ssl1)
+	ssl2 := pkg.NewPackage("dev-libs/openssl", "3.0.15", "0")
+	ssl2.UseFlags["ssl"] = false
+	ssl2.UseFlags["debug"] = true
+	adapter.AddPackage(ssl2)
+
+	// Require ssl — only 3.0.14 matches
+	cReq := pkg.Constraint{Name: "dev-libs/openssl", Type: pkg.ConstraintTypeVersion, UseRequire: []string{"ssl"}}
+	vars := adapter.findSatisfyingVars(cReq)
+	if len(vars) != 1 {
+		t.Fatalf("expected 1 var (3.0.14 with ssl), got %d", len(vars))
+	}
+	if n := adapter.varName(vars[0]); n != "dev-libs/openssl@3.0.14" {
+		t.Errorf("expected dev-libs/openssl@3.0.14, got %s", n)
+	}
+
+	// Block debug — only 3.0.14 matches
+	cBlock := pkg.Constraint{Name: "dev-libs/openssl", Type: pkg.ConstraintTypeVersion, UseBlock: []string{"debug"}}
+	vars = adapter.findSatisfyingVars(cBlock)
+	if len(vars) != 1 {
+		t.Fatalf("expected 1 var (3.0.14 without debug), got %d", len(vars))
+	}
+
+	// No USE deps — both match
+	cNone := pkg.Constraint{Name: "dev-libs/openssl", Type: pkg.ConstraintTypeVersion}
+	vars = adapter.findSatisfyingVars(cNone)
+	if len(vars) != 2 {
+		t.Errorf("expected 2 vars (no USE filter), got %d", len(vars))
+	}
+}
+
+func TestUseDeps_DefaultPlus_ProviderWithoutFlag(t *testing.T) {
+	// x[ssl(+)] against provider x without ssl in IUSE → match (default enabled)
+	r := newMultiVersionRepo()
+
+	xNoSSL := pkg.NewPackage("dev-libs/x", "1.0", "0")
+	// No ssl in UseFlags at all — not in IUSE
+	r.addVersion(xNoSSL)
+
+	app := pkg.NewPackage("app/app", "1.0", "0")
+	app.Deps = []pkg.Constraint{{
+		Name:       "dev-libs/x",
+		Type:       pkg.ConstraintTypeVersion,
+		UseRequire: []string{"ssl"},
+		UseDefault: map[string]bool{"ssl": true}, // ssl(+)
+	}}
+	r.addVersion(app)
+
+	resolver := NewResolver(r)
+	result := resolveClean(t, resolver, []string{"app/app"})
+
+	xKey := pkg.SlotKey{Name: "dev-libs/x", Slot: "0"}
+	if _, ok := result[xKey]; !ok {
+		t.Error("x should match — ssl(+) default treats absent flag as enabled")
+	}
+}
+
+func TestUseDeps_NoDefault_ProviderWithoutFlag(t *testing.T) {
+	// x[ssl] (no default) against provider x without ssl in IUSE → no match
+	r := newMultiVersionRepo()
+
+	xNoSSL := pkg.NewPackage("dev-libs/x", "1.0", "0")
+	r.addVersion(xNoSSL)
+
+	app := pkg.NewPackage("app/app", "1.0", "0")
+	app.Deps = []pkg.Constraint{{
+		Name:       "dev-libs/x",
+		Type:       pkg.ConstraintTypeVersion,
+		UseRequire: []string{"ssl"},
+		// No UseDefault — strict check
+	}}
+	r.addVersion(app)
+
+	resolver := NewResolver(r)
+	_, err := resolver.Resolve([]string{"app/app"})
+	if err == nil {
+		t.Error("expected UNSAT — x has no ssl flag and no default")
+	}
+}

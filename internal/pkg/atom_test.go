@@ -861,6 +861,25 @@ func TestAtom_ToConstraint(t *testing.T) {
 	}
 }
 
+func TestAtom_ToConstraint_UseDeps(t *testing.T) {
+	atom, err := ParseAtom("dev-libs/x[ssl(+),-debug]")
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+
+	c := atom.ToConstraint()
+
+	if len(c.UseRequire) != 1 || c.UseRequire[0] != "ssl" {
+		t.Errorf("UseRequire: got %v, want [ssl]", c.UseRequire)
+	}
+	if len(c.UseBlock) != 1 || c.UseBlock[0] != "debug" {
+		t.Errorf("UseBlock: got %v, want [debug]", c.UseBlock)
+	}
+	if c.UseDefault == nil || !c.UseDefault["ssl"] {
+		t.Errorf("UseDefault[ssl]: got %v, want true (from ssl(+))", c.UseDefault)
+	}
+}
+
 func TestMatchesRevision(t *testing.T) {
 	tests := []struct {
 		v1, v2 string

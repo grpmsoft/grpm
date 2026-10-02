@@ -87,6 +87,20 @@ type Constraint struct {
 	Condition string             // USE flag condition
 	OrGroupID int                // OR-group ID (0 = required, >0 = alternative)
 	DepType   DepType            // Dependency type (RDEPEND, BDEPEND, etc.)
+
+	// UseRequire lists USE flags that the provider MUST have enabled.
+	// Populated from atom USE deps: dev-libs/openssl[ssl] -> UseRequire=["ssl"]
+	UseRequire []string
+
+	// UseBlock lists USE flags that the provider MUST NOT have enabled.
+	// Populated from atom USE deps: dev-libs/openssl[-debug] -> UseBlock=["debug"]
+	UseBlock []string
+
+	// UseDefault maps USE flags to their default assumption when the provider
+	// doesn't declare the flag in IUSE. PMS: flag(+) = assume enabled if absent,
+	// flag(-) = assume disabled if absent. If a flag has no default and is absent
+	// from IUSE, the check fails.
+	UseDefault map[string]bool
 }
 
 func (c Constraint) String() string {
@@ -94,6 +108,42 @@ func (c Constraint) String() string {
 		return c.Name
 	}
 	return c.Name + " " + c.Version.String()
+}
+
+// HasUseDeps returns true if this constraint requires or blocks USE flags on the provider.
+func (c Constraint) HasUseDeps() bool {
+	return len(c.UseRequire) > 0 || len(c.UseBlock) > 0
+}
+
+// PackageSatisfiesUseDeps checks whether a package's effective USE flags satisfy
+// the USE dependency requirements on this constraint.
+// Returns true if all required flags are enabled and all blocked flags are disabled.
+// When a flag is absent from useFlags (not in IUSE), UseDefault is consulted:
+// flag(+) → treat as enabled, flag(-) → treat as disabled. Without default → fails.
+func (c Constraint) PackageSatisfiesUseDeps(useFlags map[string]bool) bool {
+	for _, flag := range c.UseRequire {
+		enabled, declared := useFlags[flag]
+		if !declared {
+			if dflt, hasDefault := c.UseDefault[flag]; hasDefault {
+				enabled = dflt
+			}
+		}
+		if !enabled {
+			return false
+		}
+	}
+	for _, flag := range c.UseBlock {
+		enabled, declared := useFlags[flag]
+		if !declared {
+			if dflt, hasDefault := c.UseDefault[flag]; hasDefault {
+				enabled = dflt
+			}
+		}
+		if enabled {
+			return false
+		}
+	}
+	return true
 }
 
 // NewVersionConstraint creates a new immutable version constraint

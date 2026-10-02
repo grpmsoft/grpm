@@ -177,10 +177,15 @@ func (g *GophersatAdapter) AddAtomConstraint(atom *pkg.Atom) error {
 	pkgName := atom.CP()
 	logging.Debug("Processing atom constraint: %s", atom.String())
 
-	// Collect all packages that match this atom
+	// Collect all packages that match this atom (version/slot + USE deps)
 	var satisfiedVars []int
 	for _, p := range g.packages[pkgName] {
 		if atom.Matches(p) {
+			if !atomSatisfiesUseDeps(p, atom) {
+				logging.Debug("Package %s excluded by USE deps for atom %s",
+					p.Name+"@"+p.Version, atom.String())
+				continue
+			}
 			key := p.Name + "@" + p.Version
 			varID := g.getVarID(key)
 			satisfiedVars = append(satisfiedVars, varID)
@@ -203,6 +208,8 @@ func (g *GophersatAdapter) AddAtomConstraint(atom *pkg.Atom) error {
 
 // AddOrGroupConstraint adds an OR-group constraint (at-least-one alternative)
 // For example: || ( mysql postgresql ) means "pick mysql OR postgresql"
+// When an alternative has USE deps (UseRequire/UseBlock), providers are filtered
+// to only those whose effective USE flags satisfy the requirements.
 func (g *GophersatAdapter) AddOrGroupConstraint(alternatives []pkg.Constraint) error {
 	var allSatisfyingVars []int
 
@@ -213,7 +220,7 @@ func (g *GophersatAdapter) AddOrGroupConstraint(alternatives []pkg.Constraint) e
 		// For version constraints
 		if alt.Version != nil {
 			for _, p := range g.packages[alt.Name] {
-				if alt.Version.Satisfies(p.Version) {
+				if alt.Version.Satisfies(p.Version) && alt.PackageSatisfiesUseDeps(p.UseFlags) {
 					key := p.Name + "@" + p.Version
 					varID := g.getVarID(key)
 					altVars = append(altVars, varID)
@@ -222,9 +229,11 @@ func (g *GophersatAdapter) AddOrGroupConstraint(alternatives []pkg.Constraint) e
 		} else {
 			// No version constraint - any version satisfies
 			for _, p := range g.packages[alt.Name] {
-				key := p.Name + "@" + p.Version
-				varID := g.getVarID(key)
-				altVars = append(altVars, varID)
+				if alt.PackageSatisfiesUseDeps(p.UseFlags) {
+					key := p.Name + "@" + p.Version
+					varID := g.getVarID(key)
+					altVars = append(altVars, varID)
+				}
 			}
 		}
 
@@ -251,10 +260,15 @@ func (g *GophersatAdapter) addVersionConstraint(c pkg.Constraint) error {
 		return g.addSimpleConstraint(c.Name)
 	}
 
-	// Collect all packages satisfying the constraint
+	// Collect all packages satisfying the constraint (version + USE deps)
 	var satisfiedVars []int
 	for _, p := range g.packages[c.Name] {
 		if c.Version.Satisfies(p.Version) {
+			if !c.PackageSatisfiesUseDeps(p.UseFlags) {
+				logging.Debug("Package %s excluded by USE deps for %s %s",
+					p.Name+"@"+p.Version, c.Name, c.Version.String())
+				continue
+			}
 			key := p.Name + "@" + p.Version
 			varID := g.getVarID(key)
 			satisfiedVars = append(satisfiedVars, varID)
@@ -488,6 +502,8 @@ func (g *GophersatAdapter) AddImplicationConstraint(dependentVarID int, c pkg.Co
 
 // AddImplicationSlotConstraint adds an implication for a slot constraint.
 // If dependentVarID is selected, at least one package in the given slot must be selected.
+// When the constraint has USE deps (UseRequire/UseBlock), providers are filtered
+// to only those whose effective USE flags satisfy the requirements.
 func (g *GophersatAdapter) AddImplicationSlotConstraint(dependentVarID int, c pkg.Constraint) error {
 	isOperator := c.Slot == "=" || c.Slot == "*"
 	var slotVars []int
@@ -495,6 +511,11 @@ func (g *GophersatAdapter) AddImplicationSlotConstraint(dependentVarID int, c pk
 		slotMatch := isOperator || p.Slot.Name == c.Slot
 		versionMatch := c.Version == nil || c.Version.Satisfies(p.Version)
 		if slotMatch && versionMatch {
+			if !c.PackageSatisfiesUseDeps(p.UseFlags) {
+				logging.Debug("Package %s-%s excluded by USE deps (slot %s)",
+					p.Name, p.Version, c.Slot)
+				continue
+			}
 			key := p.Name + "@" + p.Version
 			varID := g.getVarID(key)
 			slotVars = append(slotVars, varID)
@@ -514,12 +535,14 @@ func (g *GophersatAdapter) AddImplicationSlotConstraint(dependentVarID int, c pk
 
 // AddImplicationOrGroup adds an implication for an OR-group.
 // If dependentVarID is selected, at least one alternative must be selected.
+// When an alternative has USE deps (UseRequire/UseBlock), providers are filtered
+// to only those whose effective USE flags satisfy the requirements.
 func (g *GophersatAdapter) AddImplicationOrGroup(dependentVarID int, alternatives []pkg.Constraint) error {
 	var allSatisfyingVars []int
 	for _, alt := range alternatives {
 		if alt.Version != nil {
 			for _, p := range g.packages[alt.Name] {
-				if alt.Version.Satisfies(p.Version) {
+				if alt.Version.Satisfies(p.Version) && alt.PackageSatisfiesUseDeps(p.UseFlags) {
 					key := p.Name + "@" + p.Version
 					varID := g.getVarID(key)
 					allSatisfyingVars = append(allSatisfyingVars, varID)
@@ -527,9 +550,11 @@ func (g *GophersatAdapter) AddImplicationOrGroup(dependentVarID int, alternative
 			}
 		} else {
 			for _, p := range g.packages[alt.Name] {
-				key := p.Name + "@" + p.Version
-				varID := g.getVarID(key)
-				allSatisfyingVars = append(allSatisfyingVars, varID)
+				if alt.PackageSatisfiesUseDeps(p.UseFlags) {
+					key := p.Name + "@" + p.Version
+					varID := g.getVarID(key)
+					allSatisfyingVars = append(allSatisfyingVars, varID)
+				}
 			}
 		}
 	}
@@ -631,7 +656,9 @@ func (g *GophersatAdapter) IsVarInstalled(varID int) bool {
 }
 
 // findSatisfyingVars returns SAT variable IDs for all registered packages
-// that satisfy the given constraint.
+// that satisfy the given constraint, including USE dependency filtering.
+// When the constraint has UseRequire or UseBlock, only packages whose
+// effective USE flags satisfy those requirements are included.
 func (g *GophersatAdapter) findSatisfyingVars(c pkg.Constraint) []int {
 	var result []int
 
@@ -639,6 +666,11 @@ func (g *GophersatAdapter) findSatisfyingVars(c pkg.Constraint) []int {
 	case pkg.ConstraintTypeVersion:
 		for _, p := range g.packages[c.Name] {
 			if c.Version == nil || c.Version.Satisfies(p.Version) {
+				if !c.PackageSatisfiesUseDeps(p.UseFlags) {
+					logging.Debug("Package %s-%s excluded by USE deps (%v require, %v block)",
+						p.Name, p.Version, c.UseRequire, c.UseBlock)
+					continue
+				}
 				key := p.Name + "@" + p.Version
 				varID := g.getVarID(key)
 				result = append(result, varID)
@@ -650,6 +682,11 @@ func (g *GophersatAdapter) findSatisfyingVars(c pkg.Constraint) []int {
 			slotMatch := isOperator || p.Slot.Name == c.Slot
 			versionMatch := c.Version == nil || c.Version.Satisfies(p.Version)
 			if slotMatch && versionMatch {
+				if !c.PackageSatisfiesUseDeps(p.UseFlags) {
+					logging.Debug("Package %s-%s excluded by USE deps (slot %s)",
+						p.Name, p.Version, c.Slot)
+					continue
+				}
 				key := p.Name + "@" + p.Version
 				varID := g.getVarID(key)
 				result = append(result, varID)
@@ -658,6 +695,50 @@ func (g *GophersatAdapter) findSatisfyingVars(c pkg.Constraint) []int {
 	}
 
 	return result
+}
+
+// atomSatisfiesUseDeps checks whether a package's effective USE flags satisfy
+// the USE dependency requirements specified on an atom.
+// Returns true if all UseRequire flags are enabled and all UseBlock flags are disabled.
+// If the atom has no USE deps, always returns true.
+func atomSatisfiesUseDeps(p *pkg.Package, atom *pkg.Atom) bool {
+	if atom == nil || !atom.HasUseDeps() {
+		return true
+	}
+
+	// Build UseDefault map from atom (entries like "ssl(+)", "debug(-)")
+	useDefault := make(map[string]bool)
+	for _, entry := range atom.UseDefault {
+		if strings.HasSuffix(entry, "(+)") {
+			useDefault[strings.TrimSuffix(entry, "(+)")] = true
+		} else if strings.HasSuffix(entry, "(-)") {
+			useDefault[strings.TrimSuffix(entry, "(-)")] = false
+		}
+	}
+
+	for _, flag := range atom.UseRequire {
+		enabled, declared := p.UseFlags[flag]
+		if !declared {
+			if dflt, hasDefault := useDefault[flag]; hasDefault {
+				enabled = dflt
+			}
+		}
+		if !enabled {
+			return false
+		}
+	}
+	for _, flag := range atom.UseBlock {
+		enabled, declared := p.UseFlags[flag]
+		if !declared {
+			if dflt, hasDefault := useDefault[flag]; hasDefault {
+				enabled = dflt
+			}
+		}
+		if enabled {
+			return false
+		}
+	}
+	return true
 }
 
 // GetVarID returns the SAT variable ID for a package key (name@version).
