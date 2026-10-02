@@ -618,61 +618,9 @@ func (g *GophersatAdapter) AddBlockerConflict(blockerVarID int, blockedAtom *pkg
 	}
 }
 
-// AddWeakBlockerConflict adds a conflict clause for a weak blocker ("!pkg").
-// Unlike strong blockers ("!!pkg") which always emit (-A|-B), weak blockers
-// only conflict when at least one side is an installed package. This matches
-// Portage semantics: weak blockers mean "don't coexist with the INSTALLED version"
-// but installing both fresh is OK (the package manager schedules unmerge after install).
-//
-// If neither the declaring package nor any matching target is installed,
-// no conflict clause is emitted — SAT allows both to coexist.
-func (g *GophersatAdapter) AddWeakBlockerConflict(blockerVarID int, blockedAtom *pkg.Atom) {
-	if blockedAtom == nil || blockerVarID == 0 {
-		return
-	}
-	blockedName := blockedAtom.CP()
-	blockerKey := g.varNames[blockerVarID]
-
-	blockedVersions := g.packages[blockedName]
-	if len(blockedVersions) == 0 {
-		logging.Debug("Weak blocker %s blocks %s but no versions registered — vacuously true",
-			blockerKey, blockedAtom.String())
-		return
-	}
-
-	blockerIsInstalled := g.installed[blockerVarID]
-
-	for _, tv := range blockedVersions {
-		if !blockedAtom.Matches(tv) {
-			continue
-		}
-		targetKey := tv.Name + "@" + tv.Version
-		targetVarID, exists := g.vars[targetKey]
-		if !exists || targetVarID == blockerVarID {
-			continue
-		}
-
-		targetIsInstalled := g.installed[targetVarID]
-
-		// Weak blocker: only emit conflict if at least one side is installed
-		if !blockerIsInstalled && !targetIsInstalled {
-			logging.Debug("Weak blocker %s vs %s — neither installed, skipping conflict",
-				blockerKey, targetKey)
-			continue
-		}
-
-		reason := fmt.Sprintf("weak blocker: %s blocks %s (atom %s, installed side present)",
-			blockerKey, targetKey, blockedAtom.String())
-		g.withMeta(ClauseConflict, reason)
-		g.addClause([]int{-blockerVarID, -targetVarID})
-		logging.Debug("Added weak blocker conflict: %s vs %s", blockerKey, targetKey)
-	}
-}
-
 // MarkInstalled marks a SAT variable as representing an installed package (from VDB).
-// This flag is used by:
-// - AddWeakBlockerConflict: weak blockers only fire when an installed side is present
-// - MAX-SAT (task 014): preference weights for keeping installed versions
+// Used by MAX-SAT (task 014) for preference weights: installed packages get higher
+// weight to prefer keeping them over pulling new versions.
 func (g *GophersatAdapter) MarkInstalled(varID int) {
 	g.installed[varID] = true
 }

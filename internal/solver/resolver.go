@@ -396,13 +396,12 @@ func (r *PortageResolver) addPackageConstraints(adapter *GophersatAdapter, p *pk
 		if blocker.Atom == nil {
 			continue
 		}
-		if blocker.IsStrong {
-			logging.Debug("Adding strong blocker from %s: blocks %s", pkgKey, blocker.Atom.String())
-			adapter.AddBlockerConflict(pkgVarID, blocker.Atom)
-		} else {
-			logging.Debug("Adding weak blocker from %s: blocks %s", pkgKey, blocker.Atom.String())
-			adapter.AddWeakBlockerConflict(pkgVarID, blocker.Atom)
-		}
+		// Both ! and !! emit (-A|-B) in SAT. PMS 8.2.6.6: weak blockers allow
+		// temporary coexistence during merge transaction, but the final state
+		// prohibits both. IsStrong is an annotation for the merge planner, not
+		// the solver. The installed flag is used for MAX-SAT preference weights.
+		logging.Debug("Adding blocker from %s: blocks %s (strong=%v)", pkgKey, blocker.Atom.String(), blocker.IsStrong)
+		adapter.AddBlockerConflict(pkgVarID, blocker.Atom)
 	}
 }
 
