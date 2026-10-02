@@ -1,0 +1,13 @@
+DEFINED_PHASES=compile configure install prepare test
+DEPEND=nls? ( >=virtual/libintl-0-r1 )
+DESCRIPTION=Contains error handling functions used by GnuPG software
+EAPI=8
+HOMEPAGE=https://www.gnupg.org/related_software/libgpg-error/
+IUSE=common-lisp nls static-libs test
+KEYWORDS=amd64 arm arm64 ppc ppc64 x86
+LICENSE=GPL-2 LGPL-2.1
+RDEPEND=nls? ( >=virtual/libintl-0-r1 )
+RESTRICT=!test? ( test )
+SLOT=0/0
+SRC_URI=mirror://gnupg/libgpg-error/libgpg-error-1.51.tar.bz2
+_md5_=fixture-closed-libgpg-error-1.51

@@ -1,0 +1,8 @@
+DEFINED_PHASES=-
+DESCRIPTION=Virtual for the pkg-config implementation
+EAPI=8
+IUSE=+native-symlinks
+KEYWORDS=amd64 arm arm64 ppc ppc64 x86
+RDEPEND=dev-util/pkgconf[native-symlinks(+)=]
+SLOT=0
+_md5_=fixture-closed-virtual-pkgconfig-3

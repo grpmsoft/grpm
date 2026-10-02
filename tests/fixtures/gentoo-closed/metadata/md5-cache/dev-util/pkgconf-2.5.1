@@ -1,0 +1,12 @@
+DEFINED_PHASES=compile configure install prepare test
+DESCRIPTION=pkg-config compatible replacement with no dependencies other than C99
+EAPI=8
+HOMEPAGE=https://github.com/pkgconf/pkgconf
+IUSE=+native-symlinks test
+KEYWORDS=amd64 arm arm64 ppc ppc64 x86
+LICENSE=ISC
+RDEPEND=!dev-util/pkgconfig
+RESTRICT=!test? ( test )
+SLOT=0/7
+SRC_URI=https://distfiles.ariadne.space/pkgconf/pkgconf-2.5.1.tar.xz
+_md5_=fixture-closed-pkgconf-2.5.1
