@@ -2802,3 +2802,105 @@ func TestAction_Remove_BlockerWithoutDep(t *testing.T) {
 		t.Errorf("pbzip2 should be Remove (blocker), got %s", entry.Action)
 	}
 }
+
+// TestBDEPEND_SkipForInstalledKeep verifies that BDEPEND implications are
+// skipped for installed (Keep) candidates. Without this, libgpg-error closure
+// expands to 394 names through perl-world via BDEPEND on elt-patches.
+func TestBDEPEND_SkipForInstalledKeep(t *testing.T) {
+	r := newMultiVersionRepo()
+
+	// elt-patches is a BDEPEND-only package with its own deep chain
+	heavyBdep := pkg.NewPackage("app-portage/elt-patches", "20250306", "0")
+	heavyBdep.Deps = []pkg.Constraint{
+		{Name: "dev-lang/perl", Type: pkg.ConstraintTypeVersion, DepType: pkg.DepTypeBuildHost},
+	}
+	r.addVersion(heavyBdep)
+
+	perl := pkg.NewPackage("dev-lang/perl", "5.40.0", "0")
+	r.addVersion(perl)
+
+	// lib has BDEPEND on elt-patches
+	lib := pkg.NewPackage("dev-libs/lib", "1.0", "0")
+	lib.Deps = []pkg.Constraint{
+		{Name: "app-portage/elt-patches", Type: pkg.ConstraintTypeVersion, DepType: pkg.DepTypeBuildHost},
+	}
+	r.addVersion(lib)
+
+	// lib is INSTALLED — BDEPEND not needed (already built)
+	installed := &state.InstalledPackage{
+		Package: pkg.NewPackage("dev-libs/lib", "1.0", "0"),
+	}
+	db := state.NewPackageDatabase("/var/db/pkg")
+	if err := db.Add(installed); err != nil {
+		t.Fatalf("failed to add installed: %v", err)
+	}
+
+	resolver := NewResolver(r)
+	resolver.SetInstalledDB(db)
+	result := resolveClean(t, resolver, []string{"dev-libs/lib"})
+
+	// lib should be Keep (installed same version)
+	libKey := pkg.SlotKey{Name: "dev-libs/lib", Slot: "0"}
+	entry := result[libKey]
+	if entry == nil || entry.Action != ActionKeep {
+		t.Fatalf("lib should be Keep, got %v", entry)
+	}
+
+	// elt-patches and perl should NOT be in result — BDEPEND of Keep package
+	eltKey := pkg.SlotKey{Name: "app-portage/elt-patches", Slot: "0"}
+	if _, ok := result[eltKey]; ok {
+		t.Error("elt-patches should NOT be in result — BDEPEND of installed/Keep package")
+	}
+
+	perlKey := pkg.SlotKey{Name: "dev-lang/perl", Slot: "0"}
+	if _, ok := result[perlKey]; ok {
+		t.Error("perl should NOT be in result — transitive BDEPEND of installed/Keep package")
+	}
+
+	// Closure should be small (just lib)
+	if len(result) > 2 {
+		t.Errorf("expected ≤2 packages (lib + maybe virtual), got %d", len(result))
+		for k, e := range result {
+			t.Logf("  %s: %s %s", k, e.Package.Version, e.Action)
+		}
+	}
+}
+
+// TestBDEPEND_NotSkippedWithNewUse verifies that --newuse forces BDEPEND
+// evaluation even for installed packages (they will be rebuilt).
+func TestBDEPEND_NotSkippedWithNewUse(t *testing.T) {
+	r := newMultiVersionRepo()
+
+	// lib has BDEPEND on missingtool (not in repo)
+	lib := pkg.NewPackage("dev-libs/lib", "1.0", "0")
+	lib.Deps = []pkg.Constraint{
+		{Name: "dev-build/missingtool", Type: pkg.ConstraintTypeVersion, DepType: pkg.DepTypeBuildHost},
+	}
+	r.addVersion(lib)
+
+	installed := &state.InstalledPackage{
+		Package: pkg.NewPackage("dev-libs/lib", "1.0", "0"),
+	}
+	db := state.NewPackageDatabase("/var/db/pkg")
+	if err := db.Add(installed); err != nil {
+		t.Fatalf("failed to add installed: %v", err)
+	}
+
+	// Without --newuse: lib=Keep, BDEPEND skipped, SAT OK
+	resolver := NewResolver(r)
+	resolver.SetInstalledDB(db)
+	result := resolveClean(t, resolver, []string{"dev-libs/lib"})
+	libKey := pkg.SlotKey{Name: "dev-libs/lib", Slot: "0"}
+	if entry := result[libKey]; entry == nil || entry.Action != ActionKeep {
+		t.Errorf("without --newuse: expected Keep, got %v", entry)
+	}
+
+	// With --newuse: lib rebuilds, BDEPEND required, missingtool → UNSAT
+	resolver2 := NewResolver(r)
+	resolver2.SetInstalledDB(db)
+	resolver2.SetOptions(ResolveOptions{NewUse: true})
+	_, err := resolver2.Resolve([]string{"dev-libs/lib"})
+	if err == nil {
+		t.Error("with --newuse: expected UNSAT — BDEPEND missingtool not in repo")
+	}
+}

@@ -213,6 +213,11 @@ func (r *PortageResolver) sortAlternativesByInstalled(alternatives []pkg.Constra
 
 // groupDependenciesByOrGroupID groups dependencies by their OrGroupID
 // Returns required dependencies (OrGroupID=0) and OR-groups (OrGroupID>0)
+// isBuildTimeDep returns true for DEPEND and BDEPEND.
+func isBuildTimeDep(depType pkg.DepType) bool {
+	return depType == pkg.DepTypeBuild || depType == pkg.DepTypeBuildHost
+}
+
 func groupDependenciesByOrGroupID(deps []pkg.Constraint) (requiredDeps []pkg.Constraint, orGroups map[int][]pkg.Constraint) {
 	orGroups = make(map[int][]pkg.Constraint)
 	for _, dep := range deps {
@@ -439,8 +444,17 @@ func (r *PortageResolver) addPackageConstraints(adapter *GophersatAdapter, p *pk
 	// Group dependencies by OrGroupID
 	requiredDeps, orGroups := groupDependenciesByOrGroupID(p.Deps)
 
+	// Skip BDEPEND implications for installed (Keep) candidates.
+	// Installed packages are already built — they don't need build deps.
+	// Tree candidates still need BDEPEND (they will be built).
+	// Skip BDEPEND only if installed AND not rebuilding (--newuse forces rebuild)
+	skipBDEPEND := adapter.IsVarInstalled(pkgVarID) && !r.options.NewUse
+
 	// Add REQUIRED dependencies as implications: (-P@V | B1 | B2 | ...)
 	for _, dep := range requiredDeps {
+		if skipBDEPEND && isBuildTimeDep(dep.DepType) {
+			continue
+		}
 		versionStr := "any"
 		if dep.Version != nil {
 			versionStr = dep.Version.String()
@@ -461,6 +475,10 @@ func (r *PortageResolver) addPackageConstraints(adapter *GophersatAdapter, p *pk
 
 	// Add OR-group constraints as implications.
 	for groupID, alternatives := range orGroups {
+		// Skip BDEPEND OR-groups for installed candidates
+		if skipBDEPEND && len(alternatives) > 0 && isBuildTimeDep(alternatives[0].DepType) {
+			continue
+		}
 		logging.Debug("Adding OR-group %d implication from %s with %d alternatives",
 			groupID, pkgKey, len(alternatives))
 		sorted := r.sortAlternativesByInstalled(alternatives)
@@ -535,6 +553,9 @@ func (r *PortageResolver) determineAction(p *pkg.Package) PackageAction {
 		return ActionInstall // new slot, nothing installed there
 	}
 	if installed.Version == p.Version {
+		if r.options.NewUse {
+			return ActionUpgrade // same version, rebuild for USE changes
+		}
 		return ActionKeep
 	}
 	cmp := pkg.CompareVersions(p.Version, installed.Version)
@@ -873,47 +894,8 @@ func (r *PortageResolver) postSATSafetyNet(result ResolveResult, adapter *Gopher
 		for _, ent := range result {
 			currentEntries = append(currentEntries, ent)
 		}
-
 		for _, ent := range currentEntries {
-			p := ent.Package
-			requiredDeps, orGroups := groupDependenciesByOrGroupID(p.Deps)
-			for _, dep := range requiredDeps {
-				depPkg, err := r.loadUnmaskedPackage(dep.Name)
-				if err != nil {
-					continue
-				}
-				depKey := pkg.SlotKeyOf(depPkg)
-				if _, inResult := result[depKey]; inResult {
-					continue
-				}
-				result[depKey] = &ResolveEntry{Package: depPkg, Action: r.determineAction(depPkg)}
-				added++
-			}
-			for _, alternatives := range orGroups {
-				satisfied := false
-				for _, alt := range alternatives {
-					altPkg, altErr := r.loadUnmaskedPackage(alt.Name)
-					if altErr != nil {
-						continue
-					}
-					if _, inResult := result[pkg.SlotKeyOf(altPkg)]; inResult {
-						satisfied = true
-						break
-					}
-				}
-				if satisfied {
-					continue
-				}
-				for _, alt := range alternatives {
-					altPkg, err := r.loadUnmaskedPackage(alt.Name)
-					if err != nil {
-						continue
-					}
-					result[pkg.SlotKeyOf(altPkg)] = &ResolveEntry{Package: altPkg, Action: r.determineAction(altPkg)}
-					added++
-					break
-				}
-			}
+			added += r.fillMissingDeps(ent, result)
 		}
 		r.PostPassAdded += added
 		if added > 0 {
@@ -924,20 +906,70 @@ func (r *PortageResolver) postSATSafetyNet(result ResolveResult, adapter *Gopher
 		}
 	}
 
-	// Add ActionRemove entries for installed packages whose slot has no selected
-	// version in the result. This handles blocker-deselected packages: SAT may
-	// set ¬B_installed = false, removing the installed package from the solution.
-	// Without an explicit Remove entry, the CLI won't unmerge it, violating the
-	// blocker constraint on disk.
 	r.addRemovedPackages(result, adapter)
 
 	logging.Info("Resolved packages:")
-	for key, ent := range result {
-		p := ent.Package
-		logging.Debug("- %s-%s [slot:%s key:%s:%s action:%s]", p.Name, p.Version, p.Slot.Name, key.Name, key.Slot, ent.Action)
+	for key, entry := range result {
+		logging.Debug("- %s-%s [slot:%s action:%s]", entry.Package.Name, entry.Package.Version, key.Slot, entry.Action)
 	}
 
 	return result, nil
+}
+
+// fillMissingDeps adds missing deps for one result entry. Returns count added.
+// Skips BDEPEND for Keep (installed) packages — they're already built.
+func (r *PortageResolver) fillMissingDeps(ent *ResolveEntry, result ResolveResult) int {
+	added := 0
+	p := ent.Package
+	isKeep := ent.Action == ActionKeep
+	requiredDeps, orGroups := groupDependenciesByOrGroupID(p.Deps)
+
+	for _, dep := range requiredDeps {
+		if isKeep && isBuildTimeDep(dep.DepType) {
+			continue
+		}
+		depPkg, err := r.loadUnmaskedPackage(dep.Name)
+		if err != nil {
+			continue
+		}
+		depKey := pkg.SlotKeyOf(depPkg)
+		if _, inResult := result[depKey]; inResult {
+			continue
+		}
+		result[depKey] = &ResolveEntry{Package: depPkg, Action: r.determineAction(depPkg)}
+		added++
+	}
+
+	for _, alternatives := range orGroups {
+		if isKeep && len(alternatives) > 0 && isBuildTimeDep(alternatives[0].DepType) {
+			continue
+		}
+		satisfied := false
+		for _, alt := range alternatives {
+			altPkg, altErr := r.loadUnmaskedPackage(alt.Name)
+			if altErr != nil {
+				continue
+			}
+			if _, inResult := result[pkg.SlotKeyOf(altPkg)]; inResult {
+				satisfied = true
+				break
+			}
+		}
+		if satisfied {
+			continue
+		}
+		for _, alt := range alternatives {
+			altPkg, err := r.loadUnmaskedPackage(alt.Name)
+			if err != nil {
+				continue
+			}
+			result[pkg.SlotKeyOf(altPkg)] = &ResolveEntry{Package: altPkg, Action: r.determineAction(altPkg)}
+			added++
+			break
+		}
+	}
+
+	return added
 }
 
 // addRemovedPackages marks installed packages for removal ONLY when they are
