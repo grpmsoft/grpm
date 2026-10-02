@@ -6,6 +6,11 @@ Real package metadata from Gentoo WSL2 tree.
 **Extracted:** 2026-10-02
 **Packages:** 138 entries across 8 packages
 
+**This fixture is a subset, NOT transitively closed.** Most packages resolve
+to UNSAT because their transitive deps are not in the fixture. UNSAT times
+are not representative of real resolve performance — they measure time to
+trivial prohibit, not cost of full dependency closure.
+
 ## Packages
 
 | Package | Versions | Purpose |
@@ -19,25 +24,27 @@ Real package metadata from Gentoo WSL2 tree.
 | app-misc/hello | 2 | Minimal test |
 | virtual/pkgconfig | 1 | Virtual package |
 
-## Performance Baseline (2026-10-02, after PR #78 + slot/glob fixes)
+## Verified on Full Tree (2026-10-02, independent review)
 
-### md5-cache (fixture repo, Go test, Windows)
+Tested on full `gentoo/gentoo` tree with md5-cache and profile:
 
-| Package | Versions | Time | Status |
-|---------|----------|------|--------|
-| app-misc/hello | 2 | 2ms | OK |
-| sys-libs/zlib | 4 | 1ms | OK |
-| dev-libs/openssl | 16 | 9ms | UNSAT (fixture subset) |
-| sys-devel/gcc | 46 | 41ms | UNSAT (fixture subset) |
-| dev-lang/python | 49 | 83ms | UNSAT (fixture subset) |
+| Package | Status | Packages | Notes |
+|---------|--------|----------|-------|
+| dev-libs/libassuan | OK | 2 | libassuan + libgpg-error |
+| app-crypt/gpgme | OK | 4 | gpgme + libassuan + libgpg-error + gpg |
+| dev-db/sqlite | OK | 7 | sqlite + readline + ncurses + zlib + ... |
+| dev-libs/libxml2 | OK | 7 | libxml2 + zlib + libiconv + ... |
+| dev-libs/libgpg-error | OK | 5 | WSL2 verified |
+| dev-libs/libassuan | OK | 6 | WSL2 verified |
 
-### WSL2 full tree (CLI, ebuild parsing path)
+`postPass=0` on all resolved packages.
 
-| Package | Time | Status |
-|---------|------|--------|
-| app-misc/hello | 84ms | OK (1 pkg) |
-| dev-libs/libgpg-error | 5s | OK (5 pkgs) |
-| dev-libs/libassuan | 2.5s | OK (6 pkgs) |
+Full-tree resolve with md5-cache not yet measured on this fixture (fixture is
+not transitively closed). Perf numbers require either a closed fixture subset
+or a CI harness with shallow clone of `gentoo/gentoo`.
 
-WSL times include ebuild interpreter overhead (~90ms/ebuild). md5-cache 30-100x faster.
-Stub ebuilds are empty — PortageRepository reads from md5-cache when available.
+## Stub Ebuilds
+
+Ebuild files are empty (0 bytes). PortageRepository requires them for directory
+scanning (`ReadDir`) but reads actual metadata from `metadata/md5-cache/`.
+This is by design — md5-cache is Portage's canonical metadata source.
