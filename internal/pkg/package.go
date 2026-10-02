@@ -88,6 +88,14 @@ func SlotKeyOf(p *Package) SlotKey {
 	return SlotKey{Name: p.Name, Slot: p.Slot.Name}
 }
 
+// BlockerEntry represents a package blocker dependency.
+// Blockers declare that a package CANNOT coexist with another.
+// PMS Section 8.2: "!" = weak blocker, "!!" = strong blocker.
+type BlockerEntry struct {
+	Atom     *Atom // The blocked package atom (with version/slot constraints)
+	IsStrong bool  // true for "!!" (hard block), false for "!" (weak block)
+}
+
 // Package represents a Gentoo package with its metadata and dependencies
 // It is an Aggregate Root in DDD terms, controlling access to its dependencies
 type Package struct {
@@ -97,7 +105,8 @@ type Package struct {
 	UseFlags map[string]bool
 	Keywords []string // KEYWORDS from ebuild (e.g., ["amd64", "~x86", "-arm"])
 	Deps     []Constraint
-	Provides []Constraint // Virtual packages provided by this package
+	Provides []Constraint   // Virtual packages provided by this package
+	Blockers []BlockerEntry // Packages that conflict with this one (! and !! blockers)
 }
 
 // NewPackage creates a new package instance with validation
@@ -202,6 +211,15 @@ func (p *Package) FullName() string {
 // AddDependency adds a dependency constraint to this package
 func (p *Package) AddDependency(constraint Constraint) {
 	p.Deps = append(p.Deps, constraint)
+}
+
+// AddBlocker adds a blocker entry to this package.
+// The blocker declares that the given atom CANNOT be installed alongside this package.
+func (p *Package) AddBlocker(atom *Atom, isStrong bool) {
+	p.Blockers = append(p.Blockers, BlockerEntry{
+		Atom:     atom,
+		IsStrong: isStrong,
+	})
 }
 
 // ConflictsWith checks if this package conflicts with another due to slot incompatibility

@@ -1441,3 +1441,263 @@ func TestExplainUNSATGeneric_AtMostOneConflict(t *testing.T) {
 		t.Errorf("should have generic header, got:\n%s", joined)
 	}
 }
+
+// --- Tests for v0.10.0-012: Blocker conflict clauses ---
+
+// TestBlocker_MutualExclusion verifies that a blocker prevents two packages
+// from coexisting in the solution. Package A blocks package B -- both cannot
+// be in the result simultaneously.
+func TestBlocker_MutualExclusion(t *testing.T) {
+	r := newMultiVersionRepo()
+
+	// Package B: the blocked package
+	pkgB := pkg.NewPackage("app-arch/pbzip2", "1.1.13", "0")
+	r.addVersion(pkgB)
+
+	// Package A: blocks B
+	blockedAtom, err := pkg.ParseAtom("!app-arch/pbzip2")
+	if err != nil {
+		t.Fatalf("failed to parse blocker atom: %v", err)
+	}
+
+	pkgA := pkg.NewPackage("app-alternatives/bzip2", "0.3", "0")
+	pkgA.AddBlocker(blockedAtom, false) // weak blocker
+	r.addVersion(pkgA)
+
+	// Resolving A alone should work (B is not requested)
+	resolver := NewResolver(r)
+	result := resolveClean(t, resolver, []string{"app-alternatives/bzip2"})
+
+	aKey := pkg.SlotKey{Name: "app-alternatives/bzip2", Slot: "0"}
+	if _, ok := result[aKey]; !ok {
+		t.Error("expected app-alternatives/bzip2 in result")
+	}
+
+	// B should NOT be pulled in since it's not a dependency
+	bKey := pkg.SlotKey{Name: "app-arch/pbzip2", Slot: "0"}
+	if _, ok := result[bKey]; ok {
+		t.Error("pbzip2 should NOT be in result -- it's not a dependency, just blocked")
+	}
+}
+
+// TestBlocker_BlockedPackageAsDepCausesUNSAT verifies that when package A
+// blocks package B, and A also depends on B, the result is UNSAT because
+// the blocker conflict clause (-A | -B) combined with the implication clause
+// (-A | B) means A cannot be selected.
+func TestBlocker_BlockedPackageAsDepCausesUNSAT(t *testing.T) {
+	r := newMultiVersionRepo()
+
+	pkgB := pkg.NewPackage("dev-libs/conflict", "1.0", "0")
+	r.addVersion(pkgB)
+
+	// A depends on B AND blocks B -- contradictory
+	blockedAtom, err := pkg.ParseAtom("!dev-libs/conflict")
+	if err != nil {
+		t.Fatalf("failed to parse blocker atom: %v", err)
+	}
+
+	pkgA := pkg.NewPackage("app-misc/contradictory", "1.0", "0")
+	pkgA.Deps = []pkg.Constraint{
+		{Name: "dev-libs/conflict", Type: pkg.ConstraintTypeVersion},
+	}
+	pkgA.AddBlocker(blockedAtom, false)
+	r.addVersion(pkgA)
+
+	resolver := NewResolver(r)
+	_, err = resolver.Resolve([]string{"app-misc/contradictory"})
+	if err == nil {
+		t.Error("expected UNSAT when package both depends on and blocks the same target")
+	}
+}
+
+// TestBlocker_ConflictPreventsCoexistence verifies that when two root packages
+// are requested but one blocks the other, SAT returns UNSAT.
+func TestBlocker_ConflictPreventsCoexistence(t *testing.T) {
+	r := newMultiVersionRepo()
+
+	pkgB := pkg.NewPackage("app-arch/lbzip2", "2.5", "0")
+	r.addVersion(pkgB)
+
+	blockedAtom, err := pkg.ParseAtom("!app-arch/lbzip2")
+	if err != nil {
+		t.Fatalf("failed to parse blocker atom: %v", err)
+	}
+
+	pkgA := pkg.NewPackage("app-alternatives/bzip2", "0.3", "0")
+	pkgA.AddBlocker(blockedAtom, false)
+	r.addVersion(pkgA)
+
+	// Request both -- should fail because A blocks B
+	resolver := NewResolver(r)
+	_, err = resolver.Resolve([]string{"app-alternatives/bzip2", "app-arch/lbzip2"})
+	if err == nil {
+		t.Error("expected UNSAT when requesting two mutually blocked packages")
+	}
+}
+
+// TestBlocker_VersionedBlockerMatchesCorrectly verifies that a version-constrained
+// blocker only blocks matching versions. E.g., "!>=dev-libs/foo-2.0" should
+// block foo-2.0+ but not foo-1.0.
+func TestBlocker_VersionedBlockerMatchesCorrectly(t *testing.T) {
+	r := newMultiVersionRepo()
+
+	// Two versions of foo
+	r.addVersion(pkg.NewPackage("dev-libs/foo", "1.0", "0"))
+	r.addVersion(pkg.NewPackage("dev-libs/foo", "2.0", "0"))
+	r.addVersion(pkg.NewPackage("dev-libs/foo", "3.0", "0"))
+
+	// bar blocks >=foo-2.0
+	blockedAtom, err := pkg.ParseAtom("!>=dev-libs/foo-2.0")
+	if err != nil {
+		t.Fatalf("failed to parse blocker atom: %v", err)
+	}
+
+	bar := pkg.NewPackage("app-misc/bar", "1.0", "0")
+	bar.Deps = []pkg.Constraint{
+		{Name: "dev-libs/foo", Type: pkg.ConstraintTypeVersion},
+	}
+	bar.AddBlocker(blockedAtom, false)
+	r.addVersion(bar)
+
+	resolver := NewResolver(r)
+	result := resolveClean(t, resolver, []string{"app-misc/bar"})
+
+	// bar should be in result
+	barKey := pkg.SlotKey{Name: "app-misc/bar", Slot: "0"}
+	if _, ok := result[barKey]; !ok {
+		t.Fatal("expected bar in result")
+	}
+
+	// foo must be in result (it's a dependency), but ONLY version 1.0
+	// because >=2.0 are blocked
+	fooKey := pkg.SlotKey{Name: "dev-libs/foo", Slot: "0"}
+	p, ok := result[fooKey]
+	if !ok {
+		t.Fatal("expected foo in result (it's a dep of bar)")
+	}
+	if p.Version != "1.0" {
+		t.Errorf("expected foo 1.0 (>=2.0 blocked), got %s", p.Version)
+	}
+}
+
+// TestBlocker_StrongBlockerSameAsWeak verifies that both ! and !! blockers
+// produce the same hard conflict clause. (Future task 017 may differentiate
+// weak blockers with unmerge scheduling, but for now both are hard conflicts.)
+func TestBlocker_StrongBlockerSameAsWeak(t *testing.T) {
+	// Strong blocker
+	adapter1 := NewGophersatAdapter()
+	a1 := pkg.NewPackage("app/a", "1.0", "0")
+	b1 := pkg.NewPackage("app/b", "1.0", "0")
+	adapter1.AddPackage(a1)
+	adapter1.AddPackage(b1)
+
+	strongAtom, _ := pkg.ParseAtom("!!app/b")
+	adapter1.AddBlockerConflict("app/a", strongAtom)
+
+	// Weak blocker
+	adapter2 := NewGophersatAdapter()
+	a2 := pkg.NewPackage("app/a", "1.0", "0")
+	b2 := pkg.NewPackage("app/b", "1.0", "0")
+	adapter2.AddPackage(a2)
+	adapter2.AddPackage(b2)
+
+	weakAtom, _ := pkg.ParseAtom("!app/b")
+	adapter2.AddBlockerConflict("app/a", weakAtom)
+
+	// Both should produce the same clause count and same clause structure
+	if len(adapter1.clauses) != len(adapter2.clauses) {
+		t.Errorf("strong and weak blocker should produce same clause count, got %d vs %d",
+			len(adapter1.clauses), len(adapter2.clauses))
+	}
+	if len(adapter1.clauses) != 1 {
+		t.Errorf("expected exactly 1 conflict clause, got %d", len(adapter1.clauses))
+	}
+}
+
+// TestBlocker_VacuouslyTrueWhenBlockedNotPresent verifies that a blocker
+// for a package not in the SAT problem is harmless (vacuously true).
+func TestBlocker_VacuouslyTrueWhenBlockedNotPresent(t *testing.T) {
+	r := newMultiVersionRepo()
+
+	// A blocks "nonexistent" -- package not in repo
+	blockedAtom, err := pkg.ParseAtom("!app-arch/nonexistent")
+	if err != nil {
+		t.Fatalf("failed to parse blocker atom: %v", err)
+	}
+
+	pkgA := pkg.NewPackage("app-misc/safe", "1.0", "0")
+	pkgA.AddBlocker(blockedAtom, false)
+	r.addVersion(pkgA)
+
+	resolver := NewResolver(r)
+	result := resolveClean(t, resolver, []string{"app-misc/safe"})
+
+	aKey := pkg.SlotKey{Name: "app-misc/safe", Slot: "0"}
+	if _, ok := result[aKey]; !ok {
+		t.Error("expected safe in result -- blocker is vacuously true")
+	}
+}
+
+// TestBlocker_ClauseConflictSourceInMeta verifies that blocker clauses
+// are tagged with ClauseConflict source for the UNSAT explainer.
+func TestBlocker_ClauseConflictSourceInMeta(t *testing.T) {
+	adapter := NewGophersatAdapter()
+
+	a := pkg.NewPackage("app/a", "1.0", "0")
+	b := pkg.NewPackage("app/b", "1.0", "0")
+	adapter.AddPackage(a)
+	adapter.AddPackage(b)
+
+	blockedAtom, _ := pkg.ParseAtom("!app/b")
+	adapter.AddBlockerConflict("app/a", blockedAtom)
+
+	if len(adapter.clauses) != 1 {
+		t.Fatalf("expected 1 clause, got %d", len(adapter.clauses))
+	}
+
+	meta := adapter.clausesMeta[0]
+	if meta.Source != ClauseConflict {
+		t.Errorf("expected ClauseConflict source, got %s", meta.Source)
+	}
+	if !strings.Contains(meta.Reason, "blocker") {
+		t.Errorf("reason should mention 'blocker', got: %s", meta.Reason)
+	}
+}
+
+// TestBlocker_UNSATExplainerShowsBlocker verifies that when a blocker causes
+// UNSAT, the conflict clause appears in the UNSAT explanation.
+func TestBlocker_UNSATExplainerShowsBlocker(t *testing.T) {
+	adapter := NewGophersatAdapter()
+
+	a := pkg.NewPackage("app/a", "1.0", "0")
+	b := pkg.NewPackage("app/b", "1.0", "0")
+	adapter.AddPackage(a)
+	adapter.AddPackage(b)
+
+	aID := adapter.GetVarID("app/a@1.0")
+	bID := adapter.GetVarID("app/b@1.0")
+
+	// Both are roots
+	adapter.withMeta(ClauseRoot, "root: app/a")
+	adapter.addClause([]int{aID})
+	adapter.addRootVars([]int{aID})
+	adapter.withMeta(ClauseRoot, "root: app/b")
+	adapter.addClause([]int{bID})
+	adapter.addRootVars([]int{bID})
+
+	// A blocks B
+	blockedAtom, _ := pkg.ParseAtom("!app/b")
+	adapter.AddBlockerConflict("app/a", blockedAtom)
+
+	status, _, _ := adapter.Solve()
+	if status != pkg.StatusUnsat {
+		t.Fatal("expected UNSAT when both roots required but one blocks the other")
+	}
+
+	// Generic explainer should pick up the conflict clause
+	lines := adapter.ExplainUNSATGeneric()
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "conflict") {
+		t.Errorf("UNSAT explanation should mention conflict source, got:\n%s", joined)
+	}
+}

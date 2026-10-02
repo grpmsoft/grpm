@@ -15,10 +15,11 @@ import (
 type ClauseSource int
 
 const (
-	ClauseRoot       ClauseSource = iota // root at-least-one
+	ClauseRoot        ClauseSource = iota // root at-least-one
 	ClauseImplication                     // if A then B1|B2|...
 	ClauseAtMostOne                       // pairwise exclusion (-vi|-vj)
 	ClauseProhibit                        // single negative literal: candidate impossible
+	ClauseConflict                        // blocker: two packages cannot coexist (-A|-B)
 )
 
 func (s ClauseSource) String() string {
@@ -31,6 +32,8 @@ func (s ClauseSource) String() string {
 		return "at-most-one"
 	case ClauseProhibit:
 		return "prohibit"
+	case ClauseConflict:
+		return "conflict"
 	default:
 		return "unknown"
 	}
@@ -574,6 +577,61 @@ func (g *GophersatAdapter) AddAtMostOnePerSlot() {
 	}
 }
 
+// AddBlockerConflict adds conflict clauses for a blocker dependency.
+// For each version of the blocking package crossed with each matching version
+// of the blocked package, emits clause (-A | -B): A and B cannot coexist.
+// Both weak (!) and strong (!!) blockers are treated as hard conflicts.
+func (g *GophersatAdapter) AddBlockerConflict(blockerPkgName string, blockedAtom *pkg.Atom) {
+	if blockedAtom == nil {
+		return
+	}
+	blockedName := blockedAtom.CP()
+
+	// Collect all registered versions of the blocking package
+	blockerVersions := g.packages[blockerPkgName]
+	if len(blockerVersions) == 0 {
+		return
+	}
+
+	// Collect all registered versions of the blocked package that match the atom
+	blockedVersions := g.packages[blockedName]
+	if len(blockedVersions) == 0 {
+		logging.Debug("Blocker %s blocks %s but no versions of %s registered — vacuously true",
+			blockerPkgName, blockedAtom.String(), blockedName)
+		return
+	}
+
+	// For each blocker version x each matching blocked version, emit (-A | -B)
+	for _, bv := range blockerVersions {
+		blockerKey := bv.Name + "@" + bv.Version
+		blockerVarID, exists := g.vars[blockerKey]
+		if !exists {
+			continue
+		}
+
+		for _, tv := range blockedVersions {
+			if !blockedAtom.Matches(tv) {
+				continue
+			}
+			targetKey := tv.Name + "@" + tv.Version
+			targetVarID, exists := g.vars[targetKey]
+			if !exists {
+				continue
+			}
+
+			// Skip self-conflict (same package, same version — would be redundant with at-most-one)
+			if blockerVarID == targetVarID {
+				continue
+			}
+
+			reason := fmt.Sprintf("blocker: %s blocks %s (atom %s)", blockerKey, targetKey, blockedAtom.String())
+			g.withMeta(ClauseConflict, reason)
+			g.addClause([]int{-blockerVarID, -targetVarID})
+			logging.Debug("Added blocker conflict: %s vs %s", blockerKey, targetKey)
+		}
+	}
+}
+
 // findSatisfyingVars returns SAT variable IDs for all registered packages
 // that satisfy the given constraint.
 func (g *GophersatAdapter) findSatisfyingVars(c pkg.Constraint) []int {
@@ -676,11 +734,11 @@ type edgeRef struct {
 // then formats the justification chain top-down.
 type unsatTracer struct {
 	adapter       *GophersatAdapter
-	dead          map[int]bool            // varID → is dead
+	dead          map[int]bool             // varID → is dead
 	justification map[int]*implicationEdge // varID → edge that proved it dead (nil = prohibit)
-	reason        map[int]string          // varID → one-line summary
-	printed       map[int]bool            // dedup for formatting
-	chain         []string                // output lines
+	reason        map[int]string           // varID → one-line summary
+	printed       map[int]bool             // dedup for formatting
+	chain         []string                 // output lines
 }
 
 // propagate marks nodes dead bottom-up: prohibits first, then dependents
