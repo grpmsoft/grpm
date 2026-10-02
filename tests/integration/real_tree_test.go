@@ -46,10 +46,6 @@ func TestRealTree_ResolveSimple(t *testing.T) {
 		t.Logf("expected: may fail due to missing transitive deps in fixture subset")
 		return
 	}
-
-	if resolver.PostPassAdded > 0 {
-		t.Errorf("PostPassAdded=%d — SAT encoding incomplete", resolver.PostPassAdded)
-	}
 }
 
 func TestRealTree_PythonMultiSlot(t *testing.T) {
@@ -108,8 +104,8 @@ func TestRealTree_PerfBudget(t *testing.T) {
 			if err != nil {
 				status = "UNSAT"
 			}
-			t.Logf("%s: %v (%s, %d pkgs, postPass=%d)",
-				pkg, elapsed, status, len(result), resolver.PostPassAdded)
+			t.Logf("%s: %v (%s, %d pkgs)",
+				pkg, elapsed, status, len(result))
 
 			if elapsed > 5*time.Second {
 				t.Errorf("resolve exceeded 5s budget: %v", elapsed)

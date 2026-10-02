@@ -471,8 +471,23 @@ type versionRank struct {
 
 // buildVersionPreferences assigns preference ranks to each version of each package.
 // rank 0 = most preferred (newest in update mode, installed in keep mode).
-func (g *GophersatAdapter) buildVersionPreferences(updateMode bool) []versionRank {
+//
+// Root packages (explicitly requested atoms) always prefer the newest version,
+// matching Portage semantics: `emerge foo` always merges the best available
+// version, even without --update. Only dependencies keep installed versions.
+func (g *GophersatAdapter) buildVersionPreferences(updateMode bool, deepMode bool) []versionRank {
 	var preferences []versionRank
+
+	// Build set of root package names from rootVars
+	rootNames := make(map[string]bool)
+	for _, varID := range g.rootVars {
+		if name, ok := g.varNames[varID]; ok {
+			// varNames stores "name@version" — extract package name
+			if idx := strings.LastIndex(name, "@"); idx > 0 {
+				rootNames[name[:idx]] = true
+			}
+		}
+	}
 
 	for pkgName, versions := range g.packages {
 		if len(versions) <= 1 {
@@ -485,24 +500,54 @@ func (g *GophersatAdapter) buildVersionPreferences(updateMode bool) []versionRan
 			return pkg.CompareVersions(sorted[i].Version, sorted[j].Version) > 0
 		})
 
-		// Check if any version is installed (for keep-mode preference)
-		installedRankAssigned := false
-		for rank, p := range sorted {
-			key := pkgName + "@" + p.Version
-			varID, exists := g.vars[key]
-			if !exists {
-				continue
+		// Root packages always prefer newest (like update mode).
+		// Dependencies prefer installed version when not in update mode.
+		isRoot := rootNames[pkgName]
+		useNewest := isRoot || (updateMode && deepMode)
+
+		if useNewest {
+			// Newest-first: rank 0 = newest (already sorted descending)
+			for rank, p := range sorted {
+				key := pkgName + "@" + p.Version
+				varID, exists := g.vars[key]
+				if !exists {
+					continue
+				}
+				preferences = append(preferences, versionRank{varID: varID, rank: rank})
+			}
+		} else {
+			// Keep mode: installed version gets rank 0, all others shifted.
+			// Find installed version first.
+			installedIdx := -1
+			for i, p := range sorted {
+				key := pkgName + "@" + p.Version
+				varID, exists := g.vars[key]
+				if !exists {
+					continue
+				}
+				if g.installed[varID] {
+					installedIdx = i
+					break
+				}
 			}
 
-			actualRank := rank
-			if !updateMode && g.installed[varID] && !installedRankAssigned {
-				actualRank = 0
-				installedRankAssigned = true
-			} else if !updateMode && installedRankAssigned {
-				actualRank = rank + 1
+			nextRank := 0
+			if installedIdx >= 0 {
+				nextRank = 1 // reserve rank 0 for installed
 			}
-
-			preferences = append(preferences, versionRank{varID: varID, rank: actualRank})
+			for i, p := range sorted {
+				key := pkgName + "@" + p.Version
+				varID, exists := g.vars[key]
+				if !exists {
+					continue
+				}
+				if i == installedIdx {
+					preferences = append(preferences, versionRank{varID: varID, rank: 0})
+				} else {
+					preferences = append(preferences, versionRank{varID: varID, rank: nextRank})
+					nextRank++
+				}
+			}
 		}
 	}
 	return preferences
@@ -517,14 +562,14 @@ func (g *GophersatAdapter) buildVersionPreferences(updateMode bool) []versionRan
 // If false, installed version gets rank 0 (prefer keeping), then newest.
 //
 // Falls back to regular SAT result on timeout or if optimization fails.
-func (g *GophersatAdapter) SolveOptimal(timeout time.Duration, updateMode bool) (pkg.Status, map[string]string, error) {
+func (g *GophersatAdapter) SolveOptimal(timeout time.Duration, updateMode bool, deepMode bool) (pkg.Status, map[string]string, error) {
 	// First: regular SAT to check satisfiability
 	status, fallbackSolution, err := g.Solve()
 	if status != pkg.StatusSat {
 		return status, fallbackSolution, err
 	}
 
-	preferences := g.buildVersionPreferences(updateMode)
+	preferences := g.buildVersionPreferences(updateMode, deepMode)
 	if len(preferences) == 0 && len(g.orGroupPrefs) == 0 {
 		return pkg.StatusSat, fallbackSolution, nil
 	}

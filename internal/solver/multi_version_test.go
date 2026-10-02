@@ -86,15 +86,12 @@ func (m *multiVersionRepo) LoadPackageVersion(name, version string) (*pkg.Packag
 	return nil, fmt.Errorf("package %s not found", name)
 }
 
-// resolveClean calls Resolve, checks error, and asserts PostPassAdded == 0.
+// resolveClean calls Resolve and checks for errors.
 func resolveClean(t *testing.T, resolver *PortageResolver, atoms []string) ResolveResult {
 	t.Helper()
 	result, err := resolver.Resolve(atoms)
 	if err != nil {
 		t.Fatalf("Resolve(%v) failed: %v", atoms, err)
-	}
-	if resolver.PostPassAdded > 0 {
-		t.Errorf("post-SAT pass added %d packages — SAT encoding incomplete", resolver.PostPassAdded)
 	}
 	return result
 }
@@ -889,15 +886,10 @@ func TestFix_PostSATPassAddsNothing(t *testing.T) {
 	resolver := NewResolver(r)
 	result := resolveClean(t, resolver, []string{"app-misc/complete"})
 
-	// dep should already be in result from SAT, not added by post-pass
+	// dep should be in result from SAT directly
 	depKey := pkg.SlotKey{Name: "dev-libs/dep", Slot: "0"}
 	if _, ok := result[depKey]; !ok {
-		t.Error("dep should be in SAT result directly, not requiring post-pass")
-	}
-
-	// Post-SAT pass must have added zero packages
-	if resolver.PostPassAdded > 0 {
-		t.Errorf("post-SAT pass added %d packages — SAT encoding incomplete", resolver.PostPassAdded)
+		t.Error("dep should be in SAT result directly")
 	}
 }
 
@@ -927,10 +919,6 @@ func TestFix_RootRespectsSlotAtom(t *testing.T) {
 		if k.Name == "dev-lang/py" && k.Slot != "3.13" {
 			t.Errorf("unexpected slot %s in result — only :3.13 requested", k.Slot)
 		}
-	}
-
-	if resolver.PostPassAdded > 0 {
-		t.Errorf("post-SAT pass added %d packages", resolver.PostPassAdded)
 	}
 }
 
@@ -2150,7 +2138,6 @@ func TestUseDeps_SlotConstraint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve failed: %v", err)
 	}
-	// PostPassAdded may be >0 for slot deps (known resolver behavior, not USE dep issue)
 	key := pkg.SlotKey{Name: "dev-lang/python", Slot: "3.12"}
 	entry, ok := result[key]
 	if !ok {
@@ -2558,10 +2545,11 @@ func TestLazyOR_ClosureSizeReduced(t *testing.T) {
 	}
 }
 
-// TestAction_InstalledKeepWithoutUpdate verifies that installed same-version
-// gets ActionKeep (not Upgrade) when MarkInstalled is working correctly.
-// This test catches the cc1270f regression where MarkInstalled was lost.
-func TestAction_InstalledKeepWithoutUpdate(t *testing.T) {
+// TestAction_RootUpgrades_EvenWithoutUpdateFlag verifies Portage semantics:
+// root atom always upgrades to best available. The old behavior (Keep for root
+// without --update) was wrong — Portage always merges the best version for
+// explicitly requested atoms. This test replaces TestAction_InstalledKeepWithoutUpdate.
+func TestAction_RootUpgrades_EvenWithoutUpdateFlag(t *testing.T) {
 	r := newMultiVersionRepo()
 	r.addVersion(pkg.NewPackage("dev-libs/lib", "1.0", "0"))
 	r.addVersion(pkg.NewPackage("dev-libs/lib", "2.0", "0"))
@@ -2577,7 +2565,7 @@ func TestAction_InstalledKeepWithoutUpdate(t *testing.T) {
 
 	resolver := NewResolver(r)
 	resolver.SetInstalledDB(db)
-	// Default mode (no --update) → should keep installed 1.0
+	// Root atom → should upgrade to 2.0 (Portage behavior)
 	result := resolveClean(t, resolver, []string{"dev-libs/lib"})
 
 	key := pkg.SlotKey{Name: "dev-libs/lib", Slot: "0"}
@@ -2585,10 +2573,11 @@ func TestAction_InstalledKeepWithoutUpdate(t *testing.T) {
 	if !ok {
 		t.Fatal("expected lib in result")
 	}
-
-	// Without --update, installed version should be preferred (Keep)
-	if entry.Package.Version == "1.0" && entry.Action != ActionKeep {
-		t.Errorf("installed 1.0 without --update should be Keep, got %s", entry.Action)
+	if entry.Package.Version != "2.0" {
+		t.Errorf("root should upgrade to 2.0, got %s", entry.Package.Version)
+	}
+	if entry.Action != ActionUpgrade {
+		t.Errorf("root should be ActionUpgrade, got %s", entry.Action)
 	}
 }
 
@@ -2954,5 +2943,139 @@ func TestBDEPEND_UpgradeCandidateNotSkipped(t *testing.T) {
 	toolKey := pkg.SlotKey{Name: "dev-build/tool", Slot: "0"}
 	if _, ok := result[toolKey]; !ok {
 		t.Error("tool should be in result — BDEPEND of upgrade candidate lib-2.0")
+	}
+}
+
+// TestAction_RootAlwaysUpgrades verifies Portage semantics: explicitly requested
+// atoms are always upgraded to the best available version, even without --update.
+// Only dependencies keep the installed version. This is the core difference that
+// caused 375 packages vs Portage's 1 for `emerge -p libgpg-error`.
+func TestAction_RootAlwaysUpgrades(t *testing.T) {
+	r := newMultiVersionRepo()
+	lib10 := pkg.NewPackage("dev-libs/libgpg-error", "1.56", "0")
+	lib20 := pkg.NewPackage("dev-libs/libgpg-error", "1.61", "0")
+	dep := pkg.NewPackage("dev-libs/libassuan", "2.5.7", "0")
+	dep.Deps = []pkg.Constraint{{Name: "dev-libs/libgpg-error", Type: pkg.ConstraintTypeVersion}}
+	r.addVersion(lib10)
+	r.addVersion(lib20)
+	r.addVersion(dep)
+
+	// VDB: lib 1.56 installed, dep 2.5.7 installed
+	db := state.NewPackageDatabase("/var/db/pkg")
+	if err := db.Add(&state.InstalledPackage{Package: pkg.NewPackage("dev-libs/libgpg-error", "1.56", "0")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Add(&state.InstalledPackage{Package: pkg.NewPackage("dev-libs/libassuan", "2.5.7", "0")}); err != nil {
+		t.Fatal(err)
+	}
+
+	resolver := NewResolver(r)
+	resolver.SetInstalledDB(db)
+	// No --update: default mode. Root should still upgrade.
+	result := resolveClean(t, resolver, []string{"dev-libs/libgpg-error"})
+
+	rootKey := pkg.SlotKey{Name: "dev-libs/libgpg-error", Slot: "0"}
+	entry, ok := result[rootKey]
+	if !ok {
+		t.Fatal("expected libgpg-error in result")
+	}
+	if entry.Package.Version != "1.61" {
+		t.Errorf("root should upgrade to 1.61 (Portage behavior), got %s", entry.Package.Version)
+	}
+	if entry.Action != ActionUpgrade {
+		t.Errorf("root should be ActionUpgrade, got %s", entry.Action)
+	}
+}
+
+// TestAction_DepKeepsInstalled verifies that dependencies (not root) keep the
+// installed version when it satisfies constraints, unless --update is set.
+// This is the counterpart to TestAction_RootAlwaysUpgrades — root upgrades,
+// dep keeps.
+func TestAction_DepKeepsInstalled(t *testing.T) {
+	r := newMultiVersionRepo()
+	app := pkg.NewPackage("app-misc/app", "1.0", "0")
+	app.Deps = []pkg.Constraint{{Name: "dev-libs/lib", Type: pkg.ConstraintTypeVersion}}
+	lib10 := pkg.NewPackage("dev-libs/lib", "1.0", "0")
+	lib20 := pkg.NewPackage("dev-libs/lib", "2.0", "0")
+	r.addVersion(app)
+	r.addVersion(lib10)
+	r.addVersion(lib20)
+
+	// VDB: lib 1.0 installed
+	db := state.NewPackageDatabase("/var/db/pkg")
+	if err := db.Add(&state.InstalledPackage{Package: pkg.NewPackage("dev-libs/lib", "1.0", "0")}); err != nil {
+		t.Fatal(err)
+	}
+
+	resolver := NewResolver(r)
+	resolver.SetInstalledDB(db)
+	// No --update: dep should keep installed version
+	result := resolveClean(t, resolver, []string{"app-misc/app"})
+
+	libKey := pkg.SlotKey{Name: "dev-libs/lib", Slot: "0"}
+	entry, ok := result[libKey]
+	if !ok {
+		t.Fatal("expected lib in result")
+	}
+	if entry.Package.Version != "1.0" {
+		t.Errorf("dep should keep installed 1.0 without --update, got %s", entry.Package.Version)
+	}
+	if entry.Action != ActionKeep {
+		t.Errorf("dep should be ActionKeep, got %s", entry.Action)
+	}
+}
+
+// TestAction_UpdateWithoutDeep_DepKeeps verifies Portage -u semantics:
+// --update without --deep upgrades only root atoms, not their dependencies.
+// Portage: `emerge -u foo` upgrades foo but keeps deps at installed versions.
+// Only `emerge -uD foo` upgrades both foo and its transitive deps.
+func TestAction_UpdateWithoutDeep_DepKeeps(t *testing.T) {
+	r := newMultiVersionRepo()
+	root := pkg.NewPackage("dev-libs/libgpg-error", "1.56", "0")
+	rootNew := pkg.NewPackage("dev-libs/libgpg-error", "1.61", "0")
+	rootNew.Deps = []pkg.Constraint{{Name: "sys-libs/zlib", Type: pkg.ConstraintTypeVersion}}
+	root.Deps = []pkg.Constraint{{Name: "sys-libs/zlib", Type: pkg.ConstraintTypeVersion}}
+	zlib10 := pkg.NewPackage("sys-libs/zlib", "1.3", "0/1.3")
+	zlib20 := pkg.NewPackage("sys-libs/zlib", "1.3.2", "0/1.3.2")
+	r.addVersion(root)
+	r.addVersion(rootNew)
+	r.addVersion(zlib10)
+	r.addVersion(zlib20)
+
+	db := state.NewPackageDatabase("/var/db/pkg")
+	if err := db.Add(&state.InstalledPackage{Package: pkg.NewPackage("dev-libs/libgpg-error", "1.56", "0")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Add(&state.InstalledPackage{Package: pkg.NewPackage("sys-libs/zlib", "1.3", "0/1.3")}); err != nil {
+		t.Fatal(err)
+	}
+
+	resolver := NewResolver(r)
+	resolver.SetInstalledDB(db)
+	// --update WITHOUT --deep: root upgrades, dep keeps
+	resolver.SetOptions(ResolveOptions{Update: true, Deep: false})
+	result := resolveClean(t, resolver, []string{"dev-libs/libgpg-error"})
+
+	// Root should upgrade
+	rootKey := pkg.SlotKey{Name: "dev-libs/libgpg-error", Slot: "0"}
+	rootEntry, ok := result[rootKey]
+	if !ok {
+		t.Fatal("expected libgpg-error in result")
+	}
+	if rootEntry.Package.Version != "1.61" {
+		t.Errorf("root should upgrade to 1.61, got %s", rootEntry.Package.Version)
+	}
+
+	// Dep should keep installed — -u without -D doesn't touch deps
+	zlibKey := pkg.SlotKey{Name: "sys-libs/zlib", Slot: "0"}
+	zlibEntry, ok := result[zlibKey]
+	if !ok {
+		t.Fatal("expected zlib in result")
+	}
+	if zlibEntry.Package.Version != "1.3" {
+		t.Errorf("-u without -D: dep should keep 1.3, got %s", zlibEntry.Package.Version)
+	}
+	if zlibEntry.Action != ActionKeep {
+		t.Errorf("-u without -D: dep should be Keep, got %s", zlibEntry.Action)
 	}
 }

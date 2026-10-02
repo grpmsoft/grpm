@@ -129,10 +129,6 @@ type PortageResolver struct {
 	// options configures resolution behavior.
 	options ResolveOptions
 
-	// PostPassAdded counts packages added by post-SAT safety net.
-	// Should be 0 if SAT encoding is complete. Non-zero signals a gap.
-	PostPassAdded int
-
 	// PackagesExplored counts unique package names loaded during collection.
 	// Measures exploration cost, not result size.
 	PackagesExplored int
@@ -693,7 +689,6 @@ const maxOrRetries = 10
 
 //nolint:gocyclo // Complexity inherent to multi-pass Portage-compatible resolution with OR-group support
 func (r *PortageResolver) Resolve(packages []string) (ResolveResult, error) {
-	r.PostPassAdded = 0
 	r.PackagesExplored = 0
 
 	// Track root packages: name -> the specific version selected by loadPackageFromAtom.
@@ -792,7 +787,8 @@ func (r *PortageResolver) Resolve(packages []string) (ResolveResult, error) {
 		// Solve
 		const maxsatTimeout = 5 * time.Second
 		updateMode := r.options.Update
-		status, solution, err := adapter.SolveOptimal(maxsatTimeout, updateMode)
+		deepMode := r.options.Deep
+		status, solution, err := adapter.SolveOptimal(maxsatTimeout, updateMode, deepMode)
 		if err != nil {
 			return nil, err
 		}
@@ -802,7 +798,12 @@ func (r *PortageResolver) Resolve(packages []string) (ResolveResult, error) {
 			if buildErr != nil {
 				return nil, buildErr
 			}
-			return r.postSATSafetyNet(result, adapter)
+			r.addRemovedPackages(result, adapter)
+			logging.Info("Resolved packages:")
+			for key, entry := range result {
+				logging.Debug("- %s-%s [slot:%s action:%s]", entry.Package.Name, entry.Package.Version, key.Slot, entry.Action)
+			}
+			return result, nil
 		}
 
 		// UNSAT — check if lazy OR expansion can help.
@@ -893,93 +894,6 @@ func (r *PortageResolver) tryExpandOrGroups(adapter *GophersatAdapter, allPackag
 	}
 
 	return expanded
-}
-
-// postSATSafetyNet runs the post-SAT fixup passes.
-// Should add ZERO packages if SAT encoding is complete.
-func (r *PortageResolver) postSATSafetyNet(result ResolveResult, adapter *GophersatAdapter) (ResolveResult, error) {
-	for pass := 1; pass <= 10; pass++ {
-		added := 0
-		currentEntries := make([]*ResolveEntry, 0, len(result))
-		for _, ent := range result {
-			currentEntries = append(currentEntries, ent)
-		}
-		for _, ent := range currentEntries {
-			added += r.fillMissingDeps(ent, result)
-		}
-		r.PostPassAdded += added
-		if added > 0 {
-			logging.Info("WARNING: Post-SAT pass %d added %d packages — SAT encoding incomplete", pass, added)
-		}
-		if added == 0 {
-			break
-		}
-	}
-
-	r.addRemovedPackages(result, adapter)
-
-	logging.Info("Resolved packages:")
-	for key, entry := range result {
-		logging.Debug("- %s-%s [slot:%s action:%s]", entry.Package.Name, entry.Package.Version, key.Slot, entry.Action)
-	}
-
-	return result, nil
-}
-
-// fillMissingDeps adds missing deps for one result entry. Returns count added.
-// Skips BDEPEND for Keep (installed) packages — they're already built.
-func (r *PortageResolver) fillMissingDeps(ent *ResolveEntry, result ResolveResult) int {
-	added := 0
-	p := ent.Package
-	isKeep := ent.Action == ActionKeep
-	requiredDeps, orGroups := groupDependenciesByOrGroupID(p.Deps)
-
-	for _, dep := range requiredDeps {
-		if isKeep && isBuildTimeDep(dep.DepType) {
-			continue
-		}
-		depPkg, err := r.loadUnmaskedPackage(dep.Name)
-		if err != nil {
-			continue
-		}
-		depKey := pkg.SlotKeyOf(depPkg)
-		if _, inResult := result[depKey]; inResult {
-			continue
-		}
-		result[depKey] = &ResolveEntry{Package: depPkg, Action: r.determineAction(depPkg)}
-		added++
-	}
-
-	for _, alternatives := range orGroups {
-		if isKeep && len(alternatives) > 0 && isBuildTimeDep(alternatives[0].DepType) {
-			continue
-		}
-		satisfied := false
-		for _, alt := range alternatives {
-			altPkg, altErr := r.loadUnmaskedPackage(alt.Name)
-			if altErr != nil {
-				continue
-			}
-			if _, inResult := result[pkg.SlotKeyOf(altPkg)]; inResult {
-				satisfied = true
-				break
-			}
-		}
-		if satisfied {
-			continue
-		}
-		for _, alt := range alternatives {
-			altPkg, err := r.loadUnmaskedPackage(alt.Name)
-			if err != nil {
-				continue
-			}
-			result[pkg.SlotKeyOf(altPkg)] = &ResolveEntry{Package: altPkg, Action: r.determineAction(altPkg)}
-			added++
-			break
-		}
-	}
-
-	return added
 }
 
 // addRemovedPackages marks installed packages for removal ONLY when they are
