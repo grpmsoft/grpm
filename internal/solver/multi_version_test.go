@@ -8,6 +8,7 @@ import (
 
 	"github.com/grpmsoft/grpm/internal/pkg"
 	"github.com/grpmsoft/grpm/internal/repo"
+	"github.com/grpmsoft/grpm/internal/state"
 )
 
 // multiVersionRepo wraps MockRepository to support multiple versions per package.
@@ -1490,8 +1491,8 @@ func TestBlocker_BlockedPackageAsDepCausesUNSAT(t *testing.T) {
 	pkgB := pkg.NewPackage("dev-libs/conflict", "1.0", "0")
 	r.addVersion(pkgB)
 
-	// A depends on B AND blocks B -- contradictory
-	blockedAtom, err := pkg.ParseAtom("!dev-libs/conflict")
+	// A depends on B AND blocks B -- contradictory (strong blocker)
+	blockedAtom, err := pkg.ParseAtom("!!dev-libs/conflict")
 	if err != nil {
 		t.Fatalf("failed to parse blocker atom: %v", err)
 	}
@@ -1500,7 +1501,7 @@ func TestBlocker_BlockedPackageAsDepCausesUNSAT(t *testing.T) {
 	pkgA.Deps = []pkg.Constraint{
 		{Name: "dev-libs/conflict", Type: pkg.ConstraintTypeVersion},
 	}
-	pkgA.AddBlocker(blockedAtom, false)
+	pkgA.AddBlocker(blockedAtom, true)
 	r.addVersion(pkgA)
 
 	resolver := NewResolver(r)
@@ -1518,16 +1519,16 @@ func TestBlocker_ConflictPreventsCoexistence(t *testing.T) {
 	pkgB := pkg.NewPackage("app-arch/lbzip2", "2.5", "0")
 	r.addVersion(pkgB)
 
-	blockedAtom, err := pkg.ParseAtom("!app-arch/lbzip2")
+	blockedAtom, err := pkg.ParseAtom("!!app-arch/lbzip2")
 	if err != nil {
 		t.Fatalf("failed to parse blocker atom: %v", err)
 	}
 
 	pkgA := pkg.NewPackage("app-alternatives/bzip2", "0.3", "0")
-	pkgA.AddBlocker(blockedAtom, false)
+	pkgA.AddBlocker(blockedAtom, true)
 	r.addVersion(pkgA)
 
-	// Request both -- should fail because A blocks B
+	// Request both -- should fail because A blocks B (strong blocker)
 	resolver := NewResolver(r)
 	_, err = resolver.Resolve([]string{"app-alternatives/bzip2", "app-arch/lbzip2"})
 	if err == nil {
@@ -1546,8 +1547,8 @@ func TestBlocker_VersionedBlockerMatchesCorrectly(t *testing.T) {
 	r.addVersion(pkg.NewPackage("dev-libs/foo", "2.0", "0"))
 	r.addVersion(pkg.NewPackage("dev-libs/foo", "3.0", "0"))
 
-	// bar blocks >=foo-2.0
-	blockedAtom, err := pkg.ParseAtom("!>=dev-libs/foo-2.0")
+	// bar blocks >=foo-2.0 (strong blocker)
+	blockedAtom, err := pkg.ParseAtom("!!>=dev-libs/foo-2.0")
 	if err != nil {
 		t.Fatalf("failed to parse blocker atom: %v", err)
 	}
@@ -1556,7 +1557,7 @@ func TestBlocker_VersionedBlockerMatchesCorrectly(t *testing.T) {
 	bar.Deps = []pkg.Constraint{
 		{Name: "dev-libs/foo", Type: pkg.ConstraintTypeVersion},
 	}
-	bar.AddBlocker(blockedAtom, false)
+	bar.AddBlocker(blockedAtom, true)
 	r.addVersion(bar)
 
 	resolver := NewResolver(r)
@@ -1580,37 +1581,33 @@ func TestBlocker_VersionedBlockerMatchesCorrectly(t *testing.T) {
 	}
 }
 
-// TestBlocker_StrongBlockerSameAsWeak verifies that both ! and !! blockers
-// produce the same hard conflict clause. (Future task 017 may differentiate
-// weak blockers with unmerge scheduling, but for now both are hard conflicts.)
-func TestBlocker_StrongBlockerSameAsWeak(t *testing.T) {
-	// Strong blocker
+// TestBlocker_WeakAndStrongSameSATSemantics verifies that both ! and !!
+// produce identical conflict clauses in SAT. PMS 8.2.6.6: the difference
+// is merge transaction ordering, not final state — both prohibit coexistence.
+// IsStrong is an annotation for the future merge planner, not the solver.
+func TestBlocker_WeakAndStrongSameSATSemantics(t *testing.T) {
 	adapter1 := NewGophersatAdapter()
 	a1 := pkg.NewPackage("app/a", "1.0", "0")
 	b1 := pkg.NewPackage("app/b", "1.0", "0")
 	adapter1.AddPackage(a1)
 	adapter1.AddPackage(b1)
-
 	strongAtom, _ := pkg.ParseAtom("!!app/b")
 	adapter1.AddBlockerConflict(adapter1.GetVarID("app/a@1.0"), strongAtom)
 
-	// Weak blocker
 	adapter2 := NewGophersatAdapter()
 	a2 := pkg.NewPackage("app/a", "1.0", "0")
 	b2 := pkg.NewPackage("app/b", "1.0", "0")
 	adapter2.AddPackage(a2)
 	adapter2.AddPackage(b2)
-
 	weakAtom, _ := pkg.ParseAtom("!app/b")
 	adapter2.AddBlockerConflict(adapter2.GetVarID("app/a@1.0"), weakAtom)
 
-	// Both should produce the same clause count and same clause structure
 	if len(adapter1.clauses) != len(adapter2.clauses) {
-		t.Errorf("strong and weak blocker should produce same clause count, got %d vs %d",
+		t.Errorf("strong and weak should produce same clause count: %d vs %d",
 			len(adapter1.clauses), len(adapter2.clauses))
 	}
 	if len(adapter1.clauses) != 1 {
-		t.Errorf("expected exactly 1 conflict clause, got %d", len(adapter1.clauses))
+		t.Errorf("expected 1 conflict clause, got %d", len(adapter1.clauses))
 	}
 }
 
@@ -1711,11 +1708,11 @@ func TestBlocker_OldVersionBlocksNewDoesNot(t *testing.T) {
 	b := pkg.NewPackage("dev-libs/b", "1.0", "0")
 	r.addVersion(b)
 
-	// a-1.0 blocks b
+	// a-1.0 blocks b (strong blocker to test backtrack)
 	aV1 := pkg.NewPackage("app/a", "1.0", "0")
 	aV1.Deps = []pkg.Constraint{{Name: "dev-libs/b", Type: pkg.ConstraintTypeVersion}}
-	blockerAtom, _ := pkg.ParseAtom("!dev-libs/b")
-	aV1.Blockers = []pkg.BlockerEntry{{Atom: blockerAtom, IsStrong: false}}
+	blockerAtom, _ := pkg.ParseAtom("!!dev-libs/b")
+	aV1.Blockers = []pkg.BlockerEntry{{Atom: blockerAtom, IsStrong: true}}
 	r.addVersion(aV1)
 
 	// a-2.0 depends on b, no blocker
@@ -1806,5 +1803,130 @@ func TestBlocker_ExplainerOutputContainsBlockerReason(t *testing.T) {
 	}
 	if !strings.Contains(joined, "dev-libs/b@1.0") {
 		t.Errorf("explainer should name the blocked package, got:\n%s", joined)
+	}
+}
+
+// --- Tests for v0.10.0-017: VDB candidates and installed flag ---
+
+// TestVDB_InstalledPackageAsCandidate verifies that an installed package version
+// is added as a SAT candidate alongside repo versions, so the solver can choose
+// to keep the installed version.
+func TestVDB_InstalledPackageAsCandidate(t *testing.T) {
+	r := newMultiVersionRepo()
+	r.addVersion(pkg.NewPackage("dev-libs/openssl", "3.0.14", "0"))
+	r.addVersion(pkg.NewPackage("dev-libs/openssl", "3.0.15", "0"))
+
+	// Installed version 3.0.13 is NOT in the repo (removed upstream)
+	installedPkg := &state.InstalledPackage{
+		Package: pkg.NewPackage("dev-libs/openssl", "3.0.13", "0"),
+	}
+
+	db := state.NewPackageDatabase("/var/db/pkg")
+	if err := db.Add(installedPkg); err != nil {
+		t.Fatalf("failed to add installed package: %v", err)
+	}
+
+	resolver := NewResolver(r)
+	resolver.SetInstalledDB(db)
+	result := resolveClean(t, resolver, []string{"dev-libs/openssl"})
+
+	// The solver should pick one of {3.0.13, 3.0.14, 3.0.15}
+	key := pkg.SlotKey{Name: "dev-libs/openssl", Slot: "0"}
+	p, ok := result[key]
+	if !ok {
+		t.Fatal("expected openssl in result")
+	}
+
+	validVersions := map[string]bool{"3.0.13": true, "3.0.14": true, "3.0.15": true}
+	if !validVersions[p.Version] {
+		t.Errorf("expected one of {3.0.13, 3.0.14, 3.0.15}, got %s", p.Version)
+	}
+}
+
+// TestVDB_InstalledOnlyVersion verifies that when a package is installed but
+// completely removed from the repo, the installed version is still a valid
+// SAT candidate and can be selected.
+func TestVDB_InstalledOnlyVersion(t *testing.T) {
+	r := newMultiVersionRepo()
+
+	// dep is required by app but ONLY exists as an installed package
+	installedDep := &state.InstalledPackage{
+		Package: pkg.NewPackage("dev-libs/legacy", "1.0", "0"),
+	}
+
+	db := state.NewPackageDatabase("/var/db/pkg")
+	if err := db.Add(installedDep); err != nil {
+		t.Fatalf("failed to add installed package: %v", err)
+	}
+
+	// App depends on dev-libs/legacy
+	app := pkg.NewPackage("app-misc/user", "1.0", "0")
+	app.Deps = []pkg.Constraint{
+		{Name: "dev-libs/legacy", Type: pkg.ConstraintTypeVersion},
+	}
+	r.addVersion(app)
+
+	resolver := NewResolver(r)
+	resolver.SetInstalledDB(db)
+	result := resolveClean(t, resolver, []string{"app-misc/user"})
+
+	legacyKey := pkg.SlotKey{Name: "dev-libs/legacy", Slot: "0"}
+	p, ok := result[legacyKey]
+	if !ok {
+		t.Fatal("expected dev-libs/legacy in result — should be injected from VDB")
+	}
+	if p.Version != "1.0" {
+		t.Errorf("expected legacy 1.0, got %s", p.Version)
+	}
+}
+
+// TestVDB_MarkInstalled verifies that the adapter correctly tracks which
+// SAT variables are marked as installed.
+func TestVDB_MarkInstalled(t *testing.T) {
+	adapter := NewGophersatAdapter()
+
+	p1 := pkg.NewPackage("dev-libs/a", "1.0", "0")
+	p2 := pkg.NewPackage("dev-libs/a", "2.0", "0")
+	adapter.AddPackage(p1)
+	adapter.AddPackage(p2)
+
+	v1 := adapter.GetVarID("dev-libs/a@1.0")
+	v2 := adapter.GetVarID("dev-libs/a@2.0")
+
+	// Initially neither is installed
+	if adapter.IsVarInstalled(v1) {
+		t.Error("v1 should not be installed before MarkInstalled")
+	}
+
+	// Mark v1 as installed
+	adapter.MarkInstalled(v1)
+
+	if !adapter.IsVarInstalled(v1) {
+		t.Error("v1 should be installed after MarkInstalled")
+	}
+	if adapter.IsVarInstalled(v2) {
+		t.Error("v2 should not be installed (never marked)")
+	}
+}
+
+// TestBlocker_WeakBlockerFiresWithoutVDB verifies that weak blockers produce
+// conflict clauses regardless of installed state. PMS 8.2.6.6: difference is
+// merge transaction ordering, not final state — SAT encodes the final state.
+func TestBlocker_WeakBlockerFiresWithoutVDB(t *testing.T) {
+	r := newMultiVersionRepo()
+
+	b := pkg.NewPackage("dev-libs/b", "1.0", "0")
+	r.addVersion(b)
+
+	weakAtom, _ := pkg.ParseAtom("!dev-libs/b")
+	a := pkg.NewPackage("app-misc/a", "1.0", "0")
+	a.Deps = []pkg.Constraint{{Name: "dev-libs/b", Type: pkg.ConstraintTypeVersion}}
+	a.Blockers = []pkg.BlockerEntry{{Atom: weakAtom, IsStrong: false}}
+	r.addVersion(a)
+
+	resolver := NewResolver(r)
+	_, err := resolver.Resolve([]string{"app-misc/a"})
+	if err == nil {
+		t.Error("expected UNSAT — weak blocker a(!b) + dep a→b = conflict in final state")
 	}
 }

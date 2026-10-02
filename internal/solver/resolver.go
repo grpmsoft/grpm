@@ -248,12 +248,17 @@ func (r *PortageResolver) addCandidateVersions(name string, allCandidates map[st
 	versions, err := r.repo.GetAllVersions(name)
 	if err != nil {
 		logging.Debug("Warning: failed to get versions for %s: %v", name, err)
+		// Still mark as visited so installed candidates can be injected later
+		allCandidates[name] = nil
 		return
 	}
 
 	filtered := r.filterMaskedPackages(versions)
 	if len(filtered) == 0 {
 		logging.Debug("Warning: all versions of %s are masked/unkeyworded", name)
+		// Still mark the name as visited so addInstalledCandidates can inject
+		// installed versions that may have been removed from the repo.
+		allCandidates[name] = nil
 		return
 	}
 
@@ -264,6 +269,68 @@ func (r *PortageResolver) addCandidateVersions(name string, allCandidates map[st
 
 	allCandidates[name] = filtered
 	logging.Debug("Loaded %d candidate versions for %s", len(filtered), name)
+}
+
+// addInstalledCandidates injects installed packages from VDB as SAT candidates.
+// For each installed package whose name appears in allCandidates (i.e., is part of the
+// dependency graph), the installed version is added as an additional candidate if it
+// isn't already present. This allows the SAT solver to choose to keep installed
+// versions — prerequisite for MAX-SAT optimization (task 014).
+//
+// Installed versions that no longer exist in the repo are still added as candidates,
+// since the solver needs them to model "keep current installation" scenarios.
+//
+// Returns a list of SAT variable keys ("name@version") for all installed candidates,
+// so the caller can mark them via adapter.MarkInstalled().
+func (r *PortageResolver) addInstalledCandidates(allCandidates map[string][]*pkg.Package, allPackages map[string]*pkg.Package) []string {
+	if r.installedDB == nil || r.options.EmptyTree {
+		return nil
+	}
+
+	var installedKeys []string
+
+	installedPkgs := r.installedDB.List()
+	for _, ip := range installedPkgs {
+		if ip.Package == nil {
+			continue
+		}
+
+		name := ip.Package.Name
+		version := ip.Package.Version
+
+		// Only add installed packages that are part of the dependency graph
+		// (i.e., their name is referenced in allCandidates).
+		candidates, inGraph := allCandidates[name]
+		if !inGraph {
+			continue
+		}
+
+		// Check if this version is already a candidate
+		alreadyPresent := false
+		for _, c := range candidates {
+			if c.Version == version {
+				alreadyPresent = true
+				break
+			}
+		}
+
+		versionKey := name + "@" + version
+		if !alreadyPresent {
+			// Create a Package from the installed metadata
+			installedPkg := ip.Package
+			allCandidates[name] = append(allCandidates[name], installedPkg)
+			allPackages[versionKey] = installedPkg
+			logging.Debug("Added installed package as SAT candidate: %s-%s", name, version)
+		}
+
+		installedKeys = append(installedKeys, versionKey)
+	}
+
+	if len(installedKeys) > 0 {
+		logging.Debug("Injected %d installed packages as SAT candidates", len(installedKeys))
+	}
+
+	return installedKeys
 }
 
 // addPackageConstraints adds all constraints for a single package version to the SAT solver.
@@ -323,11 +390,17 @@ func (r *PortageResolver) addPackageConstraints(adapter *GophersatAdapter, p *pk
 
 	// Add blocker conflict clauses: if this package blocks another,
 	// they cannot coexist in the solution.
+	// Strong blockers ("!!") always emit hard conflict (-A|-B).
+	// Weak blockers ("!") only conflict when an installed side is present.
 	for _, blocker := range p.Blockers {
 		if blocker.Atom == nil {
 			continue
 		}
-		logging.Debug("Adding blocker conflict from %s: blocks %s", pkgKey, blocker.Atom.String())
+		// Both ! and !! emit (-A|-B) in SAT. PMS 8.2.6.6: weak blockers allow
+		// temporary coexistence during merge transaction, but the final state
+		// prohibits both. IsStrong is an annotation for the merge planner, not
+		// the solver. The installed flag is used for MAX-SAT preference weights.
+		logging.Debug("Adding blocker from %s: blocks %s (strong=%v)", pkgKey, blocker.Atom.String(), blocker.IsStrong)
 		adapter.AddBlockerConflict(pkgVarID, blocker.Atom)
 	}
 }
@@ -371,7 +444,8 @@ func (r *PortageResolver) addRootConstraints(adapter *GophersatAdapter, rootPack
 
 // buildResultFromSolution builds the final result map from the SAT solution.
 // The solution map contains package names as keys and selected versions as values.
-func (r *PortageResolver) buildResultFromSolution(solution map[string]string) (ResolveResult, error) {
+// allCandidates provides a fallback for installed packages that may not be in the repo.
+func (r *PortageResolver) buildResultFromSolution(solution map[string]string, allCandidates map[string][]*pkg.Package) (ResolveResult, error) {
 	result := make(ResolveResult)
 	for key, version := range solution {
 		// Parse package name from SAT variable key (name@version)
@@ -385,8 +459,20 @@ func (r *PortageResolver) buildResultFromSolution(solution map[string]string) (R
 			// Fallback to LoadPackage if LoadPackageVersion fails
 			p, err = r.repo.LoadPackage(name)
 			if err != nil {
-				logging.Debug("Warning: package %s not found: %v", name, err)
-				continue
+				// Final fallback: check allCandidates (covers installed-only packages
+				// that were removed from the repo but are still in VDB)
+				if candidates, ok := allCandidates[name]; ok {
+					for _, c := range candidates {
+						if c.Version == version {
+							p = c
+							break
+						}
+					}
+				}
+				if p == nil {
+					logging.Debug("Warning: package %s not found: %v", name, err)
+					continue
+				}
 			}
 		}
 		result[pkg.SlotKeyOf(p)] = p
@@ -491,6 +577,12 @@ func (r *PortageResolver) Resolve(packages []string) (ResolveResult, error) {
 	logging.Debug("Total packages in dependency graph: %d", len(allPackages))
 	logging.Debug("Total candidate packages: %d names", len(allCandidates))
 
+	// Inject installed packages (VDB) as SAT candidates.
+	// Installed versions may not exist in the repo anymore (removed upstream),
+	// but they still need to participate in SAT so the solver can choose to keep them.
+	// This is a prerequisite for MAX-SAT preference weighting (task 014).
+	installedKeys := r.addInstalledCandidates(allCandidates, allPackages)
+
 	// Register ALL candidate versions with the SAT adapter.
 	// This is the key change: instead of registering one version per package,
 	// we register all unmasked versions so the SAT solver can choose.
@@ -504,6 +596,14 @@ func (r *PortageResolver) Resolve(packages []string) (ResolveResult, error) {
 	// (e.g., packages from repos that don't support GetAllVersions well)
 	for _, p := range allPackages {
 		adapter.AddPackage(p)
+	}
+
+	// Mark installed versions in the SAT adapter so weak blockers and
+	// future MAX-SAT optimization can distinguish them from repo-only candidates.
+	for _, key := range installedKeys {
+		if varID := adapter.GetVarID(key); varID != 0 {
+			adapter.MarkInstalled(varID)
+		}
 	}
 
 	// Add root requirements: unit clause for each root package's selected version
@@ -546,7 +646,7 @@ func (r *PortageResolver) Resolve(packages []string) (ResolveResult, error) {
 	}
 
 	// Build result
-	result, err := r.buildResultFromSolution(solution)
+	result, err := r.buildResultFromSolution(solution, allCandidates)
 	if err != nil {
 		return nil, err
 	}

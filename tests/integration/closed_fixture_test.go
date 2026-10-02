@@ -143,6 +143,46 @@ func TestClosedFixture_AllPackagesResolve(t *testing.T) {
 	}
 }
 
+// TestClosedFixture_PythonMultiSlot verifies that dev-lang/python resolves
+// with all 3 slots (3.11, 3.12, 3.13) available as SAT candidates.
+// Each slot is a separate package in the result since they have different slot names.
+// BDEPEND is stripped to keep the fixture closed; only DEPEND/RDEPEND on existing
+// fixture packages (bzip2, xz-utils, virtual/zlib, readline, ncurses, sqlite).
+func TestClosedFixture_PythonMultiSlot(t *testing.T) {
+	r := loadClosedFixtureRepo(t)
+	res := newFilteredResolver(t, r)
+
+	// Resolve all 3 slots individually
+	for _, slot := range []string{"3.11", "3.12", "3.13"} {
+		t.Run("slot_"+slot, func(t *testing.T) {
+			result := resolveAndAssert(t, res, []string{"dev-lang/python:" + slot})
+			key := pkg.SlotKey{Name: "dev-lang/python", Slot: slot}
+			p, ok := result[key]
+			if !ok {
+				t.Fatalf("result missing dev-lang/python:%s", slot)
+			}
+			if p.Slot.Name != slot {
+				t.Errorf("python slot = %s, want %s", p.Slot.Name, slot)
+			}
+		})
+	}
+
+	// Resolve without slot constraint — should pick one version
+	t.Run("any_slot", func(t *testing.T) {
+		result := resolveAndAssert(t, res, []string{"dev-lang/python"})
+
+		count := 0
+		for k := range result {
+			if k.Name == "dev-lang/python" {
+				count++
+			}
+		}
+		if count != 1 {
+			t.Errorf("expected exactly 1 python in result when no slot specified, got %d", count)
+		}
+	})
+}
+
 func BenchmarkClosedFixture_Resolve(b *testing.B) {
 	cacheDir := filepath.Join(closedFixtureDir, "metadata", "md5-cache")
 	info, err := os.Stat(cacheDir)

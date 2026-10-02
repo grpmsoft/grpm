@@ -65,6 +65,11 @@ type GophersatAdapter struct {
 	implications map[int][]implicationEdge // varID → "if selected, needs one of providers"
 	prohibits    map[int]string            // varID → reason why this candidate is impossible
 	rootVars     []int                     // var IDs from root at-least-one clauses
+
+	// installed tracks which SAT variable IDs represent packages from VDB
+	// (already installed on the system). Used by MAX-SAT (task 014) to assign
+	// preference weights for keeping installed versions.
+	installed map[int]bool
 }
 
 func NewGophersatAdapter() *GophersatAdapter {
@@ -75,6 +80,7 @@ func NewGophersatAdapter() *GophersatAdapter {
 		addedClauses: make(map[string]struct{}),
 		implications: make(map[int][]implicationEdge),
 		prohibits:    make(map[int]string),
+		installed:    make(map[int]bool),
 	}
 }
 
@@ -610,6 +616,18 @@ func (g *GophersatAdapter) AddBlockerConflict(blockerVarID int, blockedAtom *pkg
 		g.addClause([]int{-blockerVarID, -targetVarID})
 		logging.Debug("Added blocker conflict: %s vs %s", blockerKey, targetKey)
 	}
+}
+
+// MarkInstalled marks a SAT variable as representing an installed package (from VDB).
+// Used by MAX-SAT (task 014) for preference weights: installed packages get higher
+// weight to prefer keeping them over pulling new versions.
+func (g *GophersatAdapter) MarkInstalled(varID int) {
+	g.installed[varID] = true
+}
+
+// IsVarInstalled returns true if the given SAT variable represents an installed package.
+func (g *GophersatAdapter) IsVarInstalled(varID int) bool {
+	return g.installed[varID]
 }
 
 // findSatisfyingVars returns SAT variable IDs for all registered packages
