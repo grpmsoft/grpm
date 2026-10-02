@@ -82,10 +82,10 @@ func NewGophersatAdapter() *GophersatAdapter {
 		varNames:     make(map[int]string),
 		packages:     make(map[string][]*pkg.Package),
 		addedClauses: make(map[string]struct{}),
-		implications:  make(map[int][]implicationEdge),
-		prohibits:     make(map[int]string),
-		installed:     make(map[int]bool),
-		orGroupPrefs:  make(map[int]int),
+		implications: make(map[int][]implicationEdge),
+		prohibits:    make(map[int]string),
+		installed:    make(map[int]bool),
+		orGroupPrefs: make(map[int]int),
 	}
 }
 
@@ -957,6 +957,18 @@ func (g *GophersatAdapter) packageNameOf(varID int) string {
 		return name[:idx]
 	}
 	return name
+}
+
+// ProhibitedPackageNames returns the set of package names (category/package)
+// that have at least one version prohibited by the SAT encoding.
+// Used by the resolver's retry loop to detect which OR-group alternatives
+// were blocked due to unexplored dependencies.
+func (g *GophersatAdapter) ProhibitedPackageNames() map[string]bool {
+	names := make(map[string]bool, len(g.prohibits))
+	for varID := range g.prohibits {
+		names[g.packageNameOf(varID)] = true
+	}
+	return names
 }
 
 // ExplainUNSATResult holds the structured explanation output.
