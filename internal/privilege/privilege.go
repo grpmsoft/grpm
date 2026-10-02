@@ -118,14 +118,9 @@ func NewManager(features Features, opts ...ManagerOption) (*Manager, error) {
 		features:   features,
 	}
 
-	// Try to look up the portage user
+	// Try to look up the portage user (platform-specific, no-op on non-Linux)
 	if m.enabled {
-		uid, gid, err := lookupPortageUser()
-		if err == nil {
-			m.portageUID = uid
-			m.portageGID = gid
-		}
-		// If lookup fails, continue with defaults - the user may be created later
+		initPortageUser(m)
 	}
 
 	// Apply options

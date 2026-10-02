@@ -91,6 +91,15 @@ func lookupPortageUser() (uid, gid uint32, err error) {
 	return uid, gid, nil
 }
 
+// initPortageUser tries to look up the portage user and sets UID/GID on the manager.
+func initPortageUser(m *Manager) {
+	uid, gid, err := lookupPortageUser()
+	if err == nil {
+		m.portageUID = uid
+		m.portageGID = gid
+	}
+}
+
 // IsRoot returns true if the current process has root privileges.
 func IsRoot() bool {
 	return os.Geteuid() == 0
