@@ -192,16 +192,18 @@ func (a *App) runEmerge(args []string) error {
 		fmt.Printf("*** Parallel builds: %d packages at a time\n", *parallelBuilds)
 	}
 	fmt.Println()
+	displayed := 0
 	for _, key := range buildOrder {
 		e := solution[key]
-		if e == nil {
+		if e == nil || e.Action == solver.ActionKeep {
 			continue
 		}
 		p := e.Package
 		useStr := FormatUSEFlags(p, cfg)
 		fmt.Printf("[ebuild  %s    ] %s-%s %s\n", e.Action, p.Name, p.Version, useStr)
+		displayed++
 	}
-	fmt.Printf("\nTotal: %d package(s)\n", len(solution))
+	fmt.Printf("\nTotal: %d package(s)\n", displayed)
 
 	if *pretend {
 		return nil

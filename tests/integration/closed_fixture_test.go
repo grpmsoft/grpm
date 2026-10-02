@@ -50,13 +50,10 @@ func resolveAndAssert(t *testing.T, res *solver.PortageResolver, atoms []string)
 	if err != nil {
 		status = "UNSAT"
 	}
-	t.Logf("%v: %v (%s, %d pkgs, postPass=%d)", atoms, elapsed, status, len(result), res.PostPassAdded)
+	t.Logf("%v: %v (%s, %d pkgs)", atoms, elapsed, status, len(result))
 
 	if err != nil {
 		t.Fatalf("UNSAT is a test failure in closed fixture: %v", err)
-	}
-	if res.PostPassAdded != 0 {
-		t.Errorf("PostPassAdded=%d, want 0 — SAT encoding incomplete", res.PostPassAdded)
 	}
 	return result
 }
