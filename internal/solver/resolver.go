@@ -140,17 +140,18 @@ func isBuildTimeDep(depType pkg.DepType) bool {
 }
 
 //nolint:gocyclo // Complexity inherent to Portage-compatible dependency resolution algorithm
-func (r *PortageResolver) collectDependencies(p *pkg.Package, allPackages map[string]*pkg.Package, allCandidates map[string][]*pkg.Package) error {
-	// Key by name:slot to allow multi-slot coexistence (e.g., python:3.12 + python:3.13)
-	slotKey := packageSlotKey(p)
-	if _, exists := allPackages[slotKey]; exists {
-		return nil // Already processed
+// collectDependencies is best-effort: it explores the search space for SAT.
+// Missing deps are logged, not fatal — SAT encoding determines satisfiability.
+func (r *PortageResolver) collectDependencies(p *pkg.Package, allPackages map[string]*pkg.Package, allCandidates map[string][]*pkg.Package) {
+	versionKey := p.Name + "@" + p.Version
+	if _, exists := allPackages[versionKey]; exists {
+		return // Already processed
 	}
 
 	// Check if this package is masked
 	if r.isMasked(p) {
 		logging.Debug("Skipping masked package: %s-%s", p.Name, p.Version)
-		return nil
+		return
 	}
 
 	// Check if this package is already installed
@@ -159,15 +160,15 @@ func (r *PortageResolver) collectDependencies(p *pkg.Package, allPackages map[st
 		// Package is installed and we're not doing a deep traversal.
 		// Still add to allPackages for SAT solving, but skip dependency collection.
 		copyPkg := *p
-		allPackages[slotKey] = &copyPkg
+		allPackages[versionKey] = &copyPkg
 		r.addCandidateVersions(p.Name, allCandidates)
 		logging.Debug("Package %s is installed, skipping dependency traversal (use --deep to include)", p.Name)
-		return nil
+		return
 	}
 
 	// Store a copy of the package
 	copyPkg := *p
-	allPackages[slotKey] = &copyPkg
+	allPackages[versionKey] = &copyPkg
 
 	// Load all candidate versions for this package into allCandidates
 	r.addCandidateVersions(p.Name, allCandidates)
@@ -191,20 +192,14 @@ func (r *PortageResolver) collectDependencies(p *pkg.Package, allPackages map[st
 			continue
 		}
 
-		// Load all candidate versions for this dependency
+		// Load ALL candidate versions and recursively explore each one's deps.
+		// SAT needs transitive deps of ALL candidates, not just the highest.
 		r.addCandidateVersions(dep.Name, allCandidates)
 
-		// Load best version for recursive dep traversal (we still need
-		// to collect transitive deps from the best candidate)
-		depPkg, err := r.loadDependencyPackage(dep)
-		if err != nil {
-			// OrGroupID==0 deps are required — parser doesn't set Required field
-			return fmt.Errorf("unsatisfiable: %s requires %s: %w", p.Name, dep.Name, err)
-		}
-
-		// Recursively collect dependencies — propagate errors
-		if err := r.collectDependencies(depPkg, allPackages, allCandidates); err != nil {
-			return fmt.Errorf("resolving deps of %s: %w", dep.Name, err)
+		if candidates, ok := allCandidates[dep.Name]; ok {
+			for _, candidate := range candidates {
+				r.collectDependencies(candidate, allPackages, allCandidates)
+			}
 		}
 	}
 
@@ -241,8 +236,6 @@ func (r *PortageResolver) collectDependencies(p *pkg.Package, allPackages map[st
 			}
 		}
 	}
-
-	return nil
 }
 
 // addCandidateVersions loads all versions of a package from the repository
@@ -331,21 +324,29 @@ func (r *PortageResolver) addPackageConstraints(adapter *GophersatAdapter, p *pk
 	}
 }
 
-// addRootConstraints adds constraints for root packages.
-// Root packages (user-requested atoms) get a unit clause for the specific
-// version selected by loadPackageFromAtom, which ensures deterministic
-// selection of the newest/best matching version.
+// addRootConstraints adds at-least-one constraints for root packages.
+// Uses ALL registered candidates, allowing SAT to backtrack to an older
+// version if the newest is unsatisfiable.
 func (r *PortageResolver) addRootConstraints(adapter *GophersatAdapter, rootPackages map[string]*pkg.Package) {
 	for _, p := range rootPackages {
-		key := p.Name + "@" + p.Version
-		varID := adapter.GetVarID(key)
-		if varID == 0 {
-			logging.Debug("Warning: root package %s not registered in SAT", key)
-			continue
+		var candidateVars []int
+		if versions, ok := adapter.packages[p.Name]; ok {
+			for _, v := range versions {
+				key := v.Name + "@" + v.Version
+				if varID := adapter.GetVarID(key); varID != 0 {
+					candidateVars = append(candidateVars, varID)
+				}
+			}
 		}
-		// Unit clause: this specific version must be selected
-		adapter.addClause([]int{varID})
-		logging.Debug("Added root unit clause for %s (varID=%d)", key, varID)
+		if len(candidateVars) == 0 {
+			if varID := adapter.GetVarID(p.Name + "@" + p.Version); varID != 0 {
+				candidateVars = []int{varID}
+			}
+		}
+		if len(candidateVars) > 0 {
+			adapter.addClause(candidateVars)
+			logging.Debug("Added root at-least-one for %s (%d candidates)", p.Name, len(candidateVars))
+		}
 	}
 }
 
@@ -455,8 +456,13 @@ func (r *PortageResolver) Resolve(packages []string) (map[string]*pkg.Package, e
 		logging.Debug("Resolving package: %s-%s with %d dependencies",
 			p.Name, p.Version, len(p.Deps))
 
-		if err := r.collectDependencies(p, allPackages, allCandidates); err != nil {
-			return nil, fmt.Errorf("dependency collection failed for %s: %w", p.Name, err)
+		// Best-effort collection: SAT determines satisfiability, not this phase.
+		// Load ALL candidate versions and explore each one's deps.
+		r.addCandidateVersions(p.Name, allCandidates)
+		if candidates, ok := allCandidates[p.Name]; ok {
+			for _, candidate := range candidates {
+				r.collectDependencies(candidate, allPackages, allCandidates)
+			}
 		}
 	}
 
@@ -594,32 +600,6 @@ func (r *PortageResolver) Resolve(packages []string) (map[string]*pkg.Package, e
 	}
 
 	return result, nil
-}
-
-// loadDependencyPackage loads the best package matching a dependency constraint.
-// For slot constraints, filters by matching slot. Otherwise delegates to loadUnmaskedPackage.
-func (r *PortageResolver) loadDependencyPackage(dep pkg.Constraint) (*pkg.Package, error) {
-	if dep.Slot != "" && dep.Type == pkg.ConstraintTypeSlot {
-		versions, err := r.repo.GetAllVersions(dep.Name)
-		if err != nil {
-			return nil, err
-		}
-		filtered := r.filterMaskedPackages(versions)
-		var slotMatches []*pkg.Package
-		for _, v := range filtered {
-			if v.Slot.Name == dep.Slot {
-				slotMatches = append(slotMatches, v)
-			}
-		}
-		if len(slotMatches) == 0 {
-			return nil, fmt.Errorf("no package %s in slot %s", dep.Name, dep.Slot)
-		}
-		sort.Slice(slotMatches, func(i, j int) bool {
-			return pkg.CompareVersions(slotMatches[i].Version, slotMatches[j].Version) > 0
-		})
-		return slotMatches[0], nil
-	}
-	return r.loadUnmaskedPackage(dep.Name)
 }
 
 // packageSlotKey returns a string key that distinguishes packages by slot.

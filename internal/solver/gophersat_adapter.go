@@ -380,10 +380,9 @@ func (g *GophersatAdapter) AddImplication(dependent int, providers []int) {
 func (g *GophersatAdapter) AddImplicationConstraint(dependentVarID int, c pkg.Constraint) error {
 	providers := g.findSatisfyingVars(c)
 	if len(providers) == 0 {
-		if c.Required {
-			return fmt.Errorf("unsatisfiable: no package provides %s", c.String())
-		}
-		logging.Debug("Warning: no package satisfies %s (non-required, skipping implication)", c.String())
+		// No provider → this candidate is unsatisfiable, prohibit it
+		g.addClause([]int{-dependentVarID})
+		logging.Debug("Prohibiting %d: no package provides %s", dependentVarID, c.String())
 		return nil
 	}
 	g.AddImplication(dependentVarID, providers)
