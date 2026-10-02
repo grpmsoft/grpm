@@ -141,7 +141,9 @@ func isBuildTimeDep(depType pkg.DepType) bool {
 
 //nolint:gocyclo // Complexity inherent to Portage-compatible dependency resolution algorithm
 func (r *PortageResolver) collectDependencies(p *pkg.Package, allPackages map[string]*pkg.Package) error {
-	if _, exists := allPackages[p.Name]; exists {
+	// Key by name:slot to allow multi-slot coexistence (e.g., python:3.12 + python:3.13)
+	slotKey := packageSlotKey(p)
+	if _, exists := allPackages[slotKey]; exists {
 		return nil // Already processed
 	}
 
@@ -157,14 +159,14 @@ func (r *PortageResolver) collectDependencies(p *pkg.Package, allPackages map[st
 		// Package is installed and we're not doing a deep traversal.
 		// Still add to allPackages for SAT solving, but skip dependency collection.
 		copyPkg := *p
-		allPackages[p.Name] = &copyPkg
+		allPackages[slotKey] = &copyPkg
 		logging.Debug("Package %s is installed, skipping dependency traversal (use --deep to include)", p.Name)
 		return nil
 	}
 
 	// Store a copy of the package
 	copyPkg := *p
-	allPackages[p.Name] = &copyPkg
+	allPackages[slotKey] = &copyPkg
 
 	// Group dependencies by OrGroupID
 	requiredDeps, orGroups := groupDependenciesByOrGroupID(p.Deps)
@@ -185,9 +187,12 @@ func (r *PortageResolver) collectDependencies(p *pkg.Package, allPackages map[st
 			continue
 		}
 
-		// Use loadUnmaskedPackage to get the best unmasked version
-		depPkg, err := r.loadUnmaskedPackage(dep.Name)
+		// Load best version matching the dependency constraint
+		depPkg, err := r.loadDependencyPackage(dep)
 		if err != nil {
+			if dep.Required {
+				return fmt.Errorf("unsatisfiable dependency: %s requires %s: %w", p.Name, dep.Name, err)
+			}
 			logging.Debug("Warning: dependency %s for %s not found: %v", dep.Name, p.Name, err)
 			continue
 		}
@@ -220,9 +225,10 @@ func (r *PortageResolver) collectDependencies(p *pkg.Package, allPackages map[st
 			// Add to allPackages so SAT solver has variables for it,
 			// but don't recurse into its deps (those would be required
 			// only if this alternative is chosen)
-			if _, exists := allPackages[altPkg.Name]; !exists {
+			altSlotKey := packageSlotKey(altPkg)
+			if _, exists := allPackages[altSlotKey]; !exists {
 				copyPkg := *altPkg
-				allPackages[altPkg.Name] = &copyPkg
+				allPackages[altSlotKey] = &copyPkg
 			}
 		}
 	}
@@ -282,19 +288,23 @@ func (r *PortageResolver) addPackageConstraints(adapter *GophersatAdapter, p *pk
 // The solution map contains package names as keys and selected versions as values.
 func (r *PortageResolver) buildResultFromSolution(solution map[string]string) (map[string]*pkg.Package, error) {
 	result := make(map[string]*pkg.Package)
-	for name, version := range solution {
+	for key, version := range solution {
+		// Parse package name from SAT variable key (name@version)
+		name := key
+		if idx := strings.Index(key, "@"); idx >= 0 {
+			name = key[:idx]
+		}
 		// Load the specific version that was selected by the SAT solver
 		p, err := r.repo.LoadPackageVersion(name, version)
 		if err != nil {
 			// Fallback to LoadPackage if LoadPackageVersion fails
-			// This handles cases where version might be empty
 			p, err = r.repo.LoadPackage(name)
 			if err != nil {
 				logging.Debug("Warning: package %s not found: %v", name, err)
 				continue
 			}
 		}
-		result[name] = p
+		result[packageSlotKey(p)] = p
 	}
 	return result, nil
 }
@@ -377,7 +387,7 @@ func (r *PortageResolver) Resolve(packages []string) (map[string]*pkg.Package, e
 			p.Name, p.Version, len(p.Deps))
 
 		if err := r.collectDependencies(p, allPackages); err != nil {
-			logging.Debug("Warning: %v", err)
+			return nil, fmt.Errorf("dependency collection failed for %s: %w", p.Name, err)
 		}
 	}
 
@@ -432,14 +442,15 @@ func (r *PortageResolver) Resolve(packages []string) (map[string]*pkg.Package, e
 
 			// Required deps
 			for _, dep := range requiredDeps {
-				if _, inResult := result[dep.Name]; inResult {
-					continue
-				}
 				depPkg, err := r.loadUnmaskedPackage(dep.Name)
 				if err != nil {
 					continue
 				}
-				result[dep.Name] = depPkg
+				depKey := packageSlotKey(depPkg)
+				if _, inResult := result[depKey]; inResult {
+					continue
+				}
+				result[depKey] = depPkg
 				added++
 			}
 
@@ -448,7 +459,11 @@ func (r *PortageResolver) Resolve(packages []string) (map[string]*pkg.Package, e
 				// Check if any alternative is already in result
 				satisfied := false
 				for _, alt := range alternatives {
-					if _, inResult := result[alt.Name]; inResult {
+					altPkg, altErr := r.loadUnmaskedPackage(alt.Name)
+					if altErr != nil {
+						continue
+					}
+					if _, inResult := result[packageSlotKey(altPkg)]; inResult {
 						satisfied = true
 						break
 					}
@@ -462,7 +477,7 @@ func (r *PortageResolver) Resolve(packages []string) (map[string]*pkg.Package, e
 					if err != nil {
 						continue
 					}
-					result[alt.Name] = altPkg
+					result[packageSlotKey(altPkg)] = altPkg
 					added++
 					break // Take first available
 				}
@@ -476,11 +491,46 @@ func (r *PortageResolver) Resolve(packages []string) (map[string]*pkg.Package, e
 
 	// Output formatted package list
 	logging.Info("Resolved packages:")
-	for name, p := range result {
-		logging.Debug("- %s-%s [slot:%s]", name, p.Version, p.Slot.Name)
+	for key, p := range result {
+		logging.Debug("- %s-%s [slot:%s key:%s]", p.Name, p.Version, p.Slot.Name, key)
 	}
 
 	return result, nil
+}
+
+// loadDependencyPackage loads the best package matching a dependency constraint.
+// For slot constraints, filters by matching slot. Otherwise delegates to loadUnmaskedPackage.
+func (r *PortageResolver) loadDependencyPackage(dep pkg.Constraint) (*pkg.Package, error) {
+	if dep.Slot != "" && dep.Type == pkg.ConstraintTypeSlot {
+		versions, err := r.repo.GetAllVersions(dep.Name)
+		if err != nil {
+			return nil, err
+		}
+		filtered := r.filterMaskedPackages(versions)
+		var slotMatches []*pkg.Package
+		for _, v := range filtered {
+			if v.Slot.Name == dep.Slot {
+				slotMatches = append(slotMatches, v)
+			}
+		}
+		if len(slotMatches) == 0 {
+			return nil, fmt.Errorf("no package %s in slot %s", dep.Name, dep.Slot)
+		}
+		sort.Slice(slotMatches, func(i, j int) bool {
+			return pkg.CompareVersions(slotMatches[i].Version, slotMatches[j].Version) > 0
+		})
+		return slotMatches[0], nil
+	}
+	return r.loadUnmaskedPackage(dep.Name)
+}
+
+// packageSlotKey returns a string key that distinguishes packages by slot.
+// Packages in different slots can coexist (e.g., python:3.12 and python:3.13).
+func packageSlotKey(p *pkg.Package) string {
+	if p.Slot.Name != "" && p.Slot.Name != "0" {
+		return p.Name + ":" + p.Slot.Name
+	}
+	return p.Name
 }
 
 func contains(slice []string, item string) bool {

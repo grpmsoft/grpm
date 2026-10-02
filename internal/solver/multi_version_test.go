@@ -85,14 +85,23 @@ func TestMultiVersionSAT_MultiSlotCoexist(t *testing.T) {
 	r.addVersion(pkg.NewPackage("dev-lang/python", "3.12.7", "3.12"))
 	r.addVersion(pkg.NewPackage("dev-lang/python", "3.13.1", "3.13"))
 
-	// App requires both python:3.12 AND python:3.13
+	// App requires both python:3.12 AND python:3.13 (separate slot deps)
 	app := pkg.NewPackage("app-misc/myapp", "1.0", "0")
 	app.Deps = []pkg.Constraint{
-		{Name: "dev-lang/python", Type: pkg.ConstraintTypeVersion},
+		{Name: "dev-lang/python", Slot: "3.12", Type: pkg.ConstraintTypeSlot},
+		{Name: "dev-lang/python", Slot: "3.13", Type: pkg.ConstraintTypeSlot},
 	}
 	r.addVersion(app)
 
 	resolver := NewResolver(r)
+
+	// Verify repo returns both versions
+	allVersions, _ := r.GetAllVersions("dev-lang/python")
+	t.Logf("repo has %d python versions:", len(allVersions))
+	for _, v := range allVersions {
+		t.Logf("  %s-%s slot=%s", v.Name, v.Version, v.Slot.Name)
+	}
+
 	result, err := resolver.Resolve([]string{"app-misc/myapp"})
 	if err != nil {
 		t.Fatalf("Resolve failed: %v", err)
@@ -115,8 +124,13 @@ func TestMultiVersionSAT_MultiSlotCoexist(t *testing.T) {
 	}
 
 	if !has312 || !has313 {
-		t.Errorf("expected both python:3.12 and python:3.13 in result, got312=%v got313=%v, result=%v",
-			has312, has313, slotResult)
+		// Debug: dump raw string-keyed result
+		t.Logf("raw result keys:")
+		for k, p := range result {
+			t.Logf("  key=%q → %s-%s slot=%s", k, p.Name, p.Version, p.Slot.Name)
+		}
+		t.Errorf("expected both python:3.12 and python:3.13 in result, got312=%v got313=%v",
+			has312, has313)
 	}
 }
 

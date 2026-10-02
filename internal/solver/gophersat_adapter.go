@@ -193,7 +193,10 @@ func (g *GophersatAdapter) addVersionConstraint(c pkg.Constraint) error {
 	}
 
 	if len(satisfiedVars) == 0 {
-		logging.Debug("Warning: no package satisfies %s %s", c.Name, c.Version.String())
+		if c.Required {
+			return fmt.Errorf("unsatisfiable: no package provides %s %s", c.Name, c.Version.String())
+		}
+		logging.Debug("Warning: no package satisfies %s %s (non-required, skipping)", c.Name, c.Version.String())
 		return nil
 	}
 
@@ -246,23 +249,23 @@ func (g *GophersatAdapter) AddExactlyOneConstraint(pkgName string, versions []st
 }
 
 func (g *GophersatAdapter) addSlotConstraint(c pkg.Constraint) error {
-	// Find all packages with the specified slot
+	// Find all packages matching name AND slot
 	var slotVars []int
 	for _, pkgList := range g.packages {
 		for _, p := range pkgList {
-			if p.Slot.Name == c.Slot {
+			if p.Name == c.Name && p.Slot.Name == c.Slot {
 				key := p.Name + "@" + p.Version
-				varID := g.vars[key]
+				varID := g.getVarID(key)
 				slotVars = append(slotVars, varID)
 			}
 		}
 	}
 
 	if len(slotVars) == 0 {
-		return fmt.Errorf("no package provides slot %s", c.Slot)
+		return fmt.Errorf("no package %s provides slot %s", c.Name, c.Slot)
 	}
 
-	// Add clause: at least one package in the slot must be installed
+	// Add clause: at least one package in this slot must be installed
 	g.addClause(slotVars)
 	return nil
 }
@@ -335,11 +338,13 @@ func (g *GophersatAdapter) Solve() (pkg.Status, map[string]string, error) {
 		model := s.Model()
 
 		// Iterate over all registered variables
+		// Key by name@version to support multi-slot (same name, different slots)
 		for key, varID := range g.vars {
 			if varID <= len(model) && model[varID-1] {
 				parts := strings.Split(key, "@")
 				if len(parts) == 2 {
-					solution[parts[0]] = parts[1]
+					// Use full key (name@version) to avoid multi-slot overwrites
+					solution[key] = parts[1]
 				}
 			}
 		}
