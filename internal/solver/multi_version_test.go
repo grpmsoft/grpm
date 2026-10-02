@@ -811,3 +811,70 @@ func TestFix_RootBacktracksOnConflict(t *testing.T) {
 		t.Errorf("expected v1.0 (backtracked from unsatisfiable v2), got %s", p.Version)
 	}
 }
+
+// OR-group alternatives must have their deps explored so SAT can build
+// implication clauses. Without exploration, prohibit clause kills all alternatives.
+func TestFix_ORGroupDepsExplored(t *testing.T) {
+	r := newMultiVersionRepo()
+
+	// x and y are transitive deps of OR alternatives
+	x := pkg.NewPackage("dev-libs/x", "1.0", "0")
+	y := pkg.NewPackage("dev-libs/y", "1.0", "0")
+	r.addVersion(x)
+	r.addVersion(y)
+
+	// OR alternative a depends on x
+	a := pkg.NewPackage("dev-libs/a", "1.0", "0")
+	a.Deps = []pkg.Constraint{{Name: "dev-libs/x", Type: pkg.ConstraintTypeVersion}}
+	r.addVersion(a)
+
+	// OR alternative b depends on y
+	b := pkg.NewPackage("dev-libs/b", "1.0", "0")
+	b.Deps = []pkg.Constraint{{Name: "dev-libs/y", Type: pkg.ConstraintTypeVersion}}
+	r.addVersion(b)
+
+	// app depends on || ( a b )
+	app := pkg.NewPackage("app-misc/orapp", "1.0", "0")
+	app.Deps = []pkg.Constraint{
+		{Name: "dev-libs/a", Type: pkg.ConstraintTypeVersion, OrGroupID: 1},
+		{Name: "dev-libs/b", Type: pkg.ConstraintTypeVersion, OrGroupID: 1},
+	}
+	r.addVersion(app)
+
+	resolver := NewResolver(r)
+	result, err := resolver.Resolve([]string{"app-misc/orapp"})
+	if err != nil {
+		t.Fatalf("Resolve should succeed for OR-group with valid alternatives, got: %v", err)
+	}
+
+	slotResult := toSlotKeyMap(result)
+
+	// App must be in result
+	appKey := pkg.SlotKey{Name: "app-misc/orapp", Slot: "0"}
+	if _, ok := slotResult[appKey]; !ok {
+		t.Fatal("expected orapp in result")
+	}
+
+	// At least one of a or b must be in result (SAT picks one)
+	aKey := pkg.SlotKey{Name: "dev-libs/a", Slot: "0"}
+	bKey := pkg.SlotKey{Name: "dev-libs/b", Slot: "0"}
+	_, hasA := slotResult[aKey]
+	_, hasB := slotResult[bKey]
+	if !hasA && !hasB {
+		t.Error("expected at least one of a or b in result (OR-group)")
+	}
+
+	// Selected alternative's transitive dep must be present
+	if hasA {
+		xKey := pkg.SlotKey{Name: "dev-libs/x", Slot: "0"}
+		if _, ok := slotResult[xKey]; !ok {
+			t.Error("a selected but its dep x missing — OR deps not explored")
+		}
+	}
+	if hasB {
+		yKey := pkg.SlotKey{Name: "dev-libs/y", Slot: "0"}
+		if _, ok := slotResult[yKey]; !ok {
+			t.Error("b selected but its dep y missing — OR deps not explored")
+		}
+	}
+}

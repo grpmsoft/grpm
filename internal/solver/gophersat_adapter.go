@@ -401,7 +401,9 @@ func (g *GophersatAdapter) AddImplicationSlotConstraint(dependentVarID int, c pk
 		}
 	}
 	if len(slotVars) == 0 {
-		return fmt.Errorf("no package %s provides slot %s", c.Name, c.Slot)
+		g.addClause([]int{-dependentVarID})
+		logging.Debug("Prohibiting %d: no package %s in slot %s", dependentVarID, c.Name, c.Slot)
+		return nil
 	}
 	g.AddImplication(dependentVarID, slotVars)
 	return nil
@@ -429,7 +431,9 @@ func (g *GophersatAdapter) AddImplicationOrGroup(dependentVarID int, alternative
 		}
 	}
 	if len(allSatisfyingVars) == 0 {
-		return fmt.Errorf("no packages satisfy OR-group alternatives")
+		g.addClause([]int{-dependentVarID})
+		logging.Debug("Prohibiting %d: no packages satisfy OR-group", dependentVarID)
+		return nil
 	}
 	g.AddImplication(dependentVarID, allSatisfyingVars)
 	return nil

@@ -218,21 +218,14 @@ func (r *PortageResolver) collectDependencies(p *pkg.Package, allPackages map[st
 				continue
 			}
 
-			// Load all candidate versions for this alternative
+			// Load ALL candidate versions and explore deps (same as required deps).
+			// With implication clauses, SAT handles "only if chosen" — we must
+			// explore so SAT has the transitive dep vars to build implications.
 			r.addCandidateVersions(alt.Name, allCandidates)
-
-			altPkg, err := r.loadUnmaskedPackage(alt.Name)
-			if err != nil {
-				logging.Debug("Warning: OR-alternative %s not found or masked: %v", alt.Name, err)
-				continue
-			}
-			// Add to allPackages so SAT solver has variables for it,
-			// but don't recurse into its deps (those would be required
-			// only if this alternative is chosen)
-			altSlotKey := packageSlotKey(altPkg)
-			if _, exists := allPackages[altSlotKey]; !exists {
-				copyPkg := *altPkg
-				allPackages[altSlotKey] = &copyPkg
+			if candidates, ok := allCandidates[alt.Name]; ok {
+				for _, candidate := range candidates {
+					r.collectDependencies(candidate, allPackages, allCandidates)
+				}
 			}
 		}
 	}
