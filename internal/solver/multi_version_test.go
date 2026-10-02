@@ -3,6 +3,7 @@ package solver
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/grpmsoft/grpm/internal/pkg"
@@ -1040,5 +1041,415 @@ func TestFix_VersionedSlotOperatorResolves(t *testing.T) {
 	}
 	if pkg.CompareVersions(p.Version, "3.0") < 0 {
 		t.Errorf("expected openssl >= 3.0, got %s", p.Version)
+	}
+}
+
+// --- Tests for UNSAT Explainer ---
+
+func TestExplainWhyUNSAT_MissingDep(t *testing.T) {
+	r := newMultiVersionRepo()
+
+	app := pkg.NewPackage("app-misc/broken", "1.0", "0")
+	app.Deps = []pkg.Constraint{
+		{Name: "dev-libs/nonexistent", Type: pkg.ConstraintTypeVersion},
+	}
+	r.addVersion(app)
+
+	resolver := NewResolver(r)
+	_, err := resolver.Resolve([]string{"app-misc/broken"})
+	if err == nil {
+		t.Fatal("expected UNSAT error")
+	}
+	if !strings.Contains(err.Error(), "UNSAT") {
+		t.Errorf("error should mention UNSAT, got: %s", err.Error())
+	}
+}
+
+func TestExplainWhyUNSAT_ProhibitChain(t *testing.T) {
+	adapter := NewGophersatAdapter()
+
+	a := pkg.NewPackage("app/a", "1.0", "0")
+	b := pkg.NewPackage("dev-libs/b", "1.0", "0")
+	adapter.AddPackage(a)
+	adapter.AddPackage(b)
+
+	aID := adapter.GetVarID("app/a@1.0")
+	bID := adapter.GetVarID("dev-libs/b@1.0")
+
+	// Root: a must be selected
+	adapter.withMeta(ClauseRoot, "root: app/a")
+	adapter.addClause([]int{aID})
+	adapter.addRootVars([]int{aID})
+
+	// a → b (implication)
+	adapter.AddImplication(aID, []int{bID})
+
+	// b is prohibited
+	reason := "no provider for dev-libs/missing (needed by dev-libs/b@1.0)"
+	adapter.withMeta(ClauseProhibit, reason)
+	adapter.addClause([]int{-bID})
+	adapter.prohibits[bID] = reason
+
+	result := adapter.ExplainWhyUNSAT()
+	joined := strings.Join(result.Lines, "\n")
+
+	// Must show the chain: a → b → prohibit
+	if !strings.Contains(joined, "app/a@1.0") {
+		t.Errorf("should contain root package name, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "dev-libs/b") {
+		t.Errorf("should contain dependency package name, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "no provider") {
+		t.Errorf("should contain prohibit reason, got:\n%s", joined)
+	}
+	// Core size must be small (chain, not full dump)
+	if result.CoreSize > 10 {
+		t.Errorf("core size should be small chain, got %d", result.CoreSize)
+	}
+}
+
+func TestExplainWhyUNSAT_MultiVersionAllDead(t *testing.T) {
+	adapter := NewGophersatAdapter()
+
+	root := pkg.NewPackage("app/root", "1.0", "0")
+	libV1 := pkg.NewPackage("dev-libs/lib", "1.0", "0")
+	libV2 := pkg.NewPackage("dev-libs/lib", "2.0", "0")
+	adapter.AddPackage(root)
+	adapter.AddPackage(libV1)
+	adapter.AddPackage(libV2)
+
+	rootID := adapter.GetVarID("app/root@1.0")
+	v1ID := adapter.GetVarID("dev-libs/lib@1.0")
+	v2ID := adapter.GetVarID("dev-libs/lib@2.0")
+
+	adapter.withMeta(ClauseRoot, "root")
+	adapter.addClause([]int{rootID})
+	adapter.addRootVars([]int{rootID})
+
+	// root → lib (either version)
+	adapter.AddImplication(rootID, []int{v1ID, v2ID})
+
+	// Both versions prohibited
+	adapter.withMeta(ClauseProhibit, "v1: no provider for ghost")
+	adapter.addClause([]int{-v1ID})
+	adapter.prohibits[v1ID] = "no provider for ghost"
+
+	adapter.withMeta(ClauseProhibit, "v2: no provider for phantom")
+	adapter.addClause([]int{-v2ID})
+	adapter.prohibits[v2ID] = "no provider for phantom"
+
+	result := adapter.ExplainWhyUNSAT()
+	joined := strings.Join(result.Lines, "\n")
+
+	if !strings.Contains(joined, "all 2 versions impossible") {
+		t.Errorf("should group versions, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "ghost") || !strings.Contains(joined, "phantom") {
+		t.Errorf("should show per-version reasons, got:\n%s", joined)
+	}
+}
+
+func TestExplainWhyUNSAT_CoreSmallerThanTotal(t *testing.T) {
+	// Simulate a problem with many clauses but a short UNSAT chain.
+	// The graph explainer should report only the relevant chain.
+	adapter := NewGophersatAdapter()
+
+	root := pkg.NewPackage("app/root", "1.0", "0")
+	adapter.AddPackage(root)
+	rootID := adapter.GetVarID("app/root@1.0")
+	adapter.withMeta(ClauseRoot, "root")
+	adapter.addClause([]int{rootID})
+	adapter.addRootVars([]int{rootID})
+
+	// Create a chain: root → mid → leaf (prohibited)
+	mid := pkg.NewPackage("dev-libs/mid", "1.0", "0")
+	leaf := pkg.NewPackage("dev-libs/leaf", "1.0", "0")
+	adapter.AddPackage(mid)
+	adapter.AddPackage(leaf)
+	midID := adapter.GetVarID("dev-libs/mid@1.0")
+	leafID := adapter.GetVarID("dev-libs/leaf@1.0")
+
+	adapter.AddImplication(rootID, []int{midID})
+	adapter.AddImplication(midID, []int{leafID})
+	adapter.withMeta(ClauseProhibit, "no provider for ghost")
+	adapter.addClause([]int{-leafID})
+	adapter.prohibits[leafID] = "no provider for ghost"
+
+	// Add many unrelated satisfiable packages (noise)
+	for i := range 50 {
+		p := pkg.NewPackage(fmt.Sprintf("dev-libs/noise%d", i), "1.0", "0")
+		adapter.AddPackage(p)
+		pID := adapter.GetVarID(fmt.Sprintf("dev-libs/noise%d@1.0", i))
+		adapter.AddImplication(rootID, []int{pID})
+	}
+	// Add pairwise at-most-one noise
+	adapter.AddAtMostOnePerSlot()
+
+	totalClauses := len(adapter.clauses)
+	result := adapter.ExplainWhyUNSAT()
+
+	// Core must be MUCH smaller than total — the chain is 3 nodes, not 50+ noise packages
+	if result.CoreSize >= totalClauses/10 {
+		t.Errorf("core size %d should be < total/10 (%d), explanation is not focused:\n%s",
+			result.CoreSize, totalClauses/10, strings.Join(result.Lines, "\n"))
+	}
+	if result.CoreSize == 0 {
+		t.Errorf("core size should be > 0, got 0:\n%s", strings.Join(result.Lines, "\n"))
+	}
+}
+
+func TestExplainWhyUNSAT_DedupSeeAbove(t *testing.T) {
+	// Two ROOT packages both need the same impossible leaf via different mid-nodes.
+	// The leaf's full explanation must appear once; second reference says "(see above)".
+	adapter := NewGophersatAdapter()
+
+	rootA := pkg.NewPackage("app/a", "1.0", "0")
+	rootB := pkg.NewPackage("app/b", "1.0", "0")
+	shared := pkg.NewPackage("dev-libs/shared", "1.0", "0")
+	adapter.AddPackage(rootA)
+	adapter.AddPackage(rootB)
+	adapter.AddPackage(shared)
+
+	aID := adapter.GetVarID("app/a@1.0")
+	bID := adapter.GetVarID("app/b@1.0")
+	sharedID := adapter.GetVarID("dev-libs/shared@1.0")
+
+	// Both are roots
+	adapter.withMeta(ClauseRoot, "root a")
+	adapter.addClause([]int{aID})
+	adapter.addRootVars([]int{aID})
+	adapter.withMeta(ClauseRoot, "root b")
+	adapter.addClause([]int{bID})
+	adapter.addRootVars([]int{bID})
+
+	// Both depend on shared
+	adapter.AddImplication(aID, []int{sharedID})
+	adapter.AddImplication(bID, []int{sharedID})
+
+	// shared is prohibited
+	adapter.withMeta(ClauseProhibit, "no provider for ghost")
+	adapter.addClause([]int{-sharedID})
+	adapter.prohibits[sharedID] = "no provider for ghost"
+
+	result := adapter.ExplainWhyUNSAT()
+	joined := strings.Join(result.Lines, "\n")
+
+	// "shared" full reason must appear once; second root path gets "(see above)"
+	fullCount := strings.Count(joined, "dev-libs/shared@1.0: no provider")
+	seeAboveCount := strings.Count(joined, "dev-libs/shared@1.0  (see above)")
+
+	if fullCount != 1 {
+		t.Errorf("shared full explanation should appear exactly once, got %d:\n%s", fullCount, joined)
+	}
+	if seeAboveCount != 1 {
+		t.Errorf("shared should have exactly one '(see above)' reference, got %d:\n%s", seeAboveCount, joined)
+	}
+}
+
+func TestExplainWhyUNSAT_TopDownOrder(t *testing.T) {
+	adapter := NewGophersatAdapter()
+
+	root := pkg.NewPackage("app/root", "1.0", "0")
+	mid := pkg.NewPackage("dev-libs/mid", "1.0", "0")
+	leaf := pkg.NewPackage("dev-libs/leaf", "1.0", "0")
+	adapter.AddPackage(root)
+	adapter.AddPackage(mid)
+	adapter.AddPackage(leaf)
+
+	rootID := adapter.GetVarID("app/root@1.0")
+	midID := adapter.GetVarID("dev-libs/mid@1.0")
+	leafID := adapter.GetVarID("dev-libs/leaf@1.0")
+
+	adapter.withMeta(ClauseRoot, "root")
+	adapter.addClause([]int{rootID})
+	adapter.addRootVars([]int{rootID})
+
+	adapter.AddImplication(rootID, []int{midID})
+	adapter.AddImplication(midID, []int{leafID})
+	adapter.withMeta(ClauseProhibit, "no provider for ghost")
+	adapter.addClause([]int{-leafID})
+	adapter.prohibits[leafID] = "no provider for ghost"
+
+	result := adapter.ExplainWhyUNSAT()
+	joined := strings.Join(result.Lines, "\n")
+
+	// Root must appear BEFORE mid, mid BEFORE leaf (top-down order)
+	rootPos := strings.Index(joined, "app/root@1.0")
+	midPos := strings.Index(joined, "dev-libs/mid@1.0")
+	leafPos := strings.Index(joined, "dev-libs/leaf@1.0")
+
+	if rootPos == -1 || midPos == -1 || leafPos == -1 {
+		t.Fatalf("all three nodes must appear in output:\n%s", joined)
+	}
+	if rootPos >= midPos || midPos >= leafPos {
+		t.Errorf("order should be root < mid < leaf (top-down), got positions %d, %d, %d:\n%s",
+			rootPos, midPos, leafPos, joined)
+	}
+}
+
+func TestExplainWhyUNSAT_ConsistentNotation(t *testing.T) {
+	adapter := NewGophersatAdapter()
+
+	root := pkg.NewPackage("app/root", "1.0", "0")
+	dep := pkg.NewPackage("dev-libs/dep", "2.0", "0")
+	adapter.AddPackage(root)
+	adapter.AddPackage(dep)
+
+	rootID := adapter.GetVarID("app/root@1.0")
+	depID := adapter.GetVarID("dev-libs/dep@2.0")
+
+	adapter.withMeta(ClauseRoot, "root")
+	adapter.addClause([]int{rootID})
+	adapter.addRootVars([]int{rootID})
+
+	adapter.AddImplication(rootID, []int{depID})
+	adapter.withMeta(ClauseProhibit, "no provider for ghost")
+	adapter.addClause([]int{-depID})
+	adapter.prohibits[depID] = "no provider for ghost"
+
+	result := adapter.ExplainWhyUNSAT()
+	joined := strings.Join(result.Lines, "\n")
+
+	// Must use name@version notation consistently, never name/version
+	if strings.Contains(joined, "dev-libs/dep/2.0") {
+		t.Errorf("should use @ notation, not /, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "dev-libs/dep@2.0") {
+		t.Errorf("should contain dev-libs/dep@2.0, got:\n%s", joined)
+	}
+}
+
+func TestExplainWhyUNSAT_CycleDoesNotFalsifyChain(t *testing.T) {
+	// a→b, b→a (cycle), a→x, x prohibited.
+	// a is dead via x, NOT via the cycle. Chain: a → x: no provider.
+	// The cycle must NOT appear in the output.
+	adapter := NewGophersatAdapter()
+
+	a := pkg.NewPackage("app/a", "1.0", "0")
+	b := pkg.NewPackage("app/b", "1.0", "0")
+	x := pkg.NewPackage("dev-libs/x", "1.0", "0")
+	adapter.AddPackage(a)
+	adapter.AddPackage(b)
+	adapter.AddPackage(x)
+
+	aID := adapter.GetVarID("app/a@1.0")
+	bID := adapter.GetVarID("app/b@1.0")
+	xID := adapter.GetVarID("dev-libs/x@1.0")
+
+	adapter.withMeta(ClauseRoot, "root a")
+	adapter.addClause([]int{aID})
+	adapter.addRootVars([]int{aID})
+
+	// a→b, b→a (mutual cycle)
+	adapter.AddImplication(aID, []int{bID})
+	adapter.AddImplication(bID, []int{aID})
+
+	// a→x, x prohibited
+	adapter.AddImplication(aID, []int{xID})
+	adapter.withMeta(ClauseProhibit, "no provider for ghost")
+	adapter.addClause([]int{-xID})
+	adapter.prohibits[xID] = "no provider for ghost"
+
+	result := adapter.ExplainWhyUNSAT()
+	joined := strings.Join(result.Lines, "\n")
+
+	// Must contain the real root cause
+	if !strings.Contains(joined, "no provider for ghost") {
+		t.Errorf("must contain prohibit reason 'no provider for ghost', got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "dev-libs/x@1.0") {
+		t.Errorf("must contain prohibited node dev-libs/x@1.0, got:\n%s", joined)
+	}
+
+	// The cycle edge (b→a) must NOT cause a false chain through b
+	// b should not be in the chain at all — it's not dead (cycle doesn't kill)
+	if strings.Contains(joined, "app/b@1.0") {
+		// b might appear if it's dead via x→a propagation, but must not show "(see above)" loop
+		if strings.Count(joined, "(see above)") > 0 {
+			// Verify "(see above)" doesn't reference a in a cycle-caused chain
+			lines := result.Lines
+			for _, line := range lines {
+				if strings.Contains(line, "app/a@1.0  (see above)") {
+					t.Errorf("cycle should not cause '(see above)' on root node a:\n%s", joined)
+				}
+			}
+		}
+	}
+}
+
+func TestExplainWhyUNSAT_ProhibitReasonPresent(t *testing.T) {
+	// Regression guard: the "no provider" string from the actual prohibit
+	// must always appear in the output. On the libxcrypt UNSAT this was
+	// "backports-tarfile" — the depth cap at 8 cut it off.
+	adapter := NewGophersatAdapter()
+
+	root := pkg.NewPackage("app/root", "1.0", "0")
+	adapter.AddPackage(root)
+	rootID := adapter.GetVarID("app/root@1.0")
+	adapter.withMeta(ClauseRoot, "root")
+	adapter.addClause([]int{rootID})
+	adapter.addRootVars([]int{rootID})
+
+	// Build a chain of depth 12: root → n1 → n2 → ... → n11 → leaf (prohibited)
+	prevID := rootID
+	for i := range 11 {
+		p := pkg.NewPackage(fmt.Sprintf("dev-libs/n%d", i), "1.0", "0")
+		adapter.AddPackage(p)
+		pID := adapter.GetVarID(fmt.Sprintf("dev-libs/n%d@1.0", i))
+		adapter.AddImplication(prevID, []int{pID})
+		prevID = pID
+	}
+
+	leaf := pkg.NewPackage("dev-libs/leaf", "1.0", "0")
+	adapter.AddPackage(leaf)
+	leafID := adapter.GetVarID("dev-libs/leaf@1.0")
+	adapter.AddImplication(prevID, []int{leafID})
+
+	reason := "no provider for backports-tarfile (needed by dev-libs/leaf@1.0)"
+	adapter.withMeta(ClauseProhibit, reason)
+	adapter.addClause([]int{-leafID})
+	adapter.prohibits[leafID] = reason
+
+	result := adapter.ExplainWhyUNSAT()
+	joined := strings.Join(result.Lines, "\n")
+
+	// The leaf prohibit at depth 12 must appear — no depth cap
+	if !strings.Contains(joined, "backports-tarfile") {
+		t.Errorf("must contain prohibit root cause 'backports-tarfile' at depth 12, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "no provider") {
+		t.Errorf("must contain at least one 'no provider' line, got:\n%s", joined)
+	}
+}
+
+func TestExplainUNSATGeneric_AtMostOneConflict(t *testing.T) {
+	adapter := NewGophersatAdapter()
+
+	a := pkg.NewPackage("app/a", "1.0", "0")
+	b := pkg.NewPackage("app/b", "1.0", "0")
+	adapter.AddPackage(a)
+	adapter.AddPackage(b)
+
+	aID := adapter.GetVarID("app/a@1.0")
+	bID := adapter.GetVarID("app/b@1.0")
+
+	adapter.withMeta(ClauseRoot, "root: app/a")
+	adapter.addClause([]int{aID})
+	adapter.withMeta(ClauseRoot, "root: app/b")
+	adapter.addClause([]int{bID})
+	adapter.withMeta(ClauseAtMostOne, "conflict")
+	adapter.addClause([]int{-aID, -bID})
+
+	status, _, _ := adapter.Solve()
+	if status != pkg.StatusUnsat {
+		t.Fatal("expected UNSAT")
+	}
+
+	// Generic explainer still works for at-most-one conflicts
+	lines := adapter.ExplainUNSATGeneric()
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "UNSAT core (generic)") {
+		t.Errorf("should have generic header, got:\n%s", joined)
 	}
 }
