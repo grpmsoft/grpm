@@ -900,8 +900,18 @@ func (r *PortageResolver) warnUnexpectedUpgrades(result ResolveResult, adapter *
 			logging.Warn("Dep %s upgraded to %s instead of keeping %s: %s",
 				entry.Package.Name, entry.Package.Version, installed.Version, reason)
 		} else {
-			logging.Warn("Dep %s upgraded to %s (installed %s not prohibited — weight preference?)",
-				entry.Package.Name, entry.Package.Version, installed.Version)
+			// Find implications where installed var is NOT a provider but newer is
+			installedMissing := adapter.FindImplicationsMissingVar(installedVarID, entry.Package.Name)
+			if len(installedMissing) > 0 {
+				logging.Warn("Dep %s upgraded to %s — installed %s excluded from implications:",
+					entry.Package.Name, entry.Package.Version, installed.Version)
+				for _, reason := range installedMissing {
+					logging.Warn("  %s", reason)
+				}
+			} else {
+				logging.Warn("Dep %s upgraded to %s (installed %s not prohibited, not excluded — MAX-SAT weight)",
+					entry.Package.Name, entry.Package.Version, installed.Version)
+			}
 		}
 	}
 }

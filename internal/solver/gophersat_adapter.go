@@ -883,6 +883,35 @@ func (g *GophersatAdapter) Clone() *GophersatAdapter {
 	return clone
 }
 
+// FindImplicationsMissingVar finds implications where a specific varID is NOT
+// in the provider list but other vars for the same package name ARE.
+// This diagnoses why MAX-SAT skips the installed version.
+func (g *GophersatAdapter) FindImplicationsMissingVar(targetVarID int, pkgName string) []string {
+	var reasons []string
+	for depVarID, edges := range g.implications {
+		for _, edge := range edges {
+			hasTarget := false
+			hasOtherSamePkg := false
+			for _, prov := range edge.providers {
+				if prov == targetVarID {
+					hasTarget = true
+				}
+				if name := g.packageNameOf(prov); name == pkgName && prov != targetVarID {
+					hasOtherSamePkg = true
+				}
+			}
+			if !hasTarget && hasOtherSamePkg {
+				depName := g.varNames[depVarID]
+				reasons = append(reasons, fmt.Sprintf("%s needs %s but installed version not in providers (USE-dep or version mismatch?)", depName, pkgName))
+				if len(reasons) >= 3 {
+					return reasons
+				}
+			}
+		}
+	}
+	return reasons
+}
+
 // IsVarInstalled returns true if the given SAT variable represents an installed package.
 func (g *GophersatAdapter) IsVarInstalled(varID int) bool {
 	return g.installed[varID]
