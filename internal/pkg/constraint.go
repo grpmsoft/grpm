@@ -102,6 +102,22 @@ type Constraint struct {
 	// flag(-) = assume disabled if absent. If a flag has no default and is absent
 	// from IUSE, the check fails.
 	UseDefault map[string]bool
+
+	// UseEqual lists flags where provider must match dependent's state.
+	// PMS 8.2.6.4: [flag=] — if dependent has flag on, provider must too; if off, off.
+	UseEqual []string
+
+	// UseEqualInverse lists flags where provider must be opposite of dependent.
+	// PMS 8.2.6.4: [!flag=] — provider.flag = !dependent.flag.
+	UseEqualInverse []string
+
+	// UseConditionalIf lists flags where: if dependent has flag on, provider must too.
+	// PMS 8.2.6.4: [flag?] — "if I have it, you must too".
+	UseConditionalIf []string
+
+	// UseConditionalUnless lists flags where: if dependent has flag off, provider must have off.
+	// PMS 8.2.6.4: [!flag?] — "if I don't have it, you must not either".
+	UseConditionalUnless []string
 }
 
 func (c Constraint) String() string {
@@ -113,38 +129,82 @@ func (c Constraint) String() string {
 
 // HasUseDeps returns true if this constraint requires or blocks USE flags on the provider.
 func (c Constraint) HasUseDeps() bool {
-	return len(c.UseRequire) > 0 || len(c.UseBlock) > 0
+	return len(c.UseRequire) > 0 || len(c.UseBlock) > 0 ||
+		len(c.UseEqual) > 0 || len(c.UseEqualInverse) > 0 ||
+		len(c.UseConditionalIf) > 0 || len(c.UseConditionalUnless) > 0
 }
 
 // PackageSatisfiesUseDeps checks whether a package's effective USE flags satisfy
 // the USE dependency requirements on this constraint.
-// Returns true if all required flags are enabled and all blocked flags are disabled.
-// When a flag is absent from useFlags (not in IUSE), UseDefault is consulted:
-// flag(+) → treat as enabled, flag(-) → treat as disabled. Without default → fails.
-func (c Constraint) PackageSatisfiesUseDeps(useFlags map[string]bool) bool {
+// providerUSE: effective USE flags of the candidate provider.
+// dependentUSE: effective USE flags of the package declaring this dep (may be nil
+// if conditional forms are not used).
+func (c Constraint) PackageSatisfiesUseDeps(providerUSE map[string]bool, dependentUSE ...map[string]bool) bool {
+	var depUSE map[string]bool
+	if len(dependentUSE) > 0 {
+		depUSE = dependentUSE[0]
+	}
+
 	for _, flag := range c.UseRequire {
-		enabled, declared := useFlags[flag]
-		if !declared {
-			if dflt, hasDefault := c.UseDefault[flag]; hasDefault {
-				enabled = dflt
-			}
-		}
-		if !enabled {
+		if !c.flagEnabled(flag, providerUSE) {
 			return false
 		}
 	}
 	for _, flag := range c.UseBlock {
-		enabled, declared := useFlags[flag]
-		if !declared {
-			if dflt, hasDefault := c.UseDefault[flag]; hasDefault {
-				enabled = dflt
-			}
+		if c.flagEnabled(flag, providerUSE) {
+			return false
 		}
-		if enabled {
+	}
+	// PMS 8.2.6.4: [flag=] — provider.flag must equal dependent.flag
+	for _, flag := range c.UseEqual {
+		if depUSE == nil {
+			continue
+		}
+		if c.flagEnabled(flag, providerUSE) != depUSE[flag] {
+			return false
+		}
+	}
+	// [!flag=] — provider.flag must be opposite of dependent.flag
+	for _, flag := range c.UseEqualInverse {
+		if depUSE == nil {
+			continue
+		}
+		if c.flagEnabled(flag, providerUSE) == depUSE[flag] {
+			return false
+		}
+	}
+	// [flag?] — if dependent has flag on, provider must too
+	for _, flag := range c.UseConditionalIf {
+		if depUSE == nil {
+			continue
+		}
+		if depUSE[flag] && !c.flagEnabled(flag, providerUSE) {
+			return false
+		}
+	}
+	// [!flag?] — if dependent has flag off, provider must have off
+	for _, flag := range c.UseConditionalUnless {
+		if depUSE == nil {
+			continue
+		}
+		if !depUSE[flag] && c.flagEnabled(flag, providerUSE) {
 			return false
 		}
 	}
 	return true
+}
+
+// flagEnabled returns whether a USE flag is effectively enabled on the provider.
+// Consults UseDefault if the flag is not declared in provider's IUSE.
+func (c Constraint) flagEnabled(flag string, providerUSE map[string]bool) bool {
+	enabled, declared := providerUSE[flag]
+	if !declared {
+		if dflt, hasDefault := c.UseDefault[flag]; hasDefault {
+			return dflt
+		}
+		return false
+	}
+	return enabled
 }
 
 // NewVersionConstraint creates a new immutable version constraint

@@ -368,16 +368,26 @@ func parseUseFlag(flag string, atom *Atom) error {
 		flag = strings.TrimSuffix(flag, "(-)")
 	}
 
-	// Check for conditional suffix: flag?
+	// Check for conditional suffix: flag? or flag=
+	// PMS 8.2.6.4: flag= (equality), !flag= (inverse equality),
+	// flag? (conditional), !flag? (inverse conditional)
 	isConditional := strings.HasSuffix(flag, "?")
 	if isConditional {
 		flag = strings.TrimSuffix(flag, "?")
 	}
+	isEquality := strings.HasSuffix(flag, "=")
+	if isEquality {
+		flag = strings.TrimSuffix(flag, "=")
+	}
 
-	// Check for negation prefix: -flag
+	// Check for negation prefix: -flag or !flag
 	isBlocked := strings.HasPrefix(flag, "-")
 	if isBlocked {
 		flag = strings.TrimPrefix(flag, "-")
+	}
+	isNegated := strings.HasPrefix(flag, "!")
+	if isNegated {
+		flag = strings.TrimPrefix(flag, "!")
 	}
 
 	// Validate flag name
@@ -389,15 +399,24 @@ func parseUseFlag(flag string, atom *Atom) error {
 	if hasDefault {
 		atom.UseDefault = append(atom.UseDefault, flag+"("+defaultValue+")")
 	}
-	if isConditional {
-		if isBlocked {
-			atom.UseConditional = append(atom.UseConditional, "!"+flag+"?")
-		} else {
-			atom.UseConditional = append(atom.UseConditional, flag+"?")
-		}
-	} else if isBlocked {
+
+	negated := isBlocked || isNegated
+	switch {
+	case isEquality && negated:
+		// [!flag=] — provider.flag must be opposite of dependent.flag
+		atom.UseConditional = append(atom.UseConditional, "!"+flag+"=")
+	case isEquality:
+		// [flag=] — provider.flag must match dependent.flag
+		atom.UseConditional = append(atom.UseConditional, flag+"=")
+	case isConditional && negated:
+		// [!flag?] — if dependent.flag off, provider.flag must be off
+		atom.UseConditional = append(atom.UseConditional, "!"+flag+"?")
+	case isConditional:
+		// [flag?] — if dependent.flag on, provider.flag must be on
+		atom.UseConditional = append(atom.UseConditional, flag+"?")
+	case negated:
 		atom.UseBlock = append(atom.UseBlock, flag)
-	} else {
+	default:
 		atom.UseRequire = append(atom.UseRequire, flag)
 	}
 
@@ -796,6 +815,8 @@ func matchesRevision(v1, v2 string) bool {
 }
 
 // ToConstraint converts this Atom to a Constraint for use with the solver.
+//
+//nolint:gocyclo // PMS atom-to-constraint conversion covers many field combinations
 func (a *Atom) ToConstraint() Constraint {
 	c := Constraint{
 		Type: ConstraintTypeVersion,
@@ -843,6 +864,20 @@ func (a *Atom) ToConstraint() Constraint {
 			} else if strings.HasSuffix(entry, "(-)") {
 				c.UseDefault[strings.TrimSuffix(entry, "(-)")] = false
 			}
+		}
+	}
+
+	// Populate conditional USE dep forms from UseConditional
+	for _, cond := range a.UseConditional {
+		switch {
+		case strings.HasSuffix(cond, "=") && strings.HasPrefix(cond, "!"):
+			c.UseEqualInverse = append(c.UseEqualInverse, strings.TrimPrefix(strings.TrimSuffix(cond, "="), "!"))
+		case strings.HasSuffix(cond, "="):
+			c.UseEqual = append(c.UseEqual, strings.TrimSuffix(cond, "="))
+		case strings.HasSuffix(cond, "?") && strings.HasPrefix(cond, "!"):
+			c.UseConditionalUnless = append(c.UseConditionalUnless, strings.TrimPrefix(strings.TrimSuffix(cond, "?"), "!"))
+		case strings.HasSuffix(cond, "?"):
+			c.UseConditionalIf = append(c.UseConditionalIf, strings.TrimSuffix(cond, "?"))
 		}
 	}
 
