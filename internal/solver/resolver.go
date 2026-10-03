@@ -262,11 +262,20 @@ func (r *PortageResolver) collectDependencies(p *pkg.Package, allPackages map[st
 	// Group dependencies by OrGroupID
 	requiredDeps, orGroups := groupDependenciesByOrGroupID(p.Deps)
 
-	// Skip BDEPEND exploration only for the exact installed version+slot.
-	// Other versions of the same package (upgrade candidates) still need BDEPEND.
+	// Portage without --deep does not re-validate deps of installed packages.
+	// An installed package is a fact, not a graph node. Its deps were satisfied
+	// at install time; re-checking them can force unnecessary upgrades
+	// (e.g., virtual/perl-ExtUtils-MakeMaker requires =perl-5.42* but
+	// perl-5.40 is installed and working).
 	installedInSlot := r.findInstalledInSlot(p.Name, p.Slot.Name)
-	skipBDEPEND := installedInSlot != nil && installedInSlot.Version == p.Version &&
+	isInstalledSameVersion := installedInSlot != nil && installedInSlot.Version == p.Version &&
 		!r.options.NewUse && !r.options.EmptyTree
+	skipAllDeps := isInstalledSameVersion && !r.options.Deep && !r.rootNames[p.Name]
+	skipBDEPEND := isInstalledSameVersion
+
+	if skipAllDeps {
+		return
+	}
 
 	for _, dep := range requiredDeps {
 		if skipBDEPEND && isBuildTimeDep(dep.DepType) {
@@ -416,7 +425,8 @@ func (r *PortageResolver) addInstalledCandidates(allCandidates map[string][]*pkg
 
 // addPackageConstraints adds all constraints for a single package version to the SAT solver.
 // Uses implication clauses: if this version is selected, its deps must be satisfied.
-// Root packages get an at-least-one clause (unit clause for single version).
+//
+//nolint:gocyclo // PMS constraint encoding covers many dep types and modes
 func (r *PortageResolver) addPackageConstraints(adapter *GophersatAdapter, p *pkg.Package, rootPackages []string) {
 	pkgKey := p.Name + "@" + p.Version
 	pkgVarID := adapter.GetVarID(pkgKey)
@@ -439,13 +449,16 @@ func (r *PortageResolver) addPackageConstraints(adapter *GophersatAdapter, p *pk
 	// Group dependencies by OrGroupID
 	requiredDeps, orGroups := groupDependenciesByOrGroupID(p.Deps)
 
-	// Skip BDEPEND implications for installed (Keep) candidates.
-	// Installed packages are already built — they don't need build deps.
-	// Tree candidates still need BDEPEND (they will be built).
-	// Skip BDEPEND only if installed AND not rebuilding (--newuse forces rebuild)
-	skipBDEPEND := adapter.IsVarInstalled(pkgVarID) && !r.options.NewUse
+	// Without --deep, installed packages are facts — don't encode their deps.
+	isInstalled := adapter.IsVarInstalled(pkgVarID)
+	skipAllDeps := isInstalled && !r.options.Deep && !r.options.NewUse &&
+		!r.options.EmptyTree && !contains(rootPackages, p.Name)
+	skipBDEPEND := isInstalled && !r.options.NewUse
 
-	// Add REQUIRED dependencies as implications: (-P@V | B1 | B2 | ...)
+	if skipAllDeps {
+		return
+	}
+
 	for _, dep := range requiredDeps {
 		if skipBDEPEND && isBuildTimeDep(dep.DepType) {
 			continue

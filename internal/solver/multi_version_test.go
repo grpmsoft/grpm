@@ -3247,3 +3247,64 @@ func TestOrGroup_RootUpgradesViaSecondAlternative(t *testing.T) {
 		t.Error("broken-a should NOT be in result — its dep is missing")
 	}
 }
+
+// TestKeepMode_InstalledDepsNotRevalidated verifies that without --deep,
+// installed packages' deps are not re-encoded in SAT (Portage semantics).
+// Scenario: installed virt-2 has || ( =perl-5.42* perl-core/x ).
+// perl-core/x doesn't exist, installed perl is 5.40. Without --deep,
+// virt is Keep (installed), its deps not checked → perl stays at 5.40.
+// With --deep, virt's deps ARE checked → perl must upgrade to 5.42.
+func TestKeepMode_InstalledDepsNotRevalidated(t *testing.T) {
+	r := newMultiVersionRepo()
+
+	// app depends on virt
+	app := pkg.NewPackage("app-misc/app", "1.0", "0")
+	app.Deps = []pkg.Constraint{{Name: "virtual/perl-virt", Type: pkg.ConstraintTypeVersion}}
+	r.addVersion(app)
+
+	// virt has || ( =perl-5.42* perl-core/x ), perl-core/x not in repo
+	virt := pkg.NewPackage("virtual/perl-virt", "2.0", "0")
+	virt.Deps = []pkg.Constraint{
+		{Name: "dev-lang/perl", Type: pkg.ConstraintTypeVersion,
+			Version: pkg.NewVersionConstraint(pkg.OpEqualGlob, "5.42"), OrGroupID: 1},
+		{Name: "perl-core/nonexistent", Type: pkg.ConstraintTypeVersion, OrGroupID: 1},
+	}
+	r.addVersion(virt)
+
+	// perl 5.40 and 5.42
+	r.addVersion(pkg.NewPackage("dev-lang/perl", "5.40.2", "0"))
+	r.addVersion(pkg.NewPackage("dev-lang/perl", "5.42.2", "0"))
+
+	// VDB: perl 5.40.2, virt 2.0 installed
+	db := state.NewPackageDatabase("/var/db/pkg")
+	if err := db.Add(&state.InstalledPackage{Package: pkg.NewPackage("dev-lang/perl", "5.40.2", "0")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Add(&state.InstalledPackage{Package: pkg.NewPackage("virtual/perl-virt", "2.0", "0")}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Without --deep: virt=K, perl not in plan (installed deps not re-checked)
+	resolver := NewResolver(r)
+	resolver.SetInstalledDB(db)
+	result := resolveClean(t, resolver, []string{"app-misc/app"})
+
+	perlKey := pkg.SlotKey{Name: "dev-lang/perl", Slot: "0"}
+	if _, ok := result[perlKey]; ok {
+		t.Error("without --deep: perl should NOT be in plan (dep of installed virt, not re-checked)")
+	}
+
+	// With --deep: virt's deps re-checked → perl must upgrade
+	resolver2 := NewResolver(r)
+	resolver2.SetInstalledDB(db)
+	resolver2.SetOptions(ResolveOptions{Deep: true})
+	result2 := resolveClean(t, resolver2, []string{"app-misc/app"})
+
+	perlEntry2, ok := result2[perlKey]
+	if !ok {
+		t.Fatal("with --deep: expected perl in result")
+	}
+	if perlEntry2.Package.Version != "5.42.2" {
+		t.Errorf("with --deep: perl should upgrade to 5.42.2, got %s", perlEntry2.Package.Version)
+	}
+}
