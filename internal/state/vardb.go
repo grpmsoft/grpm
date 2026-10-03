@@ -123,16 +123,14 @@ func (vl *VarDBLoader) loadPackage(path, category, pkgDirName string) (*Installe
 		return nil, fmt.Errorf("invalid db entry: %s/%s (no CONTENTS)", category, pkgDirName)
 	}
 
-	// SLOT is required for correct resolution (without it, package gets
-	// wrong SlotKey and confuses slot-aware keep-preference)
+	// SLOT defaults to "0" when missing (matching Portage behavior).
+	// Many VDB entries from binary installs lack SLOT files but are valid.
 	slotPath := filepath.Join(path, "SLOT")
-	slotData, slotErr := os.ReadFile(slotPath)
-	if slotErr != nil {
-		return nil, fmt.Errorf("invalid db entry: %s/%s (no SLOT file)", category, pkgDirName)
-	}
-	slotStr := strings.TrimSpace(string(slotData))
-	if slotStr == "" {
-		return nil, fmt.Errorf("invalid db entry: %s/%s (empty SLOT)", category, pkgDirName)
+	slotStr := "0"
+	if slotData, slotErr := os.ReadFile(slotPath); slotErr == nil {
+		if s := strings.TrimSpace(string(slotData)); s != "" {
+			slotStr = s
+		}
 	}
 
 	installedPkg := &InstalledPackage{

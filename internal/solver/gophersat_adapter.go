@@ -837,6 +837,14 @@ func (g *GophersatAdapter) AddBlockerConflict(blockerVarID int, blockedAtom *pkg
 		if !blockedAtom.Matches(tv) {
 			continue
 		}
+		// PMS 8.2.6.6: USE deps on blocker atoms are conditions — the block
+		// only applies when the target package satisfies them.
+		// E.g. !glibc[crypt] blocks glibc ONLY IF crypt USE is enabled.
+		if blockedAtom.HasUseDeps() && !blockerUseDepsApply(blockedAtom, tv) {
+			logging.Debug("Blocker %s → %s skipped: USE deps not met on target",
+				blockerKey, tv.Name+"@"+tv.Version)
+			continue
+		}
 		targetKey := tv.Name + "@" + tv.Version
 		targetVarID, exists := g.vars[targetKey]
 		if !exists || targetVarID == blockerVarID {
@@ -848,6 +856,27 @@ func (g *GophersatAdapter) AddBlockerConflict(blockerVarID int, blockedAtom *pkg
 		g.addClause([]int{-blockerVarID, -targetVarID})
 		logging.Debug("Added blocker conflict: %s vs %s", blockerKey, targetKey)
 	}
+}
+
+// blockerUseDepsApply checks whether a blocker atom's USE deps are satisfied by
+// the target package. Returns true if the blocker should fire.
+func blockerUseDepsApply(atom *pkg.Atom, target *pkg.Package) bool {
+	if target.UseFlags == nil {
+		return true
+	}
+	// [flag] — block only when target has flag enabled
+	for _, flag := range atom.UseRequire {
+		if !target.UseFlags[flag] {
+			return false
+		}
+	}
+	// [-flag] — block only when target has flag disabled
+	for _, flag := range atom.UseBlock {
+		if target.UseFlags[flag] {
+			return false
+		}
+	}
+	return true
 }
 
 // MarkInstalled marks a SAT variable as representing an installed package (from VDB).

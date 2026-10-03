@@ -126,6 +126,37 @@ dir /usr/lib
 	}
 }
 
+func TestVarDBLoader_MissingSLOTDefaultsToZero(t *testing.T) {
+	tmpDir := t.TempDir()
+	vardbRoot := filepath.Join(tmpDir, "var", "db", "pkg")
+	pkgDir := filepath.Join(vardbRoot, "app-arch", "brotli-1.1.0")
+	if err := os.MkdirAll(pkgDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Minimal VDB entry: CONTENTS + USE + BUILD_TIME + SIZE + EAPI — no SLOT
+	os.WriteFile(filepath.Join(pkgDir, "CONTENTS"), []byte("dir /usr/lib\n"), 0644)
+	os.WriteFile(filepath.Join(pkgDir, "USE"), []byte("abi_x86_64"), 0644)
+	os.WriteFile(filepath.Join(pkgDir, "BUILD_TIME"), []byte("1700000000"), 0644)
+	os.WriteFile(filepath.Join(pkgDir, "SIZE"), []byte("12345"), 0644)
+	os.WriteFile(filepath.Join(pkgDir, "EAPI"), []byte("8"), 0644)
+
+	db := NewPackageDatabase(tmpDir)
+	loader := NewVarDBLoader(vardbRoot)
+	if err := loader.LoadInto(db); err != nil {
+		t.Fatalf("LoadInto() error = %v", err)
+	}
+
+	if !db.Has("app-arch/brotli-1.1.0") {
+		t.Fatal("package should be loaded despite missing SLOT file")
+	}
+
+	p, _ := db.Get("app-arch/brotli-1.1.0")
+	if p.Package.Slot.Name != "0" {
+		t.Errorf("SLOT = %q, want %q (default when SLOT file missing)", p.Package.Slot.Name, "0")
+	}
+}
+
 func TestVarDBLoader_LoadInto_NonExistent(t *testing.T) {
 	db := NewPackageDatabase(t.TempDir())
 	loader := NewVarDBLoader("/nonexistent/path")
