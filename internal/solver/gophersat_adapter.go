@@ -857,14 +857,30 @@ func (g *GophersatAdapter) MarkInstalled(varID int) {
 	g.installed[varID] = true
 }
 
-// PackageVersions returns the registered versions for a package name.
-func (g *GophersatAdapter) PackageVersions(name string) []*pkg.Package {
-	return g.packages[name]
-}
-
 // AddClauseRaw adds a hard clause directly to the SAT problem.
 func (g *GophersatAdapter) AddClauseRaw(clause []int) {
 	g.addClause(clause)
+}
+
+// Clone creates a shallow copy of the adapter with independent clause list.
+// Used for two-phase solving: clone → add forcing clauses → solve.
+func (g *GophersatAdapter) Clone() *GophersatAdapter {
+	clone := &GophersatAdapter{
+		vars:         g.vars,
+		varNames:     g.varNames,
+		packages:     g.packages,
+		addedClauses: g.addedClauses,
+		implications: g.implications,
+		prohibits:    g.prohibits,
+		rootVars:     g.rootVars,
+		installed:    g.installed,
+		orGroupPrefs: g.orGroupPrefs,
+	}
+	clone.clauses = make([][]int, len(g.clauses))
+	copy(clone.clauses, g.clauses)
+	clone.clausesMeta = make([]clauseMeta, len(g.clausesMeta))
+	copy(clone.clausesMeta, g.clausesMeta)
+	return clone
 }
 
 // IsVarInstalled returns true if the given SAT variable represents an installed package.

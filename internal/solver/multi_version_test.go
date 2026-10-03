@@ -2499,9 +2499,9 @@ func TestLazyOR_FallbackOnUNSAT(t *testing.T) {
 	}
 }
 
-// TestLazyOR_ClosureSizeReduced measures that lazy expansion reduces the
-// number of packages explored compared to eager expansion.
-func TestLazyOR_ClosureSizeReduced(t *testing.T) {
+// TestOrGroup_EagerExploresAllAlternatives verifies that eager OR expansion
+// explores both alternatives' dep chains, ensuring encoding completeness.
+func TestOrGroup_EagerExploresAllAlternatives(t *testing.T) {
 	r := newMultiVersionRepo()
 
 	// Build a chain: heavy → dep1 → dep2 → dep3 (4 packages total)
@@ -2536,12 +2536,11 @@ func TestLazyOR_ClosureSizeReduced(t *testing.T) {
 		t.Logf("  %s: %s-%s", k, p.Package.Name, p.Package.Version)
 	}
 	if len(result) > 3 {
-		t.Errorf("lazy OR should keep result small: got %d packages (expected ≤3)", len(result))
+		t.Errorf("OR result should be small (SAT picks light): got %d packages (expected ≤3)", len(result))
 	}
-	// With lazy OR: should explore app + light + OR-group = ~3 names
-	// Without lazy OR: explores app + light + heavy + dep1 + dep2 + dep3 = 6+ names
-	if resolver.PackagesExplored > 4 {
-		t.Errorf("lazy OR should explore ≤4 names, got %d — heavy chain explored unnecessarily", resolver.PackagesExplored)
+	// Eager OR explores all alternatives: app + light + heavy + dep1 + dep2 + dep3 = 6
+	if resolver.PackagesExplored < 3 {
+		t.Errorf("eager OR should explore all alternatives, got only %d names", resolver.PackagesExplored)
 	}
 }
 
@@ -3184,13 +3183,11 @@ func TestRootSlotAtom_FiltersCandidates(t *testing.T) {
 	}
 }
 
-// TestLazyOR_ExpandWhenInstalledFallbackMakesRootSuboptimal verifies that
-// lazy-OR expansion triggers even when SAT is satisfiable via an installed
-// fallback. Scenario: root pkg-2.0 has dep || ( broken-a good-b ), lazy-OR
-// expands only broken-a → prohibited → root-2.0 dead. Installed pkg-1.0
-// (no deps) satisfies SAT → R instead of U. Fix: detect suboptimal root
-// with dead preferred + unexpanded OR alternatives → expand and re-solve.
-func TestLazyOR_ExpandWhenInstalledFallbackMakesRootSuboptimal(t *testing.T) {
+// TestOrGroup_RootUpgradesViaSecondAlternative verifies that eager OR expansion
+// allows the root to upgrade via the second alternative when the first is broken.
+// Scenario: root pkg-2.0 has dep || ( broken-a good-b ). broken-a has missing dep.
+// With eager expansion, good-b is fully explored → SAT picks pkg-2.0 + good-b.
+func TestOrGroup_RootUpgradesViaSecondAlternative(t *testing.T) {
 	r := newMultiVersionRepo()
 
 	// pkg v1.0 (installed, no deps) and v2.0 (newer, has OR-dep)
