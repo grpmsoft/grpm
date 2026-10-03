@@ -61,7 +61,7 @@ func TestParsePackageAtom_Blockers(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			dep, err := parser.parsePackageAtom(tt.atom, DepTypeRuntime, "", 0)
+			dep, err := parser.parsePackageAtom(tt.atom, DepTypeRuntime, nil, 0)
 			if err != nil {
 				t.Errorf("parsePackageAtom(%q) error: %v", tt.atom, err)
 			}
@@ -658,7 +658,7 @@ func TestParsePackageAtom_USEFlags(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			dep, err := parser.parsePackageAtom(tt.atom, DepTypeRuntime, "", 0)
+			dep, err := parser.parsePackageAtom(tt.atom, DepTypeRuntime, nil, 0)
 			if err != nil {
 				t.Fatalf("parsePackageAtom(%q) error: %v", tt.atom, err)
 			}
@@ -1553,5 +1553,69 @@ RESTRICT="mirror fetch strip test"
 		parser := NewEbuildParser(content)
 		_ = parser.ExtractProperties()
 		_ = parser.ExtractRestrict()
+	}
+}
+
+// TestNestedUSEConditionals verifies that nested USE conditionals are correctly
+// parsed. From clang-common-19.1.7 PDEPEND:
+//
+//	default-compiler-rt? ( !llvm-libunwind? ( sys-libs/libunwind[static-libs] )
+//	                        llvm-libunwind? ( llvm-runtimes/libunwind[static-libs] ) )
+//
+// Three cases:
+//  1. default-compiler-rt=off → no libunwind deps at all
+//  2. default-compiler-rt=on, llvm-libunwind=off → sys-libs/libunwind[static-libs]
+//  3. default-compiler-rt=on, llvm-libunwind=on → llvm-runtimes/libunwind[static-libs]
+func TestNestedUSEConditionals(t *testing.T) {
+	depStr := `default-compiler-rt? ( !llvm-libunwind? ( sys-libs/libunwind[static-libs] ) llvm-libunwind? ( llvm-runtimes/libunwind[static-libs] ) )`
+
+	parser := NewEbuildParser("")
+	deps, err := parser.parseDependencyString(depStr, DepTypePostMerge)
+	if err != nil {
+		t.Fatalf("parseDependencyString failed: %v", err)
+	}
+
+	// Should have exactly 2 deps: sys-libs/libunwind and llvm-runtimes/libunwind
+	if len(deps) != 2 {
+		t.Fatalf("expected 2 deps, got %d: %+v", len(deps), deps)
+	}
+
+	// Find deps by name
+	var sysLibunwind, llvmLibunwind *ParsedDependency
+	for i := range deps {
+		switch deps[i].Constraint.Name {
+		case "sys-libs/libunwind":
+			sysLibunwind = &deps[i]
+		case "llvm-runtimes/libunwind":
+			llvmLibunwind = &deps[i]
+		}
+	}
+	if sysLibunwind == nil || llvmLibunwind == nil {
+		t.Fatalf("missing expected deps: sys=%v llvm=%v", sysLibunwind, llvmLibunwind)
+	}
+
+	// sys-libs/libunwind has nested condition: default-compiler-rt AND !llvm-libunwind
+	// The Condition field must carry BOTH conditions.
+	sysConditions := sysLibunwind.Constraint.Conditions
+	if len(sysConditions) != 2 {
+		t.Errorf("sys-libs/libunwind should have 2 conditions (nested), got %d: %v",
+			len(sysConditions), sysConditions)
+	} else {
+		if sysConditions[0] != "default-compiler-rt" || sysConditions[1] != "!llvm-libunwind" {
+			t.Errorf("sys-libs/libunwind conditions should be [default-compiler-rt, !llvm-libunwind], got %v",
+				sysConditions)
+		}
+	}
+
+	// llvm-runtimes/libunwind: default-compiler-rt AND llvm-libunwind
+	llvmConditions := llvmLibunwind.Constraint.Conditions
+	if len(llvmConditions) != 2 {
+		t.Errorf("llvm-runtimes/libunwind should have 2 conditions, got %d: %v",
+			len(llvmConditions), llvmConditions)
+	} else {
+		if llvmConditions[0] != "default-compiler-rt" || llvmConditions[1] != "llvm-libunwind" {
+			t.Errorf("llvm-runtimes/libunwind conditions should be [default-compiler-rt, llvm-libunwind], got %v",
+				llvmConditions)
+		}
 	}
 }

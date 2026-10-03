@@ -385,7 +385,7 @@ func (ep *EbuildParser) parseDependencyString(depStr string, depType DependencyT
 	tokens := tokenizeDependencies(depStr)
 
 	// Parse tokens (orGroupID = 0 means not in OR-group)
-	parsedDeps, _, err := ep.parseTokens(tokens, 0, depType, "", 0)
+	parsedDeps, _, err := ep.parseTokens(tokens, 0, depType, nil, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -445,7 +445,7 @@ func tokenizeDependencies(depStr string) []string {
 }
 
 // parseTokens recursively parses dependency tokens
-func (ep *EbuildParser) parseTokens(tokens []string, start int, depType DependencyType, useFlag string, orGroupID int) ([]ParsedDependency, int, error) {
+func (ep *EbuildParser) parseTokens(tokens []string, start int, depType DependencyType, useFlags []string, orGroupID int) ([]ParsedDependency, int, error) {
 	var deps []ParsedDependency
 	i := start
 
@@ -459,7 +459,7 @@ func (ep *EbuildParser) parseTokens(tokens []string, start int, depType Dependen
 
 		// Handle opening parenthesis - start of group
 		if token == "(" {
-			groupDeps, nextIdx, err := ep.parseGroup(tokens, i, depType, useFlag, orGroupID)
+			groupDeps, nextIdx, err := ep.parseGroup(tokens, i, depType, useFlags, orGroupID)
 			if err != nil {
 				return nil, i, err
 			}
@@ -476,7 +476,7 @@ func (ep *EbuildParser) parseTokens(tokens []string, start int, depType Dependen
 
 		// Parse package atom
 		if ep.isPackageAtom(token) {
-			dep, err := ep.parsePackageAtom(token, depType, useFlag, orGroupID)
+			dep, err := ep.parsePackageAtom(token, depType, useFlags, orGroupID)
 			if err != nil {
 				// Log warning but continue (non-critical)
 				i++
@@ -492,29 +492,31 @@ func (ep *EbuildParser) parseTokens(tokens []string, start int, depType Dependen
 }
 
 // parseGroup handles parsing of grouped dependencies ( ... )
-func (ep *EbuildParser) parseGroup(tokens []string, i int, depType DependencyType, useFlag string, orGroupID int) ([]ParsedDependency, int, error) {
+func (ep *EbuildParser) parseGroup(tokens []string, i int, depType DependencyType, useFlags []string, orGroupID int) ([]ParsedDependency, int, error) {
 	// Check previous token for special operators
 	if i > 0 {
 		prevToken := tokens[i-1]
 
 		// Handle USE flag condition (e.g., "ssl? ( ... )")
+		// Accumulate: push current condition onto the stack
 		if strings.HasSuffix(prevToken, "?") {
 			flag := strings.TrimSuffix(prevToken, "?")
-			// Inherit orGroupID from parent
-			return ep.parseTokens(tokens, i+1, depType, flag, orGroupID)
+			nested := make([]string, len(useFlags), len(useFlags)+1)
+			copy(nested, useFlags)
+			nested = append(nested, flag)
+			return ep.parseTokens(tokens, i+1, depType, nested, orGroupID)
 		}
 
 		// Handle || (any-of) operator
 		if prevToken == "||" {
-			// Assign new OR-group ID and increment counter
 			groupID := ep.nextOrGroupID
 			ep.nextOrGroupID++
-			return ep.parseTokens(tokens, i+1, depType, useFlag, groupID)
+			return ep.parseTokens(tokens, i+1, depType, useFlags, groupID)
 		}
 	}
 
-	// Regular group - inherit orGroupID from parent
-	return ep.parseTokens(tokens, i+1, depType, useFlag, orGroupID)
+	// Regular group - inherit from parent
+	return ep.parseTokens(tokens, i+1, depType, useFlags, orGroupID)
 }
 
 // isPackageAtom checks if token is a valid package atom (not operator, parenthesis,
@@ -555,7 +557,11 @@ func (ep *EbuildParser) isPackageAtom(token string) bool {
 
 // parsePackageAtom parses a single package atom using pkg.ParseAtom (PMS Section 8.3).
 // Example: ">=sys-libs/zlib-1.2.13:0/1[static-libs]"
-func (ep *EbuildParser) parsePackageAtom(atomStr string, depType DependencyType, useFlag string, orGroupID int) (ParsedDependency, error) {
+func (ep *EbuildParser) parsePackageAtom(atomStr string, depType DependencyType, useFlags []string, orGroupID int) (ParsedDependency, error) {
+	useFlag := ""
+	if len(useFlags) > 0 {
+		useFlag = useFlags[len(useFlags)-1]
+	}
 	dep := ParsedDependency{
 		DepType:   depType,
 		UseFlag:   useFlag,
@@ -565,9 +571,7 @@ func (ep *EbuildParser) parsePackageAtom(atomStr string, depType DependencyType,
 	// Use the PMS-compliant atom parser
 	atom, err := pkg.ParseAtom(atomStr)
 	if err != nil {
-		// Fallback to legacy parsing for atoms that fail PMS parsing
-		// This handles edge cases like virtual packages or unusual patterns
-		return ep.parsePackageAtomLegacy(atomStr, depType, useFlag, orGroupID)
+		return ep.parsePackageAtomLegacy(atomStr, depType, useFlags, orGroupID)
 	}
 
 	// Store the parsed atom
@@ -602,17 +606,28 @@ func (ep *EbuildParser) parsePackageAtom(atomStr string, depType DependencyType,
 		dep.Constraint.Condition = strings.Join(useFlags, " ")
 	}
 
+	// Populate Conditions from accumulated USE condition stack
+	if len(useFlags) > 0 {
+		dep.Constraint.Conditions = make([]string, len(useFlags))
+		copy(dep.Constraint.Conditions, useFlags)
+	}
+
 	return dep, nil
 }
 
 // parsePackageAtomLegacy is the fallback parser for atoms that fail PMS parsing.
-// This handles edge cases and provides backward compatibility.
-func (ep *EbuildParser) parsePackageAtomLegacy(atom string, depType DependencyType, useFlag string, orGroupID int) (ParsedDependency, error) {
+func (ep *EbuildParser) parsePackageAtomLegacy(atomStr string, depType DependencyType, useFlags []string, orGroupID int) (ParsedDependency, error) {
+	useFlag := ""
+	if len(useFlags) > 0 {
+		useFlag = useFlags[len(useFlags)-1]
+	}
 	dep := ParsedDependency{
 		DepType:   depType,
 		UseFlag:   useFlag,
 		OrGroupID: orGroupID,
 	}
+
+	atom := atomStr
 
 	// Check for blockers
 	if strings.HasPrefix(atom, "!!") {
@@ -679,6 +694,11 @@ func (ep *EbuildParser) parsePackageAtomLegacy(atom string, depType DependencyTy
 	dep.Constraint.Version = constraint.Version
 	if dep.Constraint.Type == 0 {
 		dep.Constraint.Type = pkg.ConstraintTypeVersion
+	}
+
+	if len(useFlags) > 0 {
+		dep.Constraint.Conditions = make([]string, len(useFlags))
+		copy(dep.Constraint.Conditions, useFlags)
 	}
 
 	return dep, nil

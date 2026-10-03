@@ -84,7 +84,8 @@ type Constraint struct {
 	Slot      string             // For slot constraints
 	Flag      string             // For USE flags
 	Required  bool               // Mandatory requirement
-	Condition string             // USE flag condition
+	Condition  string   // USE flag condition (flat, single flag — legacy)
+	Conditions []string // USE flag conditions (all must be true for dep to be active)
 	OrGroupID int                // OR-group ID (0 = required, >0 = alternative)
 	DepType   DepType            // Dependency type (RDEPEND, BDEPEND, etc.)
 
