@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/grpmsoft/grpm/internal/logging"
 	"github.com/grpmsoft/grpm/internal/pkg"
 )
 
@@ -90,7 +91,9 @@ func (vl *VarDBLoader) LoadInto(db *PackageDatabase) error {
 			pkgPath := filepath.Join(categoryPath, pkgDir.Name())
 			installedPkg, err := vl.loadPackage(pkgPath, category.Name(), pkgDir.Name())
 			if err != nil {
-				// Log error but continue with other packages
+				if strings.Contains(err.Error(), "invalid db entry") {
+					logging.Warn("!!! %v", err)
+				}
 				continue
 			}
 
@@ -109,28 +112,42 @@ func (vl *VarDBLoader) loadPackage(path, category, pkgDirName string) (*Installe
 	// Format: packagename-version (e.g., "hello-2.10", "zlib-1.2.13")
 	name, version := parsePkgNameVersion(pkgDirName)
 
+	// Validate CPV: must have both name and version (Portage's pkgsplit check)
+	if name == "" || version == "" {
+		return nil, fmt.Errorf("invalid db entry: %s/%s (cannot parse name-version)", category, pkgDirName)
+	}
+
+	// CONTENTS is required (Portage treats entries without it as injected)
+	contentsPath := filepath.Join(path, "CONTENTS")
+	if _, err := os.Stat(contentsPath); err != nil {
+		return nil, fmt.Errorf("invalid db entry: %s/%s (no CONTENTS)", category, pkgDirName)
+	}
+
+	// SLOT is required for correct resolution (without it, package gets
+	// wrong SlotKey and confuses slot-aware keep-preference)
+	slotPath := filepath.Join(path, "SLOT")
+	slotData, slotErr := os.ReadFile(slotPath)
+	if slotErr != nil {
+		return nil, fmt.Errorf("invalid db entry: %s/%s (no SLOT file)", category, pkgDirName)
+	}
+	slotStr := strings.TrimSpace(string(slotData))
+	if slotStr == "" {
+		return nil, fmt.Errorf("invalid db entry: %s/%s (empty SLOT)", category, pkgDirName)
+	}
+
 	installedPkg := &InstalledPackage{
 		Package: &pkg.Package{
 			Name:    fmt.Sprintf("%s/%s", category, name),
 			Version: version,
-			Slot:    pkg.Slot{Name: "0"}, // Default slot
+			Slot:    pkg.ParseSlot(slotStr),
 		},
 		Files: make([]InstalledFile, 0),
 		USE:   make([]string, 0),
 	}
 
-	// Load CONTENTS (file list)
+	// Load CONTENTS
 	if err := vl.loadContents(path, installedPkg); err != nil {
-		// CONTENTS is required
 		return nil, err
-	}
-
-	// Load SLOT from VDB (defaults to "0" if missing)
-	if slotData, slotErr := os.ReadFile(filepath.Join(path, "SLOT")); slotErr == nil {
-		slotStr := strings.TrimSpace(string(slotData))
-		if slotStr != "" {
-			installedPkg.Package.Slot = pkg.ParseSlot(slotStr)
-		}
 	}
 
 	// Load USE flags and propagate to Package.UseFlags for USE-dep evaluation
@@ -410,6 +427,15 @@ func (vw *VarDBWriter) Write(installedPkg *InstalledPackage) error {
 	// Write CONTENTS
 	if err := vw.writeContents(pkgDir, installedPkg); err != nil {
 		return err
+	}
+
+	// Write SLOT
+	slotStr := installedPkg.Package.Slot.String()
+	if slotStr == "" {
+		slotStr = "0"
+	}
+	if err := os.WriteFile(filepath.Join(pkgDir, "SLOT"), []byte(slotStr+"\n"), 0644); err != nil {
+		return fmt.Errorf("failed to write SLOT: %w", err)
 	}
 
 	// Write USE
