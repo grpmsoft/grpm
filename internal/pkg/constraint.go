@@ -56,7 +56,8 @@ const (
 	OpGreaterEqual
 	OpLess
 	OpLessEqual
-	OpEqualGlob // =pkg-ver* (PMS 8.3.1: prefix match at version component boundary)
+	OpEqualGlob    // =pkg-ver* (PMS 8.3.1: prefix match at version component boundary)
+	OpRevisionMatch // ~pkg-ver (PMS 8.3.3: match any revision of base version)
 )
 
 // VersionConstraint represents a version constraint (Value Object - immutable)
@@ -207,6 +208,23 @@ func (c Constraint) flagEnabled(flag string, providerUSE map[string]bool) bool {
 	return enabled
 }
 
+// stripRevision removes the -rN suffix from a version string.
+// "0.231.100-r1" → "0.231.100", "0.231.100" → "0.231.100".
+func stripRevision(version string) string {
+	idx := strings.LastIndex(version, "-r")
+	if idx < 0 {
+		return version
+	}
+	// Verify everything after -r is digits
+	rev := version[idx+2:]
+	for _, c := range rev {
+		if c < '0' || c > '9' {
+			return version
+		}
+	}
+	return version[:idx]
+}
+
 // NewVersionConstraint creates a new immutable version constraint
 func NewVersionConstraint(operator VersionOperator, version string) *VersionConstraint {
 	return &VersionConstraint{
@@ -283,6 +301,10 @@ func (vc *VersionConstraint) Satisfies(version string) bool {
 		}
 		next := version[len(vc.version)]
 		return next == '.' || next == '_' || next == '-'
+	case OpRevisionMatch:
+		// ~ver matches any revision of the same base version.
+		// ~0.231.100 matches 0.231.100, 0.231.100-r1, 0.231.100-r2, etc.
+		return stripRevision(version) == stripRevision(vc.version)
 	default:
 		return true
 	}

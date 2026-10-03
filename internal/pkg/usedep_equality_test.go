@@ -86,3 +86,40 @@ func TestParseAtom_AllConditionalForms(t *testing.T) {
 		})
 	}
 }
+
+func TestRevisionMatch_TildeOperator(t *testing.T) {
+	// ~perl-core/File-Temp-0.231.100 must match 0.231.100-r1
+	atom, err := ParseAtom("~perl-core/File-Temp-0.231.100")
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+	if atom.Operator != "~" {
+		t.Fatalf("operator should be ~, got %q", atom.Operator)
+	}
+
+	c := atom.ToConstraint()
+	if c.Version == nil {
+		t.Fatal("expected version constraint")
+	}
+	if c.Version.Operator() != OpRevisionMatch {
+		t.Errorf("expected OpRevisionMatch, got %v", c.Version.Operator())
+	}
+
+	// Must match any revision
+	if !c.Version.Satisfies("0.231.100") {
+		t.Error("~ should match base version 0.231.100")
+	}
+	if !c.Version.Satisfies("0.231.100-r1") {
+		t.Error("~ should match revision 0.231.100-r1")
+	}
+	if !c.Version.Satisfies("0.231.100-r99") {
+		t.Error("~ should match any revision 0.231.100-r99")
+	}
+	// Must NOT match different base
+	if c.Version.Satisfies("0.231.200") {
+		t.Error("~ should NOT match different base version")
+	}
+	if c.Version.Satisfies("0.231.100.1") {
+		t.Error("~ should NOT match extended version")
+	}
+}

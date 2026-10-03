@@ -830,6 +830,8 @@ func (a *Atom) ToConstraint() Constraint {
 			op = OpEqual
 		case "=*":
 			op = OpEqualGlob
+		case "~":
+			op = OpRevisionMatch
 		case ">":
 			op = OpGreater
 		case ">=":
