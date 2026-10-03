@@ -152,6 +152,17 @@ func IsUSEConditionalActive(useConditional string, effectiveUSE map[string]bool)
 	return effectiveUSE[useConditional]
 }
 
+// AreUSEConditionsActive checks if ALL USE conditions in the list are active.
+// Empty list = unconditional = always active.
+func AreUSEConditionsActive(conditions []string, effectiveUSE map[string]bool) bool {
+	for _, cond := range conditions {
+		if !IsUSEConditionalActive(cond, effectiveUSE) {
+			return false
+		}
+	}
+	return true
+}
+
 // applyUSEFlagList applies a list of USE flags to the effective USE map.
 // Flags with "-" prefix disable (delete) the flag; flags without prefix enable it.
 func applyUSEFlagList(effectiveUSE map[string]bool, flags []string) {

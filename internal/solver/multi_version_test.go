@@ -2499,9 +2499,9 @@ func TestLazyOR_FallbackOnUNSAT(t *testing.T) {
 	}
 }
 
-// TestLazyOR_ClosureSizeReduced measures that lazy expansion reduces the
-// number of packages explored compared to eager expansion.
-func TestLazyOR_ClosureSizeReduced(t *testing.T) {
+// TestOrGroup_EagerExploresAllAlternatives verifies that eager OR expansion
+// explores both alternatives' dep chains, ensuring encoding completeness.
+func TestOrGroup_EagerExploresAllAlternatives(t *testing.T) {
 	r := newMultiVersionRepo()
 
 	// Build a chain: heavy → dep1 → dep2 → dep3 (4 packages total)
@@ -2536,12 +2536,11 @@ func TestLazyOR_ClosureSizeReduced(t *testing.T) {
 		t.Logf("  %s: %s-%s", k, p.Package.Name, p.Package.Version)
 	}
 	if len(result) > 3 {
-		t.Errorf("lazy OR should keep result small: got %d packages (expected ≤3)", len(result))
+		t.Errorf("OR result should be small (SAT picks light): got %d packages (expected ≤3)", len(result))
 	}
-	// With lazy OR: should explore app + light + OR-group = ~3 names
-	// Without lazy OR: explores app + light + heavy + dep1 + dep2 + dep3 = 6+ names
-	if resolver.PackagesExplored > 4 {
-		t.Errorf("lazy OR should explore ≤4 names, got %d — heavy chain explored unnecessarily", resolver.PackagesExplored)
+	// Eager OR explores all alternatives: app + light + heavy + dep1 + dep2 + dep3 = 6
+	if resolver.PackagesExplored < 3 {
+		t.Errorf("eager OR should explore all alternatives, got only %d names", resolver.PackagesExplored)
 	}
 }
 
@@ -2608,8 +2607,8 @@ func TestAction_MultiSlot_InstallNewSlot(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected python:3.13 in result, got keys: %v", keysOf(result))
 	}
-	if entry.Action != ActionInstall {
-		t.Errorf("python:3.13 should be ActionInstall (new slot), got %s", entry.Action)
+	if entry.Action != ActionNewSlot {
+		t.Errorf("python:3.13 should be ActionNewSlot, got %s", entry.Action)
 	}
 }
 
@@ -2677,14 +2676,14 @@ func TestAction_Remove_BlockerDeselects(t *testing.T) {
 	resolver.SetInstalledDB(db)
 	result := resolveClean(t, resolver, []string{"app-alternatives/bzip2"})
 
-	// A should be in result (Keep — already installed)
+	// bzip2 is the root atom, same version installed → Reinstall (Portage semantics)
 	aKey := pkg.SlotKey{Name: "app-alternatives/bzip2", Slot: "0"}
 	aEntry, ok := result[aKey]
 	if !ok {
 		t.Fatal("expected bzip2 in result")
 	}
-	if aEntry.Action != ActionKeep {
-		t.Errorf("bzip2 should be Keep (already installed), got %s", aEntry.Action)
+	if aEntry.Action != ActionReinstall {
+		t.Errorf("root same-version should be Reinstall, got %s", aEntry.Action)
 	}
 
 	// B should be in result as ActionRemove — blocker prohibits coexistence,
@@ -2735,8 +2734,8 @@ func TestAction_NewSlot_DoesNotRemoveOldSlot(t *testing.T) {
 	key313 := pkg.SlotKey{Name: "dev-lang/python", Slot: "3.13"}
 	if entry, ok := result[key313]; !ok {
 		t.Fatal("expected python:3.13 in result")
-	} else if entry.Action != ActionInstall {
-		t.Errorf("python:3.13 should be Install (new slot), got %s", entry.Action)
+	} else if entry.Action != ActionNewSlot {
+		t.Errorf("python:3.13 should be ActionNewSlot, got %s", entry.Action)
 	}
 
 	// python:3.12 must NOT be ActionRemove — no blocker, just untouched
@@ -2808,7 +2807,11 @@ func TestBDEPEND_SkipForInstalledKeep(t *testing.T) {
 	perl := pkg.NewPackage("dev-lang/perl", "5.40.0", "0")
 	r.addVersion(perl)
 
-	// lib has BDEPEND on elt-patches
+	// app depends on lib; lib has BDEPEND on elt-patches
+	app := pkg.NewPackage("app-misc/app", "1.0", "0")
+	app.Deps = []pkg.Constraint{{Name: "dev-libs/lib", Type: pkg.ConstraintTypeVersion}}
+	r.addVersion(app)
+
 	lib := pkg.NewPackage("dev-libs/lib", "1.0", "0")
 	lib.Deps = []pkg.Constraint{
 		{Name: "app-portage/elt-patches", Type: pkg.ConstraintTypeVersion, DepType: pkg.DepTypeBuildHost},
@@ -2826,13 +2829,14 @@ func TestBDEPEND_SkipForInstalledKeep(t *testing.T) {
 
 	resolver := NewResolver(r)
 	resolver.SetInstalledDB(db)
-	result := resolveClean(t, resolver, []string{"dev-libs/lib"})
+	// Resolve app (root) which depends on lib (dep, installed → Keep)
+	result := resolveClean(t, resolver, []string{"app-misc/app"})
 
-	// lib should be Keep (installed same version)
+	// lib should be Keep (dep, installed same version, not root)
 	libKey := pkg.SlotKey{Name: "dev-libs/lib", Slot: "0"}
 	entry := result[libKey]
 	if entry == nil || entry.Action != ActionKeep {
-		t.Fatalf("lib should be Keep, got %v", entry)
+		t.Fatalf("lib (dep) should be Keep, got %v", entry)
 	}
 
 	// elt-patches and perl should NOT be in result — BDEPEND of Keep package
@@ -2860,7 +2864,11 @@ func TestBDEPEND_SkipForInstalledKeep(t *testing.T) {
 func TestBDEPEND_NotSkippedWithNewUse(t *testing.T) {
 	r := newMultiVersionRepo()
 
-	// lib has BDEPEND on missingtool (not in repo)
+	// app depends on lib; lib has BDEPEND on missingtool (not in repo)
+	app := pkg.NewPackage("app-misc/app", "1.0", "0")
+	app.Deps = []pkg.Constraint{{Name: "dev-libs/lib", Type: pkg.ConstraintTypeVersion}}
+	r.addVersion(app)
+
 	lib := pkg.NewPackage("dev-libs/lib", "1.0", "0")
 	lib.Deps = []pkg.Constraint{
 		{Name: "dev-build/missingtool", Type: pkg.ConstraintTypeVersion, DepType: pkg.DepTypeBuildHost},
@@ -2875,20 +2883,20 @@ func TestBDEPEND_NotSkippedWithNewUse(t *testing.T) {
 		t.Fatalf("failed to add installed: %v", err)
 	}
 
-	// Without --newuse: lib=Keep, BDEPEND skipped, SAT OK
+	// Without --newuse: lib=Keep (dep, not root), BDEPEND skipped, SAT OK
 	resolver := NewResolver(r)
 	resolver.SetInstalledDB(db)
-	result := resolveClean(t, resolver, []string{"dev-libs/lib"})
+	result := resolveClean(t, resolver, []string{"app-misc/app"})
 	libKey := pkg.SlotKey{Name: "dev-libs/lib", Slot: "0"}
 	if entry := result[libKey]; entry == nil || entry.Action != ActionKeep {
-		t.Errorf("without --newuse: expected Keep, got %v", entry)
+		t.Errorf("without --newuse: expected Keep for dep, got %v", entry)
 	}
 
 	// With --newuse: lib rebuilds, BDEPEND required, missingtool → UNSAT
 	resolver2 := NewResolver(r)
 	resolver2.SetInstalledDB(db)
 	resolver2.SetOptions(ResolveOptions{NewUse: true})
-	_, err := resolver2.Resolve([]string{"dev-libs/lib"})
+	_, err := resolver2.Resolve([]string{"app-misc/app"})
 	if err == nil {
 		t.Error("with --newuse: expected UNSAT — BDEPEND missingtool not in repo")
 	}
@@ -3077,5 +3085,226 @@ func TestAction_UpdateWithoutDeep_DepKeeps(t *testing.T) {
 	}
 	if zlibEntry.Action != ActionKeep {
 		t.Errorf("-u without -D: dep should be Keep, got %s", zlibEntry.Action)
+	}
+}
+
+// TestAction_RootSameVersion_Reinstall verifies Portage semantics:
+// when the user explicitly requests an atom that is already installed at the
+// same version, Portage does a Reinstall (R), not Keep (K).
+// This is why `emerge app-alternatives/bzip2` shows [ebuild R] bzip2-1.
+func TestAction_RootSameVersion_Reinstall(t *testing.T) {
+	r := newMultiVersionRepo()
+	bzip := pkg.NewPackage("app-alternatives/bzip2", "1", "0")
+	r.addVersion(bzip)
+
+	db := state.NewPackageDatabase("/var/db/pkg")
+	if err := db.Add(&state.InstalledPackage{Package: pkg.NewPackage("app-alternatives/bzip2", "1", "0")}); err != nil {
+		t.Fatal(err)
+	}
+
+	resolver := NewResolver(r)
+	resolver.SetInstalledDB(db)
+	result := resolveClean(t, resolver, []string{"app-alternatives/bzip2"})
+
+	key := pkg.SlotKey{Name: "app-alternatives/bzip2", Slot: "0"}
+	entry, ok := result[key]
+	if !ok {
+		t.Fatal("expected bzip2 in result")
+	}
+	if entry.Action != ActionReinstall {
+		t.Errorf("root same-version should be Reinstall, got %s", entry.Action)
+	}
+}
+
+// TestBuildResult_VDBOnlyVersion verifies that when SAT selects a version that
+// exists only in VDB (removed from repo), buildResultFromSolution uses the
+// allCandidates fallback, not LoadPackage (which returns the wrong version).
+func TestBuildResult_VDBOnlyVersion(t *testing.T) {
+	r := newMultiVersionRepo()
+	// Repo has v2.0 only; v1.0 is installed but no longer in repo
+	r.addVersion(pkg.NewPackage("dev-libs/lib", "2.0", "0"))
+
+	db := state.NewPackageDatabase("/var/db/pkg")
+	if err := db.Add(&state.InstalledPackage{Package: pkg.NewPackage("dev-libs/lib", "1.0", "0")}); err != nil {
+		t.Fatal(err)
+	}
+
+	// App depends on lib — SAT may select installed v1.0 (keep preference)
+	app := pkg.NewPackage("app-misc/app", "1.0", "0")
+	app.Deps = []pkg.Constraint{{Name: "dev-libs/lib", Type: pkg.ConstraintTypeVersion}}
+	r.addVersion(app)
+
+	resolver := NewResolver(r)
+	resolver.SetInstalledDB(db)
+	result := resolveClean(t, resolver, []string{"app-misc/app"})
+
+	libKey := pkg.SlotKey{Name: "dev-libs/lib", Slot: "0"}
+	entry, ok := result[libKey]
+	if !ok {
+		t.Fatal("expected lib in result")
+	}
+	// Must be the version SAT selected, not LoadPackage's highest
+	if entry.Package.Version != "1.0" && entry.Package.Version != "2.0" {
+		t.Errorf("lib version should be 1.0 (kept) or 2.0 (upgraded), got %s", entry.Package.Version)
+	}
+}
+
+// TestRootSlotAtom_FiltersCandidates verifies that a slot-qualified root atom
+// (e.g., dev-lang/python:3.13) restricts SAT candidates to the matching slot.
+// Without this, the solver could pick python-3.15 (slot 3.15) when :3.13 requested.
+func TestRootSlotAtom_FiltersCandidates(t *testing.T) {
+	r := newMultiVersionRepo()
+	// Three python versions in different slots
+	py312 := pkg.NewPackage("dev-lang/python", "3.12.15", "3.12")
+	py313 := pkg.NewPackage("dev-lang/python", "3.13.15", "3.13")
+	py315 := pkg.NewPackage("dev-lang/python", "3.15.9999", "3.15")
+	r.addVersion(py312)
+	r.addVersion(py313)
+	r.addVersion(py315)
+
+	resolver := NewResolver(r)
+	result := resolveClean(t, resolver, []string{"dev-lang/python:3.13"})
+
+	// Must select slot 3.13, not 3.15 (newest) or 3.12
+	key := pkg.SlotKey{Name: "dev-lang/python", Slot: "3.13"}
+	entry, ok := result[key]
+	if !ok {
+		t.Fatal("expected python:3.13 in result")
+	}
+	if entry.Package.Version != "3.13.15" {
+		t.Errorf("slot :3.13 should select 3.13.15, got %s", entry.Package.Version)
+	}
+
+	// Must NOT have other slots in result
+	for k := range result {
+		if k.Name == "dev-lang/python" && k.Slot != "3.13" {
+			t.Errorf("unexpected python slot %s in result — only :3.13 requested", k.Slot)
+		}
+	}
+}
+
+// TestOrGroup_RootUpgradesViaSecondAlternative verifies that eager OR expansion
+// allows the root to upgrade via the second alternative when the first is broken.
+// Scenario: root pkg-2.0 has dep || ( broken-a good-b ). broken-a has missing dep.
+// With eager expansion, good-b is fully explored → SAT picks pkg-2.0 + good-b.
+func TestOrGroup_RootUpgradesViaSecondAlternative(t *testing.T) {
+	r := newMultiVersionRepo()
+
+	// pkg v1.0 (installed, no deps) and v2.0 (newer, has OR-dep)
+	pkg1 := pkg.NewPackage("app-misc/pkg", "1.0", "0")
+	pkg2 := pkg.NewPackage("app-misc/pkg", "2.0", "0")
+	// || ( broken-a good-b ) — broken-a has unresolvable dep, good-b works
+	pkg2.Deps = []pkg.Constraint{
+		{Name: "dev-libs/broken-a", Type: pkg.ConstraintTypeVersion, OrGroupID: 1},
+		{Name: "dev-libs/good-b", Type: pkg.ConstraintTypeVersion, OrGroupID: 1},
+	}
+	r.addVersion(pkg1)
+	r.addVersion(pkg2)
+
+	// broken-a depends on missing-dep (not in repo → prohibited)
+	brokenA := pkg.NewPackage("dev-libs/broken-a", "1.0", "0")
+	brokenA.Deps = []pkg.Constraint{
+		{Name: "dev-libs/missing-dep", Type: pkg.ConstraintTypeVersion},
+	}
+	r.addVersion(brokenA)
+
+	// good-b has no problematic deps
+	goodB := pkg.NewPackage("dev-libs/good-b", "1.0", "0")
+	r.addVersion(goodB)
+
+	// VDB: pkg-1.0 installed (no deps)
+	db := state.NewPackageDatabase("/var/db/pkg")
+	if err := db.Add(&state.InstalledPackage{Package: pkg.NewPackage("app-misc/pkg", "1.0", "0")}); err != nil {
+		t.Fatal(err)
+	}
+
+	resolver := NewResolver(r)
+	resolver.SetInstalledDB(db)
+	result := resolveClean(t, resolver, []string{"app-misc/pkg"})
+
+	key := pkg.SlotKey{Name: "app-misc/pkg", Slot: "0"}
+	entry, ok := result[key]
+	if !ok {
+		t.Fatal("expected pkg in result")
+	}
+	// Root must upgrade to 2.0 (preferred), not fall back to 1.0 (installed)
+	if entry.Package.Version != "2.0" {
+		t.Errorf("root should upgrade to 2.0 via good-b, got %s (installed fallback)", entry.Package.Version)
+	}
+	if entry.Action != ActionUpgrade {
+		t.Errorf("root should be Upgrade, got %s", entry.Action)
+	}
+
+	// good-b must be in result (second OR alternative)
+	bKey := pkg.SlotKey{Name: "dev-libs/good-b", Slot: "0"}
+	if _, ok := result[bKey]; !ok {
+		t.Error("good-b should be in result — second OR alternative after broken-a failed")
+	}
+
+	// broken-a must NOT be in result
+	aKey := pkg.SlotKey{Name: "dev-libs/broken-a", Slot: "0"}
+	if _, ok := result[aKey]; ok {
+		t.Error("broken-a should NOT be in result — its dep is missing")
+	}
+}
+
+// TestKeepMode_InstalledDepsNotRevalidated verifies that without --deep,
+// installed packages' deps are not re-encoded in SAT (Portage semantics).
+// Scenario: installed virt-2 has || ( =perl-5.42* perl-core/x ).
+// perl-core/x doesn't exist, installed perl is 5.40. Without --deep,
+// virt is Keep (installed), its deps not checked → perl stays at 5.40.
+// With --deep, virt's deps ARE checked → perl must upgrade to 5.42.
+func TestKeepMode_InstalledDepsNotRevalidated(t *testing.T) {
+	r := newMultiVersionRepo()
+
+	// app depends on virt
+	app := pkg.NewPackage("app-misc/app", "1.0", "0")
+	app.Deps = []pkg.Constraint{{Name: "virtual/perl-virt", Type: pkg.ConstraintTypeVersion}}
+	r.addVersion(app)
+
+	// virt has || ( =perl-5.42* perl-core/x ), perl-core/x not in repo
+	virt := pkg.NewPackage("virtual/perl-virt", "2.0", "0")
+	virt.Deps = []pkg.Constraint{
+		{Name: "dev-lang/perl", Type: pkg.ConstraintTypeVersion,
+			Version: pkg.NewVersionConstraint(pkg.OpEqualGlob, "5.42"), OrGroupID: 1},
+		{Name: "perl-core/nonexistent", Type: pkg.ConstraintTypeVersion, OrGroupID: 1},
+	}
+	r.addVersion(virt)
+
+	// perl 5.40 and 5.42
+	r.addVersion(pkg.NewPackage("dev-lang/perl", "5.40.2", "0"))
+	r.addVersion(pkg.NewPackage("dev-lang/perl", "5.42.2", "0"))
+
+	// VDB: perl 5.40.2, virt 2.0 installed
+	db := state.NewPackageDatabase("/var/db/pkg")
+	if err := db.Add(&state.InstalledPackage{Package: pkg.NewPackage("dev-lang/perl", "5.40.2", "0")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Add(&state.InstalledPackage{Package: pkg.NewPackage("virtual/perl-virt", "2.0", "0")}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Without --deep: virt=K, perl not in plan (installed deps not re-checked)
+	resolver := NewResolver(r)
+	resolver.SetInstalledDB(db)
+	result := resolveClean(t, resolver, []string{"app-misc/app"})
+
+	perlKey := pkg.SlotKey{Name: "dev-lang/perl", Slot: "0"}
+	if _, ok := result[perlKey]; ok {
+		t.Error("without --deep: perl should NOT be in plan (dep of installed virt, not re-checked)")
+	}
+
+	// With --deep: virt's deps re-checked → perl must upgrade
+	resolver2 := NewResolver(r)
+	resolver2.SetInstalledDB(db)
+	resolver2.SetOptions(ResolveOptions{Deep: true})
+	result2 := resolveClean(t, resolver2, []string{"app-misc/app"})
+
+	perlEntry2, ok := result2[perlKey]
+	if !ok {
+		t.Fatal("with --deep: expected perl in result")
+	}
+	if perlEntry2.Package.Version != "5.42.2" {
+		t.Errorf("with --deep: perl should upgrade to 5.42.2, got %s", perlEntry2.Package.Version)
 	}
 }

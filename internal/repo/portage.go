@@ -371,8 +371,14 @@ func (pr *PortageRepository) parseEbuild(name, path string) (*pkg.Package, error
 		blockerCount := 0
 		skippedByUSE := 0
 		for _, pd := range parsedDeps {
-			// Filter by USE conditional first (applies to blockers too)
-			if !pr.isUSEConditionalActive(pd.UseFlag, effectiveUSE) {
+			// Filter by USE conditional (applies to blockers too).
+			// Use Conditions (nested stack) if available, fallback to UseFlag (flat).
+			if len(pd.Constraint.Conditions) > 0 {
+				if !pkg.AreUSEConditionsActive(pd.Constraint.Conditions, effectiveUSE) {
+					skippedByUSE++
+					continue
+				}
+			} else if !pr.isUSEConditionalActive(pd.UseFlag, effectiveUSE) {
 				skippedByUSE++
 				continue
 			}
@@ -685,8 +691,14 @@ func (pr *PortageRepository) loadDependenciesWithEclass(ebuildPath string, p *pk
 		// Blockers are collected into p.Blockers for SAT conflict clauses.
 		for _, pd := range deps {
 			// Filter by USE conditional if effectiveUSE is provided
-			if effectiveUSE != nil && !pr.isUSEConditionalActive(pd.UseFlag, effectiveUSE) {
-				continue
+			if effectiveUSE != nil {
+				if len(pd.Constraint.Conditions) > 0 {
+					if !pkg.AreUSEConditionsActive(pd.Constraint.Conditions, effectiveUSE) {
+						continue
+					}
+				} else if !pr.isUSEConditionalActive(pd.UseFlag, effectiveUSE) {
+					continue
+				}
 			}
 
 			if pd.IsBlocker {
@@ -832,8 +844,12 @@ func (pr *PortageRepository) parseFromMetadataCache(name, ebuildPath string) (*p
 		}
 
 		for _, pd := range deps {
-			// Filter by USE conditional first (applies to blockers too)
-			if !pr.isUSEConditionalActive(pd.UseFlag, effectiveUSE) {
+			// Filter by USE conditional (nested conditions if available)
+			if len(pd.Constraint.Conditions) > 0 {
+				if !pkg.AreUSEConditionsActive(pd.Constraint.Conditions, effectiveUSE) {
+					continue
+				}
+			} else if !pr.isUSEConditionalActive(pd.UseFlag, effectiveUSE) {
 				continue
 			}
 

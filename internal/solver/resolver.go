@@ -24,6 +24,7 @@ const (
 	ActionReinstall               // same version, rebuild for USE changes (Portage "R")
 	ActionKeep                    // same version and slot, already installed
 	ActionRemove                  // installed but deselected (blocker, slot removal)
+	ActionNewSlot                 // different slot of same package installed (Portage "NS")
 )
 
 func (a PackageAction) String() string {
@@ -40,6 +41,8 @@ func (a PackageAction) String() string {
 		return "K"
 	case ActionRemove:
 		return "D"
+	case ActionNewSlot:
+		return "NS"
 	default:
 		return "?"
 	}
@@ -133,11 +136,9 @@ type PortageResolver struct {
 	// Measures exploration cost, not result size.
 	PackagesExplored int
 
-	// orExpansionLevel tracks how many OR-group alternatives to expand per group.
-	// Key: "pkgname:groupID". Value: number of alternatives to fully explore (default 1).
-	// On UNSAT retry, the level is incremented for groups whose preferred alternative
-	// was prohibited, allowing the next alternative's deps to be explored.
-	orExpansionLevel map[string]int
+	// rootNames stores explicitly requested atom names for the current Resolve call.
+	// Root atoms get different semantics: always upgrade, reinstall if same version.
+	rootNames map[string]bool
 }
 
 // NewResolver creates a new resolver without mask/keyword support.
@@ -264,35 +265,48 @@ func (r *PortageResolver) collectDependencies(p *pkg.Package, allPackages map[st
 	// Group dependencies by OrGroupID
 	requiredDeps, orGroups := groupDependenciesByOrGroupID(p.Deps)
 
-	// Skip BDEPEND exploration only for the exact installed version+slot.
-	// Other versions of the same package (upgrade candidates) still need BDEPEND.
+	// Portage without --deep does not re-validate deps of installed packages.
+	// An installed package is a fact, not a graph node. Its deps were satisfied
+	// at install time; re-checking them can force unnecessary upgrades
+	// (e.g., virtual/perl-ExtUtils-MakeMaker requires =perl-5.42* but
+	// perl-5.40 is installed and working).
 	installedInSlot := r.findInstalledInSlot(p.Name, p.Slot.Name)
-	skipBDEPEND := installedInSlot != nil && installedInSlot.Version == p.Version &&
+	isInstalledSameVersion := installedInSlot != nil && installedInSlot.Version == p.Version &&
 		!r.options.NewUse && !r.options.EmptyTree
+	skipAllDeps := isInstalledSameVersion && !r.options.Deep && !r.rootNames[p.Name]
+	skipBDEPEND := isInstalledSameVersion
+
+	if skipAllDeps {
+		return
+	}
 
 	for _, dep := range requiredDeps {
 		if skipBDEPEND && isBuildTimeDep(dep.DepType) {
 			continue
 		}
-		// SAT must see all providers to build correct implication clauses.
 
-		// Load ALL candidate versions and recursively explore each one's deps.
-		// SAT needs transitive deps of ALL candidates, not just the highest.
+		// Without --deep: if an installed package satisfies this dep,
+		// register candidates but don't explore their dep trees.
+		// The installed package is a fact — its own deps were validated
+		// at install time. Exploring tree versions' deps can force
+		// unnecessary cascading upgrades (perl virtual chain).
+		depSatisfiedByInstalled := !r.options.Deep && r.isDepSatisfiedByInstalled(dep)
+
 		r.addCandidateVersions(dep.Name, allCandidates)
-
-		if candidates, ok := allCandidates[dep.Name]; ok {
-			for _, candidate := range candidates {
-				r.collectDependencies(candidate, allPackages, allCandidates)
+		if !depSatisfiedByInstalled {
+			if candidates, ok := allCandidates[dep.Name]; ok {
+				for _, candidate := range candidates {
+					r.collectDependencies(candidate, allPackages, allCandidates)
+				}
 			}
 		}
 	}
 
-	// Lazy OR expansion: expand only the first N preferred alternatives,
-	// where N = orExpansionLevel[key] (default 1). Others get candidates
-	// registered (for SAT variable creation) but deps NOT explored. An
-	// unexpanded alternative without dep exploration will get prohibit
-	// clauses in addPackageConstraints (no providers for its deps).
-	// If SAT is UNSAT, Resolve() retries with expanded level incremented.
+	// OR-group alternatives: explore ALL alternatives eagerly.
+	// Each alternative's candidates are registered and deps fully explored.
+	// SAT encoding determines which alternative is selected (leftmost preferred
+	// via OR-group weights in MAX-SAT). This ensures encoding completeness —
+	// no provider is prohibited just because it wasn't explored.
 	for groupID, alternatives := range orGroups {
 		if skipBDEPEND && len(alternatives) > 0 && isBuildTimeDep(alternatives[0].DepType) {
 			continue
@@ -300,29 +314,16 @@ func (r *PortageResolver) collectDependencies(p *pkg.Package, allPackages map[st
 		logging.Debug("OR-group %d for %s: %d alternatives", groupID, p.Name, len(alternatives))
 		sorted := r.sortAlternativesByInstalled(alternatives)
 
-		orKey := fmt.Sprintf("%s:%d", p.Name, groupID)
-		expandLevel := 1
-		if r.orExpansionLevel != nil {
-			if lvl, ok := r.orExpansionLevel[orKey]; ok && lvl > expandLevel {
-				expandLevel = lvl
-			}
-		}
-
-		for i, alt := range sorted {
-			// Register candidates for SAT variable creation
+		for _, alt := range sorted {
+			altSatisfied := !r.options.Deep && r.isDepSatisfiedByInstalled(alt)
 			r.addCandidateVersions(alt.Name, allCandidates)
-
-			// Explore deps of alternatives up to the expansion level
-			if i < expandLevel {
+			if !altSatisfied {
 				if candidates, ok := allCandidates[alt.Name]; ok {
 					for _, candidate := range candidates {
 						r.collectDependencies(candidate, allPackages, allCandidates)
 					}
 				}
 			}
-			// Non-expanded alternatives: candidates registered but deps not explored.
-			// addPackageConstraints will emit prohibit for their unresolvable deps,
-			// making SAT prefer the expanded alternative.
 		}
 	}
 }
@@ -401,13 +402,22 @@ func (r *PortageResolver) addInstalledCandidates(allCandidates map[string][]*pkg
 		for _, c := range candidates {
 			if c.Version == version {
 				alreadyPresent = true
+				// Merge VDB UseFlags into tree candidate — VDB reflects the
+				// actual USE flags that were active when the package was built.
+				// Tree candidates have USE from IUSE+config which may differ
+				// (e.g., PYTHON_TARGETS changed since install). For installed
+				// packages, VDB USE is the source of truth.
+				for flag, enabled := range ip.Package.UseFlags {
+					if enabled {
+						c.UseFlags[flag] = true
+					}
+				}
 				break
 			}
 		}
 
 		versionKey := name + "@" + version
 		if !alreadyPresent {
-			// Create a Package from the installed metadata
 			installedPkg := ip.Package
 			allCandidates[name] = append(allCandidates[name], installedPkg)
 			allPackages[versionKey] = installedPkg
@@ -426,7 +436,8 @@ func (r *PortageResolver) addInstalledCandidates(allCandidates map[string][]*pkg
 
 // addPackageConstraints adds all constraints for a single package version to the SAT solver.
 // Uses implication clauses: if this version is selected, its deps must be satisfied.
-// Root packages get an at-least-one clause (unit clause for single version).
+//
+//nolint:gocyclo // PMS constraint encoding covers many dep types and modes
 func (r *PortageResolver) addPackageConstraints(adapter *GophersatAdapter, p *pkg.Package, rootPackages []string) {
 	pkgKey := p.Name + "@" + p.Version
 	pkgVarID := adapter.GetVarID(pkgKey)
@@ -449,13 +460,16 @@ func (r *PortageResolver) addPackageConstraints(adapter *GophersatAdapter, p *pk
 	// Group dependencies by OrGroupID
 	requiredDeps, orGroups := groupDependenciesByOrGroupID(p.Deps)
 
-	// Skip BDEPEND implications for installed (Keep) candidates.
-	// Installed packages are already built — they don't need build deps.
-	// Tree candidates still need BDEPEND (they will be built).
-	// Skip BDEPEND only if installed AND not rebuilding (--newuse forces rebuild)
-	skipBDEPEND := adapter.IsVarInstalled(pkgVarID) && !r.options.NewUse
+	// Without --deep, installed packages are facts — don't encode their deps.
+	isInstalled := adapter.IsVarInstalled(pkgVarID)
+	skipAllDeps := isInstalled && !r.options.Deep && !r.options.NewUse &&
+		!r.options.EmptyTree && !contains(rootPackages, p.Name)
+	skipBDEPEND := isInstalled && !r.options.NewUse
 
-	// Add REQUIRED dependencies as implications: (-P@V | B1 | B2 | ...)
+	if skipAllDeps {
+		return
+	}
+
 	for _, dep := range requiredDeps {
 		if skipBDEPEND && isBuildTimeDep(dep.DepType) {
 			continue
@@ -555,10 +569,14 @@ func (r *PortageResolver) determineAction(p *pkg.Package) PackageAction {
 	// the full list to find a match in the same slot.
 	installed := r.findInstalledInSlot(p.Name, p.Slot.Name)
 	if installed == nil {
-		return ActionInstall // new slot, nothing installed there
+		// Check if a DIFFERENT slot of the same package is installed → NewSlot
+		if r.hasInstalledByName(p.Name) {
+			return ActionNewSlot
+		}
+		return ActionInstall
 	}
 	if installed.Version == p.Version {
-		if r.options.NewUse {
+		if r.options.NewUse || r.rootNames[p.Name] {
 			return ActionReinstall
 		}
 		return ActionKeep
@@ -577,15 +595,18 @@ func (r *PortageResolver) findInstalledInSlot(name, slot string) *pkg.Package {
 	if r.installedDB == nil {
 		return nil
 	}
+	var best *pkg.Package
 	for _, ip := range r.installedDB.List() {
 		if ip.Package == nil {
 			continue
 		}
 		if ip.Package.Name == name && ip.Package.Slot.Name == slot {
-			return ip.Package
+			if best == nil || pkg.CompareVersions(ip.Package.Version, best.Version) > 0 {
+				best = ip.Package
+			}
 		}
 	}
-	return nil
+	return best
 }
 
 // buildResultFromSolution builds the final result map from the SAT solution.
@@ -602,23 +623,19 @@ func (r *PortageResolver) buildResultFromSolution(solution map[string]string, al
 		// Load the specific version that was selected by the SAT solver
 		p, err := r.repo.LoadPackageVersion(name, version)
 		if err != nil {
-			// Fallback to LoadPackage if LoadPackageVersion fails
-			p, err = r.repo.LoadPackage(name)
-			if err != nil {
-				// Final fallback: check allCandidates (covers installed-only packages
-				// that were removed from the repo but are still in VDB)
-				if candidates, ok := allCandidates[name]; ok {
-					for _, c := range candidates {
-						if c.Version == version {
-							p = c
-							break
-						}
+			// Fallback: check allCandidates (covers installed-only packages
+			// that were removed from the repo but are still in VDB)
+			if candidates, ok := allCandidates[name]; ok {
+				for _, c := range candidates {
+					if c.Version == version {
+						p = c
+						break
 					}
 				}
-				if p == nil {
-					logging.Debug("Warning: package %s not found: %v", name, err)
-					continue
-				}
+			}
+			if p == nil {
+				logging.Debug("Warning: SAT selected %s@%s but package not found: %v", name, version, err)
+				continue
 			}
 		}
 		result[pkg.SlotKeyOf(p)] = &ResolveEntry{Package: p, Action: r.determineAction(p)}
@@ -682,14 +699,10 @@ func (r *PortageResolver) loadPackageFromAtom(atomStr string) (*pkg.Package, err
 	return r.loadUnmaskedPackage(atom.CP())
 }
 
-// maxOrRetries bounds the lazy OR expansion retry loop.
-// Each retry expands one more alternative in at least one OR-group.
-// 10 is generous — most real OR-groups have 2-3 alternatives.
-const maxOrRetries = 10
-
-//nolint:gocyclo // Complexity inherent to multi-pass Portage-compatible resolution with OR-group support
+//nolint:gocyclo // Complexity inherent to Portage-compatible resolution
 func (r *PortageResolver) Resolve(packages []string) (ResolveResult, error) {
 	r.PackagesExplored = 0
+	r.rootNames = make(map[string]bool)
 
 	// Track root packages: name -> the specific version selected by loadPackageFromAtom.
 	rootPackageNames := make([]string, 0, len(packages))
@@ -700,200 +713,279 @@ func (r *PortageResolver) Resolve(packages []string) (ResolveResult, error) {
 	for _, pkgName := range packages {
 		p, err := r.loadPackageFromAtom(pkgName)
 		if err != nil {
+			if strings.Contains(err.Error(), "masked") {
+				logging.Warn("!!! Skipping masked package: %s (%v)", pkgName, err)
+				continue
+			}
 			return nil, fmt.Errorf("failed to load package %s: %w", pkgName, err)
 		}
 		rootPackageNames = append(rootPackageNames, p.Name)
 		rootPackagesMap[p.Name] = p
 		rootAtoms[p.Name] = pkgName
+		r.rootNames[p.Name] = true
 		logging.Debug("Resolving package: %s-%s with %d dependencies",
 			p.Name, p.Version, len(p.Deps))
 	}
 
 	// Initialize lazy OR expansion levels (all start at 1 = first alternative only).
-	if r.orExpansionLevel == nil {
-		r.orExpansionLevel = make(map[string]int)
-	}
+	// Single-pass: collect all deps eagerly, encode, solve.
+	adapter := NewGophersatAdapter()
+	allPackages := make(map[string]*pkg.Package)
+	allCandidates := make(map[string][]*pkg.Package)
 
-	// Retry loop: collect deps + build SAT + solve.
-	// On UNSAT caused by lazy OR (unexpanded alternative prohibited),
-	// increment expansion level and rebuild from scratch.
-	var lastAdapter *GophersatAdapter
-
-	for attempt := 0; attempt <= maxOrRetries; attempt++ {
-		if attempt > 0 {
-			logging.Info("OR-expansion retry %d: expanding additional alternatives", attempt)
-		}
-
-		adapter := NewGophersatAdapter()
-		allPackages := make(map[string]*pkg.Package)
-		allCandidates := make(map[string][]*pkg.Package)
-
-		// Reset exploration counter for this attempt
-		r.PackagesExplored = 0
-
-		// Collect dependencies with current orExpansionLevel
-		for _, p := range rootPackagesMap {
-			r.addCandidateVersions(p.Name, allCandidates)
-			if candidates, ok := allCandidates[p.Name]; ok {
-				for _, candidate := range candidates {
-					r.collectDependencies(candidate, allPackages, allCandidates)
-				}
+	// Collect dependencies (eager: all OR alternatives fully explored)
+	for _, p := range rootPackagesMap {
+		r.addCandidateVersions(p.Name, allCandidates)
+		if candidates, ok := allCandidates[p.Name]; ok {
+			for _, candidate := range candidates {
+				r.collectDependencies(candidate, allPackages, allCandidates)
 			}
-		}
-
-		logging.Debug("Total packages in dependency graph: %d", len(allPackages))
-		logging.Debug("Total candidate packages: %d names", len(allCandidates))
-
-		// Inject installed packages (VDB) as SAT candidates.
-		installedKeys := r.addInstalledCandidates(allCandidates, allPackages)
-
-		// Register ALL candidate versions with the SAT adapter.
-		for _, candidates := range allCandidates {
-			for _, c := range candidates {
-				adapter.AddPackage(c)
-			}
-		}
-		for _, p := range allPackages {
-			adapter.AddPackage(p)
-		}
-
-		// Mark installed versions in the adapter.
-		for _, key := range installedKeys {
-			if varID := adapter.GetVarID(key); varID != 0 {
-				adapter.MarkInstalled(varID)
-			}
-		}
-
-		// Add root constraints
-		r.addRootConstraints(adapter, rootPackagesMap, rootAtoms)
-
-		// Add implication constraints for each candidate version.
-		for _, candidates := range allCandidates {
-			for _, c := range candidates {
-				r.addPackageConstraints(adapter, c, rootPackageNames)
-			}
-		}
-		for _, p := range allPackages {
-			if _, hasCandidates := allCandidates[p.Name]; !hasCandidates {
-				r.addPackageConstraints(adapter, p, rootPackageNames)
-			}
-		}
-
-		// Add at-most-one-per-slot pairwise exclusion clauses
-		adapter.AddAtMostOnePerSlot()
-
-		logging.Debug("Total clauses in SAT problem: %d", len(adapter.clauses))
-
-		// Solve
-		const maxsatTimeout = 5 * time.Second
-		updateMode := r.options.Update
-		deepMode := r.options.Deep
-		status, solution, err := adapter.SolveOptimal(maxsatTimeout, updateMode, deepMode)
-		if err != nil {
-			return nil, err
-		}
-
-		if status == pkg.StatusSat {
-			result, buildErr := r.buildResultFromSolution(solution, allCandidates)
-			if buildErr != nil {
-				return nil, buildErr
-			}
-			r.addRemovedPackages(result, adapter)
-			logging.Info("Resolved packages:")
-			for key, entry := range result {
-				logging.Debug("- %s-%s [slot:%s action:%s]", entry.Package.Name, entry.Package.Version, key.Slot, entry.Action)
-			}
-			return result, nil
-		}
-
-		// UNSAT — check if lazy OR expansion can help.
-		lastAdapter = adapter
-		expanded := r.tryExpandOrGroups(adapter, allPackages)
-		if !expanded {
-			break
 		}
 	}
 
-	// Genuine UNSAT — explain and return error
-	if lastAdapter != nil {
-		explanation := lastAdapter.ExplainWhyUNSAT()
-		for _, line := range explanation.Lines {
-			logging.Info("%s", line)
+	logging.Debug("Total packages in dependency graph: %d", len(allPackages))
+	logging.Debug("Total candidate packages: %d names", len(allCandidates))
+
+	// Inject installed packages (VDB) as SAT candidates.
+	installedKeys := r.addInstalledCandidates(allCandidates, allPackages)
+
+	// Register all candidates with the SAT adapter.
+	for _, candidates := range allCandidates {
+		for _, c := range candidates {
+			adapter.AddPackage(c)
 		}
+	}
+	for _, p := range allPackages {
+		adapter.AddPackage(p)
+	}
+
+	// Mark installed versions.
+	for _, key := range installedKeys {
+		if varID := adapter.GetVarID(key); varID != 0 {
+			adapter.MarkInstalled(varID)
+		}
+	}
+
+	// Add root constraints
+	r.addRootConstraints(adapter, rootPackagesMap, rootAtoms)
+
+	// Add implication constraints for each candidate version.
+	for _, candidates := range allCandidates {
+		for _, c := range candidates {
+			r.addPackageConstraints(adapter, c, rootPackageNames)
+		}
+	}
+	for _, p := range allPackages {
+		if _, hasCandidates := allCandidates[p.Name]; !hasCandidates {
+			r.addPackageConstraints(adapter, p, rootPackageNames)
+		}
+	}
+
+	// Add at-most-one-per-slot pairwise exclusion clauses
+	adapter.AddAtMostOnePerSlot()
+
+	logging.Debug("Total clauses in SAT problem: %d", len(adapter.clauses))
+
+	// Solve in two phases (matches Portage: try newest root first, backtrack if fails).
+	// Phase 1: force preferred root versions via unit clauses. If SAT → done.
+	// Phase 2: if UNSAT → remove forcing clauses and solve normally (installed fallback).
+	const maxsatTimeout = 5 * time.Second
+	updateMode := r.options.Update
+	deepMode := r.options.Deep
+
+	// Phase 1: try with preferred roots forced
+	forcedAdapter := adapter.Clone()
+	for _, preferred := range rootPackagesMap {
+		prefKey := preferred.Name + "@" + preferred.Version
+		if varID := forcedAdapter.GetVarID(prefKey); varID != 0 {
+			forcedAdapter.AddClauseRaw([]int{varID})
+		}
+	}
+
+	status, solution, err := forcedAdapter.SolveOptimal(maxsatTimeout, updateMode, deepMode)
+	if err == nil && status == pkg.StatusSat {
+		result, buildErr := r.buildResultFromSolution(solution, allCandidates)
+		if buildErr != nil {
+			return nil, buildErr
+		}
+		r.addRemovedPackages(result, forcedAdapter)
+		r.warnUnexpectedUpgrades(result, forcedAdapter)
+		logging.Info("Resolved packages:")
+		for key, entry := range result {
+			logging.Debug("- %s-%s [slot:%s action:%s]", entry.Package.Name, entry.Package.Version, key.Slot, entry.Action)
+		}
+		return result, nil
+	}
+
+	// Phase 2: preferred root unsatisfiable — explain why, then fall back
+	for _, preferred := range rootPackagesMap {
+		explanation := forcedAdapter.ExplainWhyUNSAT()
+		if len(explanation.Lines) > 0 {
+			logging.Warn("Preferred %s-%s unsatisfiable:", preferred.Name, preferred.Version)
+			for _, line := range explanation.Lines {
+				logging.Warn("  %s", line)
+			}
+		}
+		break
+	}
+	status, solution, err = adapter.SolveOptimal(maxsatTimeout, updateMode, deepMode)
+	if err != nil {
+		return nil, err
+	}
+
+	if status == pkg.StatusSat {
+		result, buildErr := r.buildResultFromSolution(solution, allCandidates)
+		if buildErr != nil {
+			return nil, buildErr
+		}
+		r.addRemovedPackages(result, adapter)
+		r.warnSuboptimalRoots(result, rootPackagesMap, adapter)
+		r.warnUnexpectedUpgrades(result, adapter)
+		logging.Info("Resolved packages:")
+		for key, entry := range result {
+			logging.Debug("- %s-%s [slot:%s action:%s]", entry.Package.Name, entry.Package.Version, key.Slot, entry.Action)
+		}
+		return result, nil
+	}
+
+	// UNSAT — explain and return error
+	explanation := adapter.ExplainWhyUNSAT()
+	for _, line := range explanation.Lines {
+		logging.Info("%s", line)
 	}
 	return nil, fmt.Errorf("no solution found (UNSAT, see explanation above)")
 }
 
-// tryExpandOrGroups checks if any OR-group has an unexpanded alternative
-// that was prohibited due to missing dep exploration. If found, increments
-// the expansion level for that group and returns true (caller should retry).
-func (r *PortageResolver) tryExpandOrGroups(adapter *GophersatAdapter, allPackages map[string]*pkg.Package) bool {
-	prohibitedNames := adapter.ProhibitedPackageNames()
-	if len(prohibitedNames) == 0 {
+// hasInstalledByName returns true if any version of the named package is installed.
+func (r *PortageResolver) hasInstalledByName(name string) bool {
+	if r.installedDB == nil {
 		return false
 	}
+	for _, ip := range r.installedDB.List() {
+		if ip.Package != nil && ip.Package.Name == name {
+			return true
+		}
+	}
+	return false
+}
 
-	expanded := false
-	for _, p := range allPackages {
-		_, orGroups := groupDependenciesByOrGroupID(p.Deps)
-		for groupID, alternatives := range orGroups {
-			orKey := fmt.Sprintf("%s:%d", p.Name, groupID)
-			currentLevel := 1
-			if lvl, ok := r.orExpansionLevel[orKey]; ok {
-				currentLevel = lvl
-			}
-			if currentLevel >= len(alternatives) {
+// isDepSatisfiedByInstalled checks if a dependency constraint is already
+// satisfied by an installed package. Used for non-deep mode to avoid
+// exploring dep trees of packages that are already installed and working.
+func (r *PortageResolver) isDepSatisfiedByInstalled(dep pkg.Constraint) bool {
+	if r.installedDB == nil || r.options.EmptyTree {
+		return false
+	}
+	for _, ip := range r.installedDB.List() {
+		if ip.Package == nil || ip.Package.Name != dep.Name {
+			continue
+		}
+		// Check version constraint
+		if dep.Version != nil && !dep.Version.Satisfies(ip.Package.Version) {
+			continue
+		}
+		// Check slot constraint
+		if dep.Slot != "" && dep.Slot != "*" && dep.Slot != "=" {
+			slot := strings.TrimSuffix(dep.Slot, "=")
+			if slot != "" && ip.Package.Slot.Name != slot {
 				continue
 			}
-			sorted := r.sortAlternativesByInstalled(alternatives)
-			for i := currentLevel; i < len(sorted); i++ {
-				if prohibitedNames[sorted[i].Name] {
-					r.orExpansionLevel[orKey] = currentLevel + 1
-					logging.Info("OR-group %s: expanding alternative %d (%s) after UNSAT",
-						orKey, currentLevel, sorted[i].Name)
-					expanded = true
-					break
+		}
+		return true
+	}
+	return false
+}
+
+// warnSuboptimalRoots checks if any root atom resolved to a non-preferred candidate
+// (e.g., installed version instead of newest). When this happens, it explains why
+// the preferred candidate was impossible — this is diagnostically critical because
+// a silent fallback to installed looks like "working" but hides real dep failures.
+func (r *PortageResolver) warnSuboptimalRoots(result ResolveResult, rootPackages map[string]*pkg.Package, adapter *GophersatAdapter) {
+	for name, preferred := range rootPackages {
+		preferredKey := preferred.Name + "@" + preferred.Version
+		preferredVarID := adapter.GetVarID(preferredKey)
+		if preferredVarID == 0 {
+			continue
+		}
+
+		// Check if SAT selected this preferred version
+		for _, entry := range result {
+			if entry.Package.Name != name {
+				continue
+			}
+			if entry.Package.Version == preferred.Version {
+				break // preferred was selected, all good
+			}
+			// SAT selected a different version — preferred was rejected
+			logging.Warn("Root %s resolved to %s instead of preferred %s",
+				name, entry.Package.Version, preferred.Version)
+			// Check if preferred is prohibited (has a reason in explainer)
+			if reason := adapter.ProhibitReason(preferredVarID); reason != "" {
+				logging.Warn("  Reason: %s", reason)
+			}
+			// Walk implication edges to find what in the dep chain is impossible
+			visited := map[int]bool{preferredVarID: true}
+			queue := []int{preferredVarID}
+			for len(queue) > 0 {
+				cur := queue[0]
+				queue = queue[1:]
+				for _, dep := range adapter.ImplicationDeps(cur) {
+					if visited[dep] {
+						continue
+					}
+					visited[dep] = true
+					if pr := adapter.ProhibitReason(dep); pr != "" {
+						logging.Warn("  Chain: %s — %s", adapter.VarName(dep), pr)
+					}
+					queue = append(queue, dep)
 				}
+			}
+			break
+		}
+	}
+}
+
+// warnUnexpectedUpgrades diagnoses deps that got Upgrade when they should be
+// Keep (installed version satisfies constraints but was not selected by SAT).
+// For each such dep, prints why the installed version was rejected.
+func (r *PortageResolver) warnUnexpectedUpgrades(result ResolveResult, adapter *GophersatAdapter) {
+	if r.installedDB == nil {
+		return
+	}
+	for _, entry := range result {
+		if entry.Action != ActionUpgrade || r.rootNames[entry.Package.Name] {
+			continue
+		}
+		// Find the installed version that was expected to Keep
+		installed := r.findInstalledInSlot(entry.Package.Name, entry.Package.Slot.Name)
+		if installed == nil {
+			continue
+		}
+		installedKey := installed.Name + "@" + installed.Version
+		installedVarID := adapter.GetVarID(installedKey)
+		if installedVarID == 0 {
+			logging.Warn("Dep %s upgraded to %s (installed %s not in SAT graph)",
+				entry.Package.Name, entry.Package.Version, installed.Version)
+			continue
+		}
+		if reason := adapter.ProhibitReason(installedVarID); reason != "" {
+			logging.Warn("Dep %s upgraded to %s instead of keeping %s: %s",
+				entry.Package.Name, entry.Package.Version, installed.Version, reason)
+		} else {
+			// Find implications where installed var is NOT a provider but newer is
+			installedMissing := adapter.FindImplicationsMissingVar(installedVarID, entry.Package.Name)
+			if len(installedMissing) > 0 {
+				logging.Warn("Dep %s upgraded to %s — installed %s excluded from implications:",
+					entry.Package.Name, entry.Package.Version, installed.Version)
+				for _, reason := range installedMissing {
+					logging.Warn("  %s", reason)
+				}
+			} else {
+				logging.Warn("Dep %s upgraded to %s (installed %s not prohibited, not excluded — MAX-SAT weight)",
+					entry.Package.Name, entry.Package.Version, installed.Version)
 			}
 		}
 	}
-
-	// Fallback: all expanded alternatives are prohibited — try next one.
-	if !expanded {
-		for _, p := range allPackages {
-			_, orGroups := groupDependenciesByOrGroupID(p.Deps)
-			for groupID, alternatives := range orGroups {
-				orKey := fmt.Sprintf("%s:%d", p.Name, groupID)
-				currentLevel := 1
-				if lvl, ok := r.orExpansionLevel[orKey]; ok {
-					currentLevel = lvl
-				}
-				if currentLevel >= len(alternatives) {
-					continue
-				}
-				sorted := r.sortAlternativesByInstalled(alternatives)
-				allExpandedProhibited := true
-				for i := 0; i < currentLevel && i < len(sorted); i++ {
-					if !prohibitedNames[sorted[i].Name] {
-						allExpandedProhibited = false
-						break
-					}
-				}
-				if allExpandedProhibited {
-					r.orExpansionLevel[orKey] = currentLevel + 1
-					nextAlt := "?"
-					if currentLevel < len(sorted) {
-						nextAlt = sorted[currentLevel].Name
-					}
-					logging.Info("OR-group %s: all expanded alternatives prohibited, trying %s",
-						orKey, nextAlt)
-					expanded = true
-				}
-			}
-		}
-	}
-
-	return expanded
 }
 
 // addRemovedPackages marks installed packages for removal ONLY when they are

@@ -68,6 +68,11 @@ dir /usr/lib
 		t.Fatal(err)
 	}
 
+	// Create SLOT file (required for valid VDB entry)
+	if err := os.WriteFile(filepath.Join(pkgDir, "SLOT"), []byte("0"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
 	// Create other metadata files
 	if err := os.WriteFile(filepath.Join(pkgDir, "USE"), []byte("static-libs minizip"), 0644); err != nil {
 		t.Fatal(err)
@@ -381,6 +386,7 @@ func TestVarDBRoundTrip(t *testing.T) {
 		Package: &pkg.Package{
 			Name:    "app-misc/hello",
 			Version: "2.10",
+			Slot:    pkg.Slot{Name: "0"},
 		},
 		InstallTime: time.Unix(1704067200, 0),
 		Files: []InstalledFile{

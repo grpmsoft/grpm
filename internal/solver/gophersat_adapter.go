@@ -601,7 +601,7 @@ func (g *GophersatAdapter) SolveOptimal(timeout time.Duration, updateMode bool, 
 	}
 
 	// OR-group preferences: penalize non-first alternatives.
-	// Weight dominates version preferences to prevent OR choice flip.
+	// Weight dominates version preferences to match Portage leftmost semantics.
 	orWeight := maxVersionRank + 1
 	if orWeight < 2 {
 		orWeight = 2
@@ -857,9 +857,86 @@ func (g *GophersatAdapter) MarkInstalled(varID int) {
 	g.installed[varID] = true
 }
 
+// AddClauseRaw adds a hard clause directly to the SAT problem.
+func (g *GophersatAdapter) AddClauseRaw(clause []int) {
+	g.addClause(clause)
+}
+
+// Clone creates a shallow copy of the adapter with independent clause list.
+// Used for two-phase solving: clone → add forcing clauses → solve.
+func (g *GophersatAdapter) Clone() *GophersatAdapter {
+	clone := &GophersatAdapter{
+		vars:         g.vars,
+		varNames:     g.varNames,
+		packages:     g.packages,
+		addedClauses: g.addedClauses,
+		implications: g.implications,
+		prohibits:    g.prohibits,
+		rootVars:     g.rootVars,
+		installed:    g.installed,
+		orGroupPrefs: g.orGroupPrefs,
+	}
+	clone.clauses = make([][]int, len(g.clauses))
+	copy(clone.clauses, g.clauses)
+	clone.clausesMeta = make([]clauseMeta, len(g.clausesMeta))
+	copy(clone.clausesMeta, g.clausesMeta)
+	return clone
+}
+
+// FindImplicationsMissingVar finds implications where a specific varID is NOT
+// in the provider list but other vars for the same package name ARE.
+// This diagnoses why MAX-SAT skips the installed version.
+func (g *GophersatAdapter) FindImplicationsMissingVar(targetVarID int, pkgName string) []string {
+	var reasons []string
+	for depVarID, edges := range g.implications {
+		for _, edge := range edges {
+			hasTarget := false
+			hasOtherSamePkg := false
+			for _, prov := range edge.providers {
+				if prov == targetVarID {
+					hasTarget = true
+				}
+				if name := g.packageNameOf(prov); name == pkgName && prov != targetVarID {
+					hasOtherSamePkg = true
+				}
+			}
+			if !hasTarget && hasOtherSamePkg {
+				depName := g.varNames[depVarID]
+				reasons = append(reasons, fmt.Sprintf("%s needs %s but installed version not in providers (USE-dep or version mismatch?)", depName, pkgName))
+				if len(reasons) >= 3 {
+					return reasons
+				}
+			}
+		}
+	}
+	return reasons
+}
+
 // IsVarInstalled returns true if the given SAT variable represents an installed package.
 func (g *GophersatAdapter) IsVarInstalled(varID int) bool {
 	return g.installed[varID]
+}
+
+// ProhibitReason returns the reason a candidate is prohibited, or "" if not prohibited.
+func (g *GophersatAdapter) ProhibitReason(varID int) string {
+	return g.prohibits[varID]
+}
+
+// ImplicationDeps returns the provider var IDs from implication edges for a candidate.
+// These are the deps that must have at least one provider — if all providers are
+// prohibited, the candidate itself becomes impossible.
+func (g *GophersatAdapter) ImplicationDeps(varID int) []int {
+	edges := g.implications[varID]
+	var deps []int
+	for _, e := range edges {
+		deps = append(deps, e.providers...)
+	}
+	return deps
+}
+
+// VarName returns the "name@version" string for a SAT variable ID.
+func (g *GophersatAdapter) VarName(varID int) string {
+	return g.varNames[varID]
 }
 
 // findSatisfyingVars returns SAT variable IDs for all registered packages

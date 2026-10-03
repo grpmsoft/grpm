@@ -56,7 +56,8 @@ const (
 	OpGreaterEqual
 	OpLess
 	OpLessEqual
-	OpEqualGlob // =pkg-ver* (PMS 8.3.1: prefix match at version component boundary)
+	OpEqualGlob    // =pkg-ver* (PMS 8.3.1: prefix match at version component boundary)
+	OpRevisionMatch // ~pkg-ver (PMS 8.3.3: match any revision of base version)
 )
 
 // VersionConstraint represents a version constraint (Value Object - immutable)
@@ -84,7 +85,8 @@ type Constraint struct {
 	Slot      string             // For slot constraints
 	Flag      string             // For USE flags
 	Required  bool               // Mandatory requirement
-	Condition string             // USE flag condition
+	Condition  string   // USE flag condition (flat, single flag — legacy)
+	Conditions []string // USE flag conditions (all must be true for dep to be active)
 	OrGroupID int                // OR-group ID (0 = required, >0 = alternative)
 	DepType   DepType            // Dependency type (RDEPEND, BDEPEND, etc.)
 
@@ -101,6 +103,22 @@ type Constraint struct {
 	// flag(-) = assume disabled if absent. If a flag has no default and is absent
 	// from IUSE, the check fails.
 	UseDefault map[string]bool
+
+	// UseEqual lists flags where provider must match dependent's state.
+	// PMS 8.2.6.4: [flag=] — if dependent has flag on, provider must too; if off, off.
+	UseEqual []string
+
+	// UseEqualInverse lists flags where provider must be opposite of dependent.
+	// PMS 8.2.6.4: [!flag=] — provider.flag = !dependent.flag.
+	UseEqualInverse []string
+
+	// UseConditionalIf lists flags where: if dependent has flag on, provider must too.
+	// PMS 8.2.6.4: [flag?] — "if I have it, you must too".
+	UseConditionalIf []string
+
+	// UseConditionalUnless lists flags where: if dependent has flag off, provider must have off.
+	// PMS 8.2.6.4: [!flag?] — "if I don't have it, you must not either".
+	UseConditionalUnless []string
 }
 
 func (c Constraint) String() string {
@@ -112,38 +130,99 @@ func (c Constraint) String() string {
 
 // HasUseDeps returns true if this constraint requires or blocks USE flags on the provider.
 func (c Constraint) HasUseDeps() bool {
-	return len(c.UseRequire) > 0 || len(c.UseBlock) > 0
+	return len(c.UseRequire) > 0 || len(c.UseBlock) > 0 ||
+		len(c.UseEqual) > 0 || len(c.UseEqualInverse) > 0 ||
+		len(c.UseConditionalIf) > 0 || len(c.UseConditionalUnless) > 0
 }
 
 // PackageSatisfiesUseDeps checks whether a package's effective USE flags satisfy
 // the USE dependency requirements on this constraint.
-// Returns true if all required flags are enabled and all blocked flags are disabled.
-// When a flag is absent from useFlags (not in IUSE), UseDefault is consulted:
-// flag(+) → treat as enabled, flag(-) → treat as disabled. Without default → fails.
-func (c Constraint) PackageSatisfiesUseDeps(useFlags map[string]bool) bool {
+// providerUSE: effective USE flags of the candidate provider.
+// dependentUSE: effective USE flags of the package declaring this dep (may be nil
+// if conditional forms are not used).
+func (c Constraint) PackageSatisfiesUseDeps(providerUSE map[string]bool, dependentUSE ...map[string]bool) bool {
+	var depUSE map[string]bool
+	if len(dependentUSE) > 0 {
+		depUSE = dependentUSE[0]
+	}
+
 	for _, flag := range c.UseRequire {
-		enabled, declared := useFlags[flag]
-		if !declared {
-			if dflt, hasDefault := c.UseDefault[flag]; hasDefault {
-				enabled = dflt
-			}
-		}
-		if !enabled {
+		if !c.flagEnabled(flag, providerUSE) {
 			return false
 		}
 	}
 	for _, flag := range c.UseBlock {
-		enabled, declared := useFlags[flag]
-		if !declared {
-			if dflt, hasDefault := c.UseDefault[flag]; hasDefault {
-				enabled = dflt
-			}
+		if c.flagEnabled(flag, providerUSE) {
+			return false
 		}
-		if enabled {
+	}
+	// PMS 8.2.6.4: [flag=] — provider.flag must equal dependent.flag
+	for _, flag := range c.UseEqual {
+		if depUSE == nil {
+			continue
+		}
+		if c.flagEnabled(flag, providerUSE) != depUSE[flag] {
+			return false
+		}
+	}
+	// [!flag=] — provider.flag must be opposite of dependent.flag
+	for _, flag := range c.UseEqualInverse {
+		if depUSE == nil {
+			continue
+		}
+		if c.flagEnabled(flag, providerUSE) == depUSE[flag] {
+			return false
+		}
+	}
+	// [flag?] — if dependent has flag on, provider must too
+	for _, flag := range c.UseConditionalIf {
+		if depUSE == nil {
+			continue
+		}
+		if depUSE[flag] && !c.flagEnabled(flag, providerUSE) {
+			return false
+		}
+	}
+	// [!flag?] — if dependent has flag off, provider must have off
+	for _, flag := range c.UseConditionalUnless {
+		if depUSE == nil {
+			continue
+		}
+		if !depUSE[flag] && c.flagEnabled(flag, providerUSE) {
 			return false
 		}
 	}
 	return true
+}
+
+// flagEnabled returns whether a USE flag is effectively enabled on the provider.
+// Consults UseDefault if the flag is not declared in provider's IUSE.
+func (c Constraint) flagEnabled(flag string, providerUSE map[string]bool) bool {
+	enabled, declared := providerUSE[flag]
+	if !declared {
+		if dflt, hasDefault := c.UseDefault[flag]; hasDefault {
+			return dflt
+		}
+		return false
+	}
+	return enabled
+}
+
+// stripRevision removes the -rN suffix from a version string.
+// "0.231.100-r1" → "0.231.100", "0.231.100" → "0.231.100".
+func stripRevision(version string) string {
+	idx := strings.LastIndex(version, "-r")
+	if idx < 0 {
+		return version
+	}
+	// Verify everything after -r is digits
+	rev := version[idx+2:]
+	for _, c := range rev {
+		if c < '0' || c > '9' {
+			return version
+		}
+	}
+	return version[:idx]
 }
 
 // NewVersionConstraint creates a new immutable version constraint
@@ -222,6 +301,10 @@ func (vc *VersionConstraint) Satisfies(version string) bool {
 		}
 		next := version[len(vc.version)]
 		return next == '.' || next == '_' || next == '-'
+	case OpRevisionMatch:
+		// ~ver matches any revision of the same base version.
+		// ~0.231.100 matches 0.231.100, 0.231.100-r1, 0.231.100-r2, etc.
+		return stripRevision(version) == stripRevision(vc.version)
 	default:
 		return true
 	}
