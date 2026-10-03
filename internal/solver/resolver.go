@@ -606,23 +606,19 @@ func (r *PortageResolver) buildResultFromSolution(solution map[string]string, al
 		// Load the specific version that was selected by the SAT solver
 		p, err := r.repo.LoadPackageVersion(name, version)
 		if err != nil {
-			// Fallback to LoadPackage if LoadPackageVersion fails
-			p, err = r.repo.LoadPackage(name)
-			if err != nil {
-				// Final fallback: check allCandidates (covers installed-only packages
-				// that were removed from the repo but are still in VDB)
-				if candidates, ok := allCandidates[name]; ok {
-					for _, c := range candidates {
-						if c.Version == version {
-							p = c
-							break
-						}
+			// Fallback: check allCandidates (covers installed-only packages
+			// that were removed from the repo but are still in VDB)
+			if candidates, ok := allCandidates[name]; ok {
+				for _, c := range candidates {
+					if c.Version == version {
+						p = c
+						break
 					}
 				}
-				if p == nil {
-					logging.Debug("Warning: package %s not found: %v", name, err)
-					continue
-				}
+			}
+			if p == nil {
+				logging.Debug("Warning: SAT selected %s@%s but package not found: %v", name, version, err)
+				continue
 			}
 		}
 		result[pkg.SlotKeyOf(p)] = &ResolveEntry{Package: p, Action: r.determineAction(p)}

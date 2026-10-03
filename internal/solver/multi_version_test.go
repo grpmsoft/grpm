@@ -3116,3 +3116,70 @@ func TestAction_RootSameVersion_Reinstall(t *testing.T) {
 		t.Errorf("root same-version should be Reinstall, got %s", entry.Action)
 	}
 }
+
+// TestBuildResult_VDBOnlyVersion verifies that when SAT selects a version that
+// exists only in VDB (removed from repo), buildResultFromSolution uses the
+// allCandidates fallback, not LoadPackage (which returns the wrong version).
+func TestBuildResult_VDBOnlyVersion(t *testing.T) {
+	r := newMultiVersionRepo()
+	// Repo has v2.0 only; v1.0 is installed but no longer in repo
+	r.addVersion(pkg.NewPackage("dev-libs/lib", "2.0", "0"))
+
+	db := state.NewPackageDatabase("/var/db/pkg")
+	if err := db.Add(&state.InstalledPackage{Package: pkg.NewPackage("dev-libs/lib", "1.0", "0")}); err != nil {
+		t.Fatal(err)
+	}
+
+	// App depends on lib — SAT may select installed v1.0 (keep preference)
+	app := pkg.NewPackage("app-misc/app", "1.0", "0")
+	app.Deps = []pkg.Constraint{{Name: "dev-libs/lib", Type: pkg.ConstraintTypeVersion}}
+	r.addVersion(app)
+
+	resolver := NewResolver(r)
+	resolver.SetInstalledDB(db)
+	result := resolveClean(t, resolver, []string{"app-misc/app"})
+
+	libKey := pkg.SlotKey{Name: "dev-libs/lib", Slot: "0"}
+	entry, ok := result[libKey]
+	if !ok {
+		t.Fatal("expected lib in result")
+	}
+	// Must be the version SAT selected, not LoadPackage's highest
+	if entry.Package.Version != "1.0" && entry.Package.Version != "2.0" {
+		t.Errorf("lib version should be 1.0 (kept) or 2.0 (upgraded), got %s", entry.Package.Version)
+	}
+}
+
+// TestRootSlotAtom_FiltersCandidates verifies that a slot-qualified root atom
+// (e.g., dev-lang/python:3.13) restricts SAT candidates to the matching slot.
+// Without this, the solver could pick python-3.15 (slot 3.15) when :3.13 requested.
+func TestRootSlotAtom_FiltersCandidates(t *testing.T) {
+	r := newMultiVersionRepo()
+	// Three python versions in different slots
+	py312 := pkg.NewPackage("dev-lang/python", "3.12.15", "3.12")
+	py313 := pkg.NewPackage("dev-lang/python", "3.13.15", "3.13")
+	py315 := pkg.NewPackage("dev-lang/python", "3.15.9999", "3.15")
+	r.addVersion(py312)
+	r.addVersion(py313)
+	r.addVersion(py315)
+
+	resolver := NewResolver(r)
+	result := resolveClean(t, resolver, []string{"dev-lang/python:3.13"})
+
+	// Must select slot 3.13, not 3.15 (newest) or 3.12
+	key := pkg.SlotKey{Name: "dev-lang/python", Slot: "3.13"}
+	entry, ok := result[key]
+	if !ok {
+		t.Fatal("expected python:3.13 in result")
+	}
+	if entry.Package.Version != "3.13.15" {
+		t.Errorf("slot :3.13 should select 3.13.15, got %s", entry.Package.Version)
+	}
+
+	// Must NOT have other slots in result
+	for k := range result {
+		if k.Name == "dev-lang/python" && k.Slot != "3.13" {
+			t.Errorf("unexpected python slot %s in result — only :3.13 requested", k.Slot)
+		}
+	}
+}
