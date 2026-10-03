@@ -1910,6 +1910,105 @@ func TestBlocker_WeakBlockerFiresWithoutVDB(t *testing.T) {
 	}
 }
 
+// TestBlocker_UseConditionalSkipsWhenFlagOff verifies that a blocker with USE
+// deps (e.g., !glibc[crypt]) is ignored when the target package doesn't have
+// the required USE flag enabled.
+func TestBlocker_UseConditionalSkipsWhenFlagOff(t *testing.T) {
+	r := newMultiVersionRepo()
+
+	// timezone-data blocks glibc[vanilla] — only if glibc has vanilla USE flag
+	glibc := pkg.NewPackage("sys-libs/glibc", "2.43", "2.2")
+	glibc.UseFlags = map[string]bool{"multiarch": true, "ssp": true}
+	r.addVersion(glibc)
+
+	blockerAtom, _ := pkg.ParseAtom("!sys-libs/glibc[vanilla]")
+	tzdata := pkg.NewPackage("sys-libs/timezone-data", "2026b", "0")
+	tzdata.Deps = []pkg.Constraint{{Name: "sys-libs/glibc", Type: pkg.ConstraintTypeVersion}}
+	tzdata.Blockers = []pkg.BlockerEntry{{Atom: blockerAtom, IsStrong: false}}
+	r.addVersion(tzdata)
+
+	// Both should coexist: glibc doesn't have vanilla → blocker doesn't fire
+	resolver := NewResolver(r)
+	result := resolveClean(t, resolver, []string{"sys-libs/timezone-data"})
+
+	glibcKey := pkg.SlotKey{Name: "sys-libs/glibc", Slot: "2.2"}
+	if _, ok := result[glibcKey]; !ok {
+		t.Error("glibc should be in result — blocker [vanilla] doesn't apply (vanilla not enabled)")
+	}
+}
+
+// TestBlocker_UseConditionalFiresWhenFlagOn verifies that a blocker with USE
+// deps fires when the target DOES have the required USE flag.
+func TestBlocker_UseConditionalFiresWhenFlagOn(t *testing.T) {
+	r := newMultiVersionRepo()
+
+	glibc := pkg.NewPackage("sys-libs/glibc", "2.43", "2.2")
+	glibc.UseFlags = map[string]bool{"crypt": true, "ssp": true}
+	r.addVersion(glibc)
+
+	blockerAtom, _ := pkg.ParseAtom("!sys-libs/glibc[crypt]")
+	xcrypt := pkg.NewPackage("sys-libs/libxcrypt", "4.4.38", "0")
+	xcrypt.Deps = []pkg.Constraint{{Name: "sys-libs/glibc", Type: pkg.ConstraintTypeVersion}}
+	xcrypt.Blockers = []pkg.BlockerEntry{{Atom: blockerAtom, IsStrong: false}}
+	r.addVersion(xcrypt)
+
+	// UNSAT: xcrypt depends on glibc but blocks glibc[crypt], and glibc HAS crypt
+	resolver := NewResolver(r)
+	_, err := resolver.Resolve([]string{"sys-libs/libxcrypt"})
+	if err == nil {
+		t.Error("expected UNSAT — glibc has crypt USE flag, blocker should fire")
+	}
+}
+
+// TestBlocker_NegativeUseDep verifies that [-flag] blockers fire when the
+// target LACKS the flag (e.g., !gnupg[-alternatives]).
+func TestBlocker_NegativeUseDep(t *testing.T) {
+	r := newMultiVersionRepo()
+
+	// gnupg WITHOUT alternatives USE flag
+	gnupg := pkg.NewPackage("app-crypt/gnupg", "2.5.21", "0")
+	gnupg.UseFlags = map[string]bool{"smartcard": true}
+	r.addVersion(gnupg)
+
+	blockerAtom, _ := pkg.ParseAtom("!app-crypt/gnupg[-alternatives]")
+	gpg := pkg.NewPackage("app-alternatives/gpg", "1", "0")
+	gpg.Deps = []pkg.Constraint{{Name: "app-crypt/gnupg", Type: pkg.ConstraintTypeVersion}}
+	gpg.Blockers = []pkg.BlockerEntry{{Atom: blockerAtom, IsStrong: false}}
+	r.addVersion(gpg)
+
+	// UNSAT: gnupg doesn't have alternatives → [-alternatives] matches → blocker fires
+	resolver := NewResolver(r)
+	_, err := resolver.Resolve([]string{"app-alternatives/gpg"})
+	if err == nil {
+		t.Error("expected UNSAT — gnupg lacks alternatives, [-alternatives] blocker fires")
+	}
+}
+
+// TestBlocker_NegativeUseDepSkipsWhenFlagOn verifies that [-flag] blockers
+// are skipped when the target HAS the flag.
+func TestBlocker_NegativeUseDepSkipsWhenFlagOn(t *testing.T) {
+	r := newMultiVersionRepo()
+
+	gnupg := pkg.NewPackage("app-crypt/gnupg", "2.5.21", "0")
+	gnupg.UseFlags = map[string]bool{"alternatives": true, "smartcard": true}
+	r.addVersion(gnupg)
+
+	blockerAtom, _ := pkg.ParseAtom("!app-crypt/gnupg[-alternatives]")
+	gpg := pkg.NewPackage("app-alternatives/gpg", "1", "0")
+	gpg.Deps = []pkg.Constraint{{Name: "app-crypt/gnupg", Type: pkg.ConstraintTypeVersion}}
+	gpg.Blockers = []pkg.BlockerEntry{{Atom: blockerAtom, IsStrong: false}}
+	r.addVersion(gpg)
+
+	// Both coexist: gnupg HAS alternatives → [-alternatives] doesn't match
+	resolver := NewResolver(r)
+	result := resolveClean(t, resolver, []string{"app-alternatives/gpg"})
+
+	gnupgKey := pkg.SlotKey{Name: "app-crypt/gnupg", Slot: "0"}
+	if _, ok := result[gnupgKey]; !ok {
+		t.Error("gnupg should be in result — has alternatives USE, [-alternatives] blocker skipped")
+	}
+}
+
 // --- Tests for v0.10.0-018: USE deps on atoms ---
 
 // TestConstraint_PackageSatisfiesUseDeps tests the domain-level USE dep check.
