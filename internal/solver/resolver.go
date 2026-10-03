@@ -784,8 +784,17 @@ func (r *PortageResolver) Resolve(packages []string) (ResolveResult, error) {
 		return result, nil
 	}
 
-	// Phase 2: preferred root unsatisfiable — solve without forcing
-	logging.Info("Preferred root versions unsatisfiable, falling back to best available")
+	// Phase 2: preferred root unsatisfiable — explain why, then fall back
+	for _, preferred := range rootPackagesMap {
+		explanation := forcedAdapter.ExplainWhyUNSAT()
+		if len(explanation.Lines) > 0 {
+			logging.Warn("Preferred %s-%s unsatisfiable:", preferred.Name, preferred.Version)
+			for _, line := range explanation.Lines {
+				logging.Warn("  %s", line)
+			}
+		}
+		break
+	}
 	status, solution, err = adapter.SolveOptimal(maxsatTimeout, updateMode, deepMode)
 	if err != nil {
 		return nil, err
