@@ -24,6 +24,7 @@ const (
 	ActionReinstall               // same version, rebuild for USE changes (Portage "R")
 	ActionKeep                    // same version and slot, already installed
 	ActionRemove                  // installed but deselected (blocker, slot removal)
+	ActionNewSlot                 // different slot of same package installed (Portage "NS")
 )
 
 func (a PackageAction) String() string {
@@ -40,6 +41,8 @@ func (a PackageAction) String() string {
 		return "K"
 	case ActionRemove:
 		return "D"
+	case ActionNewSlot:
+		return "NS"
 	default:
 		return "?"
 	}
@@ -566,7 +569,11 @@ func (r *PortageResolver) determineAction(p *pkg.Package) PackageAction {
 	// the full list to find a match in the same slot.
 	installed := r.findInstalledInSlot(p.Name, p.Slot.Name)
 	if installed == nil {
-		return ActionInstall // new slot, nothing installed there
+		// Check if a DIFFERENT slot of the same package is installed → NewSlot
+		if r.hasInstalledByName(p.Name) {
+			return ActionNewSlot
+		}
+		return ActionInstall
 	}
 	if installed.Version == p.Version {
 		if r.options.NewUse || r.rootNames[p.Name] {
@@ -845,6 +852,19 @@ func (r *PortageResolver) Resolve(packages []string) (ResolveResult, error) {
 	return nil, fmt.Errorf("no solution found (UNSAT, see explanation above)")
 }
 
+// hasInstalledByName returns true if any version of the named package is installed.
+func (r *PortageResolver) hasInstalledByName(name string) bool {
+	if r.installedDB == nil {
+		return false
+	}
+	for _, ip := range r.installedDB.List() {
+		if ip.Package != nil && ip.Package.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 // isDepSatisfiedByInstalled checks if a dependency constraint is already
 // satisfied by an installed package. Used for non-deep mode to avoid
 // exploring dep trees of packages that are already installed and working.
@@ -856,9 +876,18 @@ func (r *PortageResolver) isDepSatisfiedByInstalled(dep pkg.Constraint) bool {
 		if ip.Package == nil || ip.Package.Name != dep.Name {
 			continue
 		}
-		if dep.Version == nil || dep.Version.Satisfies(ip.Package.Version) {
-			return true
+		// Check version constraint
+		if dep.Version != nil && !dep.Version.Satisfies(ip.Package.Version) {
+			continue
 		}
+		// Check slot constraint
+		if dep.Slot != "" && dep.Slot != "*" && dep.Slot != "=" {
+			slot := strings.TrimSuffix(dep.Slot, "=")
+			if slot != "" && ip.Package.Slot.Name != slot {
+				continue
+			}
+		}
+		return true
 	}
 	return false
 }

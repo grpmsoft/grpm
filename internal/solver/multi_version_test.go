@@ -2607,8 +2607,8 @@ func TestAction_MultiSlot_InstallNewSlot(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected python:3.13 in result, got keys: %v", keysOf(result))
 	}
-	if entry.Action != ActionInstall {
-		t.Errorf("python:3.13 should be ActionInstall (new slot), got %s", entry.Action)
+	if entry.Action != ActionNewSlot {
+		t.Errorf("python:3.13 should be ActionNewSlot, got %s", entry.Action)
 	}
 }
 
@@ -2734,8 +2734,8 @@ func TestAction_NewSlot_DoesNotRemoveOldSlot(t *testing.T) {
 	key313 := pkg.SlotKey{Name: "dev-lang/python", Slot: "3.13"}
 	if entry, ok := result[key313]; !ok {
 		t.Fatal("expected python:3.13 in result")
-	} else if entry.Action != ActionInstall {
-		t.Errorf("python:3.13 should be Install (new slot), got %s", entry.Action)
+	} else if entry.Action != ActionNewSlot {
+		t.Errorf("python:3.13 should be ActionNewSlot, got %s", entry.Action)
 	}
 
 	// python:3.12 must NOT be ActionRemove — no blocker, just untouched
