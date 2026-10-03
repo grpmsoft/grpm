@@ -761,36 +761,59 @@ func (r *PortageResolver) Resolve(packages []string) (ResolveResult, error) {
 		// Inject installed packages (VDB) as SAT candidates.
 		installedKeys := r.addInstalledCandidates(allCandidates, allPackages)
 
-		// Register ALL candidate versions with the SAT adapter.
-		for _, candidates := range allCandidates {
-			for _, c := range candidates {
-				adapter.AddPackage(c)
-			}
-		}
-		for _, p := range allPackages {
-			adapter.AddPackage(p)
-		}
+		// Fixpoint: encode constraints → find prohibits with available providers
+		// → load their deps → re-encode → repeat until no gaps remain.
+		// This ensures lazy collection + complete encoding.
+		const maxFixpointIter = 5
+		for fix := 0; fix < maxFixpointIter; fix++ {
+			adapter = NewGophersatAdapter()
 
-		// Mark installed versions in the adapter.
-		for _, key := range installedKeys {
-			if varID := adapter.GetVarID(key); varID != 0 {
-				adapter.MarkInstalled(varID)
+			// Re-register all candidates and packages
+			for _, candidates := range allCandidates {
+				for _, c := range candidates {
+					adapter.AddPackage(c)
+				}
 			}
-		}
+			for _, p := range allPackages {
+				adapter.AddPackage(p)
+			}
+			for _, key := range installedKeys {
+				if varID := adapter.GetVarID(key); varID != 0 {
+					adapter.MarkInstalled(varID)
+				}
+			}
+			r.addRootConstraints(adapter, rootPackagesMap, rootAtoms)
 
-		// Add root constraints
-		r.addRootConstraints(adapter, rootPackagesMap, rootAtoms)
+			// Encode constraints
+			for _, candidates := range allCandidates {
+				for _, c := range candidates {
+					r.addPackageConstraints(adapter, c, rootPackageNames)
+				}
+			}
+			for _, p := range allPackages {
+				if _, hasCandidates := allCandidates[p.Name]; !hasCandidates {
+					r.addPackageConstraints(adapter, p, rootPackageNames)
+				}
+			}
 
-		// Add implication constraints for each candidate version.
-		for _, candidates := range allCandidates {
-			for _, c := range candidates {
-				r.addPackageConstraints(adapter, c, rootPackageNames)
+			// Check for prohibits with available-but-unexplored providers
+			// Only trace from preferred root candidates to avoid unnecessary loading
+			gaps := r.findProhibitGaps(adapter, allCandidates, rootPackagesMap)
+			if len(gaps) == 0 {
+				break
 			}
-		}
-		for _, p := range allPackages {
-			if _, hasCandidates := allCandidates[p.Name]; !hasCandidates {
-				r.addPackageConstraints(adapter, p, rootPackageNames)
+
+			logging.Info("Fixpoint iteration %d: loading %d unexplored providers", fix+1, len(gaps))
+			for _, name := range gaps {
+				r.addCandidateVersions(name, allCandidates)
+				if candidates, ok := allCandidates[name]; ok {
+					for _, c := range candidates {
+						r.collectDependencies(c, allPackages, allCandidates)
+					}
+				}
 			}
+			// Re-inject installed candidates for newly discovered packages
+			installedKeys = r.addInstalledCandidates(allCandidates, allPackages)
 		}
 
 		// Add at-most-one-per-slot pairwise exclusion clauses
@@ -814,11 +837,23 @@ func (r *PortageResolver) Resolve(packages []string) (ResolveResult, error) {
 			}
 
 			// Check if root resolved to non-preferred candidate due to
-			// unexpanded OR-group alternatives. If so, expand and retry
-			// instead of accepting the suboptimal solution.
+			// unexpanded OR-group alternatives. If so, expand and retry.
 			if r.expandForSuboptimalRoots(result, rootPackagesMap, adapter, allPackages) {
 				logging.Info("OR-expansion retry %d: root suboptimal, expanding alternatives", attempt+1)
 				continue
+			}
+
+			// If root is still suboptimal but preferred is NOT prohibited
+			// (deps available after expansion), force preferred via unit clause.
+			if r.forcePreferredRoots(result, rootPackagesMap, adapter) {
+				logging.Info("Re-solving with forced preferred root candidates")
+				status, solution, err = adapter.SolveOptimal(maxsatTimeout, updateMode, deepMode)
+				if err == nil && status == pkg.StatusSat {
+					result, buildErr = r.buildResultFromSolution(solution, allCandidates)
+					if buildErr != nil {
+						return nil, buildErr
+					}
+				}
 			}
 
 			r.addRemovedPackages(result, adapter)
@@ -920,6 +955,97 @@ func (r *PortageResolver) tryExpandOrGroups(adapter *GophersatAdapter, allPackag
 	return expanded
 }
 
+// findProhibitGaps finds package names that are prohibited due to "no provider"
+// but the provider package exists in the repository (just not loaded into the graph).
+// Only traces prohibits reachable from preferred root candidates to avoid loading
+// unnecessary packages (preserving lazy-OR efficiency).
+func (r *PortageResolver) findProhibitGaps(adapter *GophersatAdapter, allCandidates map[string][]*pkg.Package, rootPackages map[string]*pkg.Package) []string {
+	// Walk from preferred root candidates to find reachable prohibits.
+	// Only trace roots that have competitor candidates (installed fallback).
+	// Single-version roots don't need fixpoint (no alternative to fall back to).
+	reachableProhibits := make(map[int]bool)
+	for _, preferred := range rootPackages {
+		prefKey := preferred.Name + "@" + preferred.Version
+		prefVarID := adapter.GetVarID(prefKey)
+		if prefVarID == 0 {
+			continue
+		}
+		// Only trace if this root has multiple candidates (installed fallback exists)
+		versions := adapter.PackageVersions(preferred.Name)
+		if len(versions) <= 1 {
+			continue
+		}
+		// BFS through implication edges to find all reachable prohibits
+		visited := map[int]bool{prefVarID: true}
+		queue := []int{prefVarID}
+		for len(queue) > 0 {
+			cur := queue[0]
+			queue = queue[1:]
+			if adapter.ProhibitReason(cur) != "" {
+				reachableProhibits[cur] = true
+			}
+			for _, dep := range adapter.ImplicationDeps(cur) {
+				if !visited[dep] {
+					visited[dep] = true
+					queue = append(queue, dep)
+				}
+			}
+		}
+	}
+
+	seen := make(map[string]bool)
+	var gaps []string
+	for varID := range reachableProhibits {
+		reason := adapter.ProhibitReason(varID)
+		name := extractDepNameFromProhibit(reason)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+
+		if _, inGraph := allCandidates[name]; inGraph {
+			continue
+		}
+
+		versions, err := r.repo.GetAllVersions(name)
+		if err != nil || len(versions) == 0 {
+			continue
+		}
+		gaps = append(gaps, name)
+	}
+	return gaps
+}
+
+// extractDepNameFromProhibit extracts the dependency name from a prohibit reason.
+// Handles "no provider for <name> ..." and "no provider for <name> <version> (needed by ...)".
+func extractDepNameFromProhibit(reason string) string {
+	const prefix = "no provider for "
+	idx := strings.Index(reason, prefix)
+	if idx < 0 {
+		return ""
+	}
+	rest := reason[idx+len(prefix):]
+	// "OR-group" means it's an OR-group prohibit, not a specific package
+	if strings.HasPrefix(rest, "OR-group") {
+		return ""
+	}
+	// Extract name: first token before space, or before " ("
+	if spaceIdx := strings.IndexAny(rest, " ("); spaceIdx > 0 {
+		name := rest[:spaceIdx]
+		// Skip version constraints like ">=1.0"
+		if strings.ContainsAny(name, "0123456789") && !strings.Contains(name, "/") {
+			return ""
+		}
+		return name
+	}
+	return rest
+}
+
+// Prohibits returns the prohibit map for gap detection.
+func (g *GophersatAdapter) Prohibits() map[int]string {
+	return g.prohibits
+}
+
 // expandForSuboptimalRoots checks if any root resolved to a non-preferred candidate
 // because the preferred candidate is dead through an unexpanded OR-group.
 // If found, expands the relevant OR-group and returns true (caller should retry).
@@ -960,6 +1086,36 @@ func (r *PortageResolver) expandForSuboptimalRoots(result ResolveResult, rootPac
 		}
 	}
 	return expanded
+}
+
+// forcePreferredRoots adds unit clauses for preferred root candidates that are
+// NOT prohibited but were not selected by MAX-SAT (due to weight imbalance).
+// Returns true if any clause was added (caller should re-solve).
+func (r *PortageResolver) forcePreferredRoots(result ResolveResult, rootPackages map[string]*pkg.Package, adapter *GophersatAdapter) bool {
+	forced := false
+	for name, preferred := range rootPackages {
+		preferredKey := preferred.Name + "@" + preferred.Version
+		preferredVarID := adapter.GetVarID(preferredKey)
+		if preferredVarID == 0 {
+			continue
+		}
+		if adapter.ProhibitReason(preferredVarID) != "" {
+			continue // truly impossible
+		}
+		// Check if already selected
+		for _, entry := range result {
+			if entry.Package.Name == name {
+				if entry.Package.Version != preferred.Version {
+					// Not selected, not prohibited → force it
+					adapter.AddClauseRaw([]int{preferredVarID})
+					logging.Info("Forcing preferred root: %s-%s", preferred.Name, preferred.Version)
+					forced = true
+				}
+				break
+			}
+		}
+	}
+	return forced
 }
 
 // warnSuboptimalRoots checks if any root atom resolved to a non-preferred candidate

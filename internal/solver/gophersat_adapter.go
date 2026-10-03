@@ -582,32 +582,12 @@ func (g *GophersatAdapter) SolveOptimal(timeout time.Duration, updateMode bool, 
 	var relaxLits []solver.Lit
 	var weights []int
 
-	// OR-group preferences: penalize non-first alternatives.
-	// Weight = 1 per position (secondary preference).
-	for varID, pos := range g.orGroupPrefs {
-		if pos == 0 {
-			continue
+	// Version preferences: penalize non-preferred versions
+	maxVersionRank := 0
+	for _, p := range preferences {
+		if p.rank > maxVersionRank {
+			maxVersionRank = p.rank
 		}
-		relaxVar := nextVar
-		nextVar++
-		allClauses = append(allClauses, []int{-varID, relaxVar})
-		relaxLits = append(relaxLits, solver.IntToLit(int32(relaxVar)))
-		weights = append(weights, pos)
-	}
-
-	// Version preferences: penalize non-preferred versions.
-	// Root version preference must dominate OR-group position so that
-	// upgrading the root (user intent) outweighs using a secondary
-	// OR alternative. Weight = maxOrWeight + rank ensures dominance.
-	maxOrWeight := 0
-	for _, pos := range g.orGroupPrefs {
-		if pos > maxOrWeight {
-			maxOrWeight = pos
-		}
-	}
-	versionWeight := maxOrWeight + 1
-	if versionWeight < 2 {
-		versionWeight = 2
 	}
 	for _, p := range preferences {
 		if p.rank == 0 {
@@ -617,7 +597,24 @@ func (g *GophersatAdapter) SolveOptimal(timeout time.Duration, updateMode bool, 
 		nextVar++
 		allClauses = append(allClauses, []int{-p.varID, relaxVar})
 		relaxLits = append(relaxLits, solver.IntToLit(int32(relaxVar)))
-		weights = append(weights, versionWeight*p.rank)
+		weights = append(weights, p.rank)
+	}
+
+	// OR-group preferences: penalize non-first alternatives.
+	// Weight dominates version preferences to match Portage leftmost semantics.
+	orWeight := maxVersionRank + 1
+	if orWeight < 2 {
+		orWeight = 2
+	}
+	for varID, pos := range g.orGroupPrefs {
+		if pos == 0 {
+			continue
+		}
+		relaxVar := nextVar
+		nextVar++
+		allClauses = append(allClauses, []int{-varID, relaxVar})
+		relaxLits = append(relaxLits, solver.IntToLit(int32(relaxVar)))
+		weights = append(weights, orWeight*pos)
 	}
 
 	if len(relaxLits) == 0 {
@@ -858,6 +855,16 @@ func (g *GophersatAdapter) AddBlockerConflict(blockerVarID int, blockedAtom *pkg
 // weight to prefer keeping them over pulling new versions.
 func (g *GophersatAdapter) MarkInstalled(varID int) {
 	g.installed[varID] = true
+}
+
+// PackageVersions returns the registered versions for a package name.
+func (g *GophersatAdapter) PackageVersions(name string) []*pkg.Package {
+	return g.packages[name]
+}
+
+// AddClauseRaw adds a hard clause directly to the SAT problem.
+func (g *GophersatAdapter) AddClauseRaw(clause []int) {
+	g.addClause(clause)
 }
 
 // IsVarInstalled returns true if the given SAT variable represents an installed package.
