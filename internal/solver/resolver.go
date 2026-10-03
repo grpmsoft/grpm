@@ -405,13 +405,22 @@ func (r *PortageResolver) addInstalledCandidates(allCandidates map[string][]*pkg
 		for _, c := range candidates {
 			if c.Version == version {
 				alreadyPresent = true
+				// Merge VDB UseFlags into tree candidate — VDB reflects the
+				// actual USE flags that were active when the package was built.
+				// Tree candidates have USE from IUSE+config which may differ
+				// (e.g., PYTHON_TARGETS changed since install). For installed
+				// packages, VDB USE is the source of truth.
+				for flag, enabled := range ip.Package.UseFlags {
+					if enabled {
+						c.UseFlags[flag] = true
+					}
+				}
 				break
 			}
 		}
 
 		versionKey := name + "@" + version
 		if !alreadyPresent {
-			// Create a Package from the installed metadata
 			installedPkg := ip.Package
 			allCandidates[name] = append(allCandidates[name], installedPkg)
 			allPackages[versionKey] = installedPkg
@@ -581,15 +590,18 @@ func (r *PortageResolver) findInstalledInSlot(name, slot string) *pkg.Package {
 	if r.installedDB == nil {
 		return nil
 	}
+	var best *pkg.Package
 	for _, ip := range r.installedDB.List() {
 		if ip.Package == nil {
 			continue
 		}
 		if ip.Package.Name == name && ip.Package.Slot.Name == slot {
-			return ip.Package
+			if best == nil || pkg.CompareVersions(ip.Package.Version, best.Version) > 0 {
+				best = ip.Package
+			}
 		}
 	}
-	return nil
+	return best
 }
 
 // buildResultFromSolution builds the final result map from the SAT solution.
@@ -801,6 +813,7 @@ func (r *PortageResolver) Resolve(packages []string) (ResolveResult, error) {
 				return nil, buildErr
 			}
 			r.addRemovedPackages(result, adapter)
+			r.warnSuboptimalRoots(result, rootPackagesMap, adapter)
 			logging.Info("Resolved packages:")
 			for key, entry := range result {
 				logging.Debug("- %s-%s [slot:%s action:%s]", entry.Package.Name, entry.Package.Version, key.Slot, entry.Action)
@@ -896,6 +909,55 @@ func (r *PortageResolver) tryExpandOrGroups(adapter *GophersatAdapter, allPackag
 	}
 
 	return expanded
+}
+
+// warnSuboptimalRoots checks if any root atom resolved to a non-preferred candidate
+// (e.g., installed version instead of newest). When this happens, it explains why
+// the preferred candidate was impossible — this is diagnostically critical because
+// a silent fallback to installed looks like "working" but hides real dep failures.
+func (r *PortageResolver) warnSuboptimalRoots(result ResolveResult, rootPackages map[string]*pkg.Package, adapter *GophersatAdapter) {
+	for name, preferred := range rootPackages {
+		preferredKey := preferred.Name + "@" + preferred.Version
+		preferredVarID := adapter.GetVarID(preferredKey)
+		if preferredVarID == 0 {
+			continue
+		}
+
+		// Check if SAT selected this preferred version
+		for _, entry := range result {
+			if entry.Package.Name != name {
+				continue
+			}
+			if entry.Package.Version == preferred.Version {
+				break // preferred was selected, all good
+			}
+			// SAT selected a different version — preferred was rejected
+			logging.Warn("Root %s resolved to %s instead of preferred %s",
+				name, entry.Package.Version, preferred.Version)
+			// Check if preferred is prohibited (has a reason in explainer)
+			if reason := adapter.ProhibitReason(preferredVarID); reason != "" {
+				logging.Warn("  Reason: %s", reason)
+			}
+			// Walk implication edges to find what in the dep chain is impossible
+			visited := map[int]bool{preferredVarID: true}
+			queue := []int{preferredVarID}
+			for len(queue) > 0 {
+				cur := queue[0]
+				queue = queue[1:]
+				for _, dep := range adapter.ImplicationDeps(cur) {
+					if visited[dep] {
+						continue
+					}
+					visited[dep] = true
+					if pr := adapter.ProhibitReason(dep); pr != "" {
+						logging.Warn("  Chain: %s — %s", adapter.VarName(dep), pr)
+					}
+					queue = append(queue, dep)
+				}
+			}
+			break
+		}
+	}
 }
 
 // addRemovedPackages marks installed packages for removal ONLY when they are

@@ -862,6 +862,28 @@ func (g *GophersatAdapter) IsVarInstalled(varID int) bool {
 	return g.installed[varID]
 }
 
+// ProhibitReason returns the reason a candidate is prohibited, or "" if not prohibited.
+func (g *GophersatAdapter) ProhibitReason(varID int) string {
+	return g.prohibits[varID]
+}
+
+// ImplicationDeps returns the provider var IDs from implication edges for a candidate.
+// These are the deps that must have at least one provider — if all providers are
+// prohibited, the candidate itself becomes impossible.
+func (g *GophersatAdapter) ImplicationDeps(varID int) []int {
+	edges := g.implications[varID]
+	var deps []int
+	for _, e := range edges {
+		deps = append(deps, e.providers...)
+	}
+	return deps
+}
+
+// VarName returns the "name@version" string for a SAT variable ID.
+func (g *GophersatAdapter) VarName(varID int) string {
+	return g.varNames[varID]
+}
+
 // findSatisfyingVars returns SAT variable IDs for all registered packages
 // that satisfy the given constraint, including USE dependency filtering.
 // When the constraint has UseRequire or UseBlock, only packages whose
