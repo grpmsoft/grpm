@@ -3183,3 +3183,70 @@ func TestRootSlotAtom_FiltersCandidates(t *testing.T) {
 		}
 	}
 }
+
+// TestLazyOR_ExpandWhenInstalledFallbackMakesRootSuboptimal verifies that
+// lazy-OR expansion triggers even when SAT is satisfiable via an installed
+// fallback. Scenario: root pkg-2.0 has dep || ( broken-a good-b ), lazy-OR
+// expands only broken-a → prohibited → root-2.0 dead. Installed pkg-1.0
+// (no deps) satisfies SAT → R instead of U. Fix: detect suboptimal root
+// with dead preferred + unexpanded OR alternatives → expand and re-solve.
+func TestLazyOR_ExpandWhenInstalledFallbackMakesRootSuboptimal(t *testing.T) {
+	r := newMultiVersionRepo()
+
+	// pkg v1.0 (installed, no deps) and v2.0 (newer, has OR-dep)
+	pkg1 := pkg.NewPackage("app-misc/pkg", "1.0", "0")
+	pkg2 := pkg.NewPackage("app-misc/pkg", "2.0", "0")
+	// || ( broken-a good-b ) — broken-a has unresolvable dep, good-b works
+	pkg2.Deps = []pkg.Constraint{
+		{Name: "dev-libs/broken-a", Type: pkg.ConstraintTypeVersion, OrGroupID: 1},
+		{Name: "dev-libs/good-b", Type: pkg.ConstraintTypeVersion, OrGroupID: 1},
+	}
+	r.addVersion(pkg1)
+	r.addVersion(pkg2)
+
+	// broken-a depends on missing-dep (not in repo → prohibited)
+	brokenA := pkg.NewPackage("dev-libs/broken-a", "1.0", "0")
+	brokenA.Deps = []pkg.Constraint{
+		{Name: "dev-libs/missing-dep", Type: pkg.ConstraintTypeVersion},
+	}
+	r.addVersion(brokenA)
+
+	// good-b has no problematic deps
+	goodB := pkg.NewPackage("dev-libs/good-b", "1.0", "0")
+	r.addVersion(goodB)
+
+	// VDB: pkg-1.0 installed (no deps)
+	db := state.NewPackageDatabase("/var/db/pkg")
+	if err := db.Add(&state.InstalledPackage{Package: pkg.NewPackage("app-misc/pkg", "1.0", "0")}); err != nil {
+		t.Fatal(err)
+	}
+
+	resolver := NewResolver(r)
+	resolver.SetInstalledDB(db)
+	result := resolveClean(t, resolver, []string{"app-misc/pkg"})
+
+	key := pkg.SlotKey{Name: "app-misc/pkg", Slot: "0"}
+	entry, ok := result[key]
+	if !ok {
+		t.Fatal("expected pkg in result")
+	}
+	// Root must upgrade to 2.0 (preferred), not fall back to 1.0 (installed)
+	if entry.Package.Version != "2.0" {
+		t.Errorf("root should upgrade to 2.0 via good-b, got %s (installed fallback)", entry.Package.Version)
+	}
+	if entry.Action != ActionUpgrade {
+		t.Errorf("root should be Upgrade, got %s", entry.Action)
+	}
+
+	// good-b must be in result (second OR alternative)
+	bKey := pkg.SlotKey{Name: "dev-libs/good-b", Slot: "0"}
+	if _, ok := result[bKey]; !ok {
+		t.Error("good-b should be in result — second OR alternative after broken-a failed")
+	}
+
+	// broken-a must NOT be in result
+	aKey := pkg.SlotKey{Name: "dev-libs/broken-a", Slot: "0"}
+	if _, ok := result[aKey]; ok {
+		t.Error("broken-a should NOT be in result — its dep is missing")
+	}
+}

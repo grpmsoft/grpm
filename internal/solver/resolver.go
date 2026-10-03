@@ -812,6 +812,15 @@ func (r *PortageResolver) Resolve(packages []string) (ResolveResult, error) {
 			if buildErr != nil {
 				return nil, buildErr
 			}
+
+			// Check if root resolved to non-preferred candidate due to
+			// unexpanded OR-group alternatives. If so, expand and retry
+			// instead of accepting the suboptimal solution.
+			if r.expandForSuboptimalRoots(result, rootPackagesMap, adapter, allPackages) {
+				logging.Info("OR-expansion retry %d: root suboptimal, expanding alternatives", attempt+1)
+				continue
+			}
+
 			r.addRemovedPackages(result, adapter)
 			r.warnSuboptimalRoots(result, rootPackagesMap, adapter)
 			logging.Info("Resolved packages:")
@@ -908,6 +917,48 @@ func (r *PortageResolver) tryExpandOrGroups(adapter *GophersatAdapter, allPackag
 		}
 	}
 
+	return expanded
+}
+
+// expandForSuboptimalRoots checks if any root resolved to a non-preferred candidate
+// because the preferred candidate is dead through an unexpanded OR-group.
+// If found, expands the relevant OR-group and returns true (caller should retry).
+// This fixes the case where installed-fallback makes SAT pass and lazy-OR retry
+// never fires: pkg-2.0 dep || ( broken-a good-b ) → broken-a prohibited →
+// pkg-2.0 dead → SAT picks installed pkg-1.0 → retry skipped → good-b never tried.
+func (r *PortageResolver) expandForSuboptimalRoots(result ResolveResult, rootPackages map[string]*pkg.Package, adapter *GophersatAdapter, allPackages map[string]*pkg.Package) bool {
+	expanded := false
+	for name, preferred := range rootPackages {
+		preferredKey := preferred.Name + "@" + preferred.Version
+		preferredVarID := adapter.GetVarID(preferredKey)
+		if preferredVarID == 0 {
+			continue
+		}
+
+		// Check if SAT selected the preferred version
+		selectedPreferred := false
+		for _, entry := range result {
+			if entry.Package.Name == name && entry.Package.Version == preferred.Version {
+				selectedPreferred = true
+				break
+			}
+		}
+		if selectedPreferred {
+			continue
+		}
+
+		// Preferred not selected — walk its dep chain to find prohibited
+		// candidates whose prohibition traces to an unexpanded OR-group.
+		prohibitedNames := adapter.ProhibitedPackageNames()
+		if len(prohibitedNames) == 0 {
+			continue
+		}
+
+		// Try to expand OR-groups in packages that the preferred root depends on
+		if r.tryExpandOrGroups(adapter, allPackages) {
+			expanded = true
+		}
+	}
 	return expanded
 }
 
