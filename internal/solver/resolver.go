@@ -777,6 +777,7 @@ func (r *PortageResolver) Resolve(packages []string) (ResolveResult, error) {
 			return nil, buildErr
 		}
 		r.addRemovedPackages(result, forcedAdapter)
+		r.warnUnexpectedUpgrades(result, forcedAdapter)
 		logging.Info("Resolved packages:")
 		for key, entry := range result {
 			logging.Debug("- %s-%s [slot:%s action:%s]", entry.Package.Name, entry.Package.Version, key.Slot, entry.Action)
@@ -807,6 +808,7 @@ func (r *PortageResolver) Resolve(packages []string) (ResolveResult, error) {
 		}
 		r.addRemovedPackages(result, adapter)
 		r.warnSuboptimalRoots(result, rootPackagesMap, adapter)
+		r.warnUnexpectedUpgrades(result, adapter)
 		logging.Info("Resolved packages:")
 		for key, entry := range result {
 			logging.Debug("- %s-%s [slot:%s action:%s]", entry.Package.Name, entry.Package.Version, key.Slot, entry.Action)
@@ -867,6 +869,39 @@ func (r *PortageResolver) warnSuboptimalRoots(result ResolveResult, rootPackages
 				}
 			}
 			break
+		}
+	}
+}
+
+// warnUnexpectedUpgrades diagnoses deps that got Upgrade when they should be
+// Keep (installed version satisfies constraints but was not selected by SAT).
+// For each such dep, prints why the installed version was rejected.
+func (r *PortageResolver) warnUnexpectedUpgrades(result ResolveResult, adapter *GophersatAdapter) {
+	if r.installedDB == nil {
+		return
+	}
+	for _, entry := range result {
+		if entry.Action != ActionUpgrade || r.rootNames[entry.Package.Name] {
+			continue
+		}
+		// Find the installed version that was expected to Keep
+		installed := r.findInstalledInSlot(entry.Package.Name, entry.Package.Slot.Name)
+		if installed == nil {
+			continue
+		}
+		installedKey := installed.Name + "@" + installed.Version
+		installedVarID := adapter.GetVarID(installedKey)
+		if installedVarID == 0 {
+			logging.Warn("Dep %s upgraded to %s (installed %s not in SAT graph)",
+				entry.Package.Name, entry.Package.Version, installed.Version)
+			continue
+		}
+		if reason := adapter.ProhibitReason(installedVarID); reason != "" {
+			logging.Warn("Dep %s upgraded to %s instead of keeping %s: %s",
+				entry.Package.Name, entry.Package.Version, installed.Version, reason)
+		} else {
+			logging.Warn("Dep %s upgraded to %s (installed %s not prohibited — weight preference?)",
+				entry.Package.Name, entry.Package.Version, installed.Version)
 		}
 	}
 }
