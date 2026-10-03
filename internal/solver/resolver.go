@@ -281,15 +281,20 @@ func (r *PortageResolver) collectDependencies(p *pkg.Package, allPackages map[st
 		if skipBDEPEND && isBuildTimeDep(dep.DepType) {
 			continue
 		}
-		// SAT must see all providers to build correct implication clauses.
 
-		// Load ALL candidate versions and recursively explore each one's deps.
-		// SAT needs transitive deps of ALL candidates, not just the highest.
+		// Without --deep: if an installed package satisfies this dep,
+		// register candidates but don't explore their dep trees.
+		// The installed package is a fact — its own deps were validated
+		// at install time. Exploring tree versions' deps can force
+		// unnecessary cascading upgrades (perl virtual chain).
+		depSatisfiedByInstalled := !r.options.Deep && r.isDepSatisfiedByInstalled(dep)
+
 		r.addCandidateVersions(dep.Name, allCandidates)
-
-		if candidates, ok := allCandidates[dep.Name]; ok {
-			for _, candidate := range candidates {
-				r.collectDependencies(candidate, allPackages, allCandidates)
+		if !depSatisfiedByInstalled {
+			if candidates, ok := allCandidates[dep.Name]; ok {
+				for _, candidate := range candidates {
+					r.collectDependencies(candidate, allPackages, allCandidates)
+				}
 			}
 		}
 	}
@@ -307,10 +312,13 @@ func (r *PortageResolver) collectDependencies(p *pkg.Package, allPackages map[st
 		sorted := r.sortAlternativesByInstalled(alternatives)
 
 		for _, alt := range sorted {
+			altSatisfied := !r.options.Deep && r.isDepSatisfiedByInstalled(alt)
 			r.addCandidateVersions(alt.Name, allCandidates)
-			if candidates, ok := allCandidates[alt.Name]; ok {
-				for _, candidate := range candidates {
-					r.collectDependencies(candidate, allPackages, allCandidates)
+			if !altSatisfied {
+				if candidates, ok := allCandidates[alt.Name]; ok {
+					for _, candidate := range candidates {
+						r.collectDependencies(candidate, allPackages, allCandidates)
+					}
 				}
 			}
 		}
@@ -835,6 +843,24 @@ func (r *PortageResolver) Resolve(packages []string) (ResolveResult, error) {
 		logging.Info("%s", line)
 	}
 	return nil, fmt.Errorf("no solution found (UNSAT, see explanation above)")
+}
+
+// isDepSatisfiedByInstalled checks if a dependency constraint is already
+// satisfied by an installed package. Used for non-deep mode to avoid
+// exploring dep trees of packages that are already installed and working.
+func (r *PortageResolver) isDepSatisfiedByInstalled(dep pkg.Constraint) bool {
+	if r.installedDB == nil || r.options.EmptyTree {
+		return false
+	}
+	for _, ip := range r.installedDB.List() {
+		if ip.Package == nil || ip.Package.Name != dep.Name {
+			continue
+		}
+		if dep.Version == nil || dep.Version.Satisfies(ip.Package.Version) {
+			return true
+		}
+	}
+	return false
 }
 
 // warnSuboptimalRoots checks if any root atom resolved to a non-preferred candidate
