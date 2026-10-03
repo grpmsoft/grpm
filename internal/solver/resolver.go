@@ -713,6 +713,10 @@ func (r *PortageResolver) Resolve(packages []string) (ResolveResult, error) {
 	for _, pkgName := range packages {
 		p, err := r.loadPackageFromAtom(pkgName)
 		if err != nil {
+			if strings.Contains(err.Error(), "masked") {
+				logging.Warn("!!! Skipping masked package: %s (%v)", pkgName, err)
+				continue
+			}
 			return nil, fmt.Errorf("failed to load package %s: %w", pkgName, err)
 		}
 		rootPackageNames = append(rootPackageNames, p.Name)
