@@ -406,10 +406,10 @@ jobs:
           TAG="${{ needs.prepare.outputs.tag }}"
           echo "Verifying tag $TAG exists on remote..."
 
-          # Fetch tags from remote
-          git fetch --tags
-
-          # Check if tag exists remotely
+          # Ask the remote directly. No `git fetch --tags`: the GitHub release creates its
+          # own tag, and fetching it over the local annotated tag of the same name fails
+          # with "would clobber existing tag" (v0.9.5: the release was published, then this
+          # step turned the run red).
           if git ls-remote --tags origin | grep -q "refs/tags/$TAG$"; then
             echo "✅ Tag $TAG successfully published!"
           else
