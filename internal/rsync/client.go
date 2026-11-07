@@ -3,6 +3,7 @@ package rsync
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -109,8 +110,16 @@ func (c *Client) Sync(ctx context.Context, rsyncURL, destDir string) error {
 	select {
 	case <-ctx.Done():
 		// Context canceled/timeout - close connection to unblock goroutine
-		_ = conn.Close()
-		<-done // Wait for goroutine to finish
+		closeErr := conn.Close()
+		// Wait for the goroutine. Its error is normally the result of closing the
+		// connection under it ("use of closed network connection"), so ctx.Err() is
+		// returned; the protocol error is still logged for diagnosis.
+		if runErr := <-done; runErr != nil {
+			c.Logger.Printf("rsync: protocol stopped after cancellation: %v", runErr)
+		}
+		if closeErr != nil {
+			return errors.Join(ctx.Err(), fmt.Errorf("close rsync connection: %w", closeErr))
+		}
 		return ctx.Err()
 	case err := <-done:
 		return err

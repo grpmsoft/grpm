@@ -123,10 +123,15 @@ func (s *NamespaceSandbox) Run(ctx context.Context, cmd *exec.Cmd) error {
 
 	select {
 	case <-ctx.Done():
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
+		killErr := killProcess(cmd)
+		// Wait for the process. Its exit error is normally "signal: killed" from the kill
+		// above, so ctx.Err() is returned; the exit error is still logged for diagnosis.
+		if waitErr := <-done; waitErr != nil {
+			log.Printf("[sandbox] process ended after cancellation: %v", waitErr)
 		}
-		<-done
+		if killErr != nil {
+			return errors.Join(ctx.Err(), killErr)
+		}
 		return ctx.Err()
 	case err := <-done:
 		return err
@@ -215,9 +220,9 @@ func (s *NamespaceSandbox) createMountWrapper(cmd *exec.Cmd) (string, error) {
 	script.WriteString("# Writable directories (bind mount)\n")
 	for _, dir := range s.writableDirs {
 		// Ensure directory exists
-		script.WriteString(fmt.Sprintf("mkdir -p '%s' 2>/dev/null || true\n", dir))
+		fmt.Fprintf(&script, "mkdir -p '%s' 2>/dev/null || true\n", dir)
 		// Bind mount to itself to ensure it's accessible
-		script.WriteString(fmt.Sprintf("mount --bind '%s' '%s' 2>/dev/null || true\n", dir, dir))
+		fmt.Fprintf(&script, "mount --bind '%s' '%s' 2>/dev/null || true\n", dir, dir)
 	}
 	script.WriteString("\n")
 
@@ -225,14 +230,14 @@ func (s *NamespaceSandbox) createMountWrapper(cmd *exec.Cmd) (string, error) {
 	script.WriteString("# Read-only directories\n")
 	for _, dir := range s.readOnlyDirs {
 		// Bind mount read-only
-		script.WriteString(fmt.Sprintf("mount --bind '%s' '%s' 2>/dev/null || true\n", dir, dir))
-		script.WriteString(fmt.Sprintf("mount -o remount,ro,bind '%s' 2>/dev/null || true\n", dir))
+		fmt.Fprintf(&script, "mount --bind '%s' '%s' 2>/dev/null || true\n", dir, dir)
+		fmt.Fprintf(&script, "mount -o remount,ro,bind '%s' 2>/dev/null || true\n", dir)
 	}
 	script.WriteString("\n")
 
 	// Change to working directory
 	if cmd.Dir != "" {
-		script.WriteString(fmt.Sprintf("cd '%s'\n", cmd.Dir))
+		fmt.Fprintf(&script, "cd '%s'\n", cmd.Dir)
 	}
 
 	// Execute the original command
@@ -240,7 +245,7 @@ func (s *NamespaceSandbox) createMountWrapper(cmd *exec.Cmd) (string, error) {
 	script.WriteString("exec")
 	for _, arg := range cmd.Args[1:] { // Skip the command name itself
 		// Quote arguments properly
-		script.WriteString(fmt.Sprintf(" '%s'", strings.ReplaceAll(arg, "'", "'\\''")))
+		fmt.Fprintf(&script, " '%s'", strings.ReplaceAll(arg, "'", "'\\''"))
 	}
 	script.WriteString("\n")
 
