@@ -5,35 +5,130 @@ All notable changes to GRPM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] - Multi-Version SAT Resolver
+## [Unreleased]
 
-### Changed
-- **SAT solver uses implication clauses** — Dependencies encoded as `(-A | B1 | B2)` instead of unconditional `(B1 | B2)`. Only the selected version's deps are activated.
-- **At-most-one per slot** — Pairwise exclusion `(-vi | -vj)` for versions sharing the same `(name, slot)`. Multi-slot packages (python:3.12 + python:3.13) can coexist.
-- **Root packages use at-least-one** — SAT can backtrack to an older version if the newest is unsatisfiable. Atom constraints (version and slot) are respected.
-- **All candidate versions explored** — `collectDependencies` traverses ALL versions' deps (not just highest), including OR-group alternatives. SAT has complete transitive dep information.
-- **Unsatisfiable candidates prohibited** — No provider for a dep → prohibit clause `(-varID)` prevents SAT from selecting that candidate. Applied consistently in version, slot, and OR-group implication paths.
+---
+
+## [0.9.5] - 2026-11-08 - Dependency Resolver Rewrite
+
+The dependency resolver was rewritten around a multi-version SAT model. On our Gentoo
+test system, `grpm emerge -p` now prints the same plan as `emerge -p`, line by line, for
+`dev-libs/libgpg-error`, `app-arch/bzip2` and `dev-lang/python:3.13`. Earlier releases
+considered one version per package and could print plans far larger than Portage's
+(for example, 375 packages instead of 1 for `dev-libs/libgpg-error`; see also
+[#59](https://github.com/grpmsoft/grpm/issues/59)).
+
+Plans produced by this release differ from v0.9.4 output. `-uD @world` is not at parity
+yet — see Known Limitations.
+
+### Security
+
+- **Release binaries are built with Go 1.27.3** (was Go 1.25.x, which no longer receives
+  security fixes): fixes GO-2026-6809 / CVE-2026-111943 in `crypto/x509`, reachable through
+  HTTPS fetches and binhost access.
+- **Dependencies updated** — `govulncheck` reported 9 reachable vulnerabilities, all fixed:
+  - `google.golang.org/grpc` v1.78.0 → v1.85.0 (GO-2026-4762, GO-2026-6061, GO-2026-6348,
+    GO-2026-6443);
+  - `golang.org/x/net` v0.49.0 → v0.62.0 (GO-2026-6603, GO-2026-6611, GO-2026-6612,
+    GO-2026-6617);
+  - `github.com/klauspost/compress` v1.18.3 → v1.20.3 (GO-2026-6865).
+
+### Changed — build and dependencies
+
+- **Go 1.27.3 or later is required to build from source** (`go 1.27.3` in go.mod): several
+  updated dependencies require Go 1.27, and 1.27.3 is the first patch with the
+  `crypto/x509` fix the release binaries are built with.
+- Other direct dependencies updated: `golang.org/x/crypto` v0.58.0, `golang.org/x/term`
+  v0.47.0, `google.golang.org/protobuf` v1.36.12, `modernc.org/sqlite` v1.62.0,
+  `github.com/coregx/coregex` v0.12.30, `github.com/ulikunitz/xz` v0.5.17,
+  `mvdan.cc/sh/v3` v3.14.1 (a tagged release that contains all our upstream fixes; was a
+  pre-release snapshot).
+- Release archives are built from exactly the tested sources: generated gRPC code is no
+  longer regenerated with unpinned plugins at release time, and release notes come from
+  this CHANGELOG.
+- Sandbox and rsync: an error from killing a process or closing a connection during
+  cancellation is reported together with the cancellation instead of being dropped.
+
+### Changed — dependency resolution
+
+- **Every candidate version is a SAT variable** — dependencies are encoded as implications
+  (only the selected version's dependencies apply), at most one version per slot, and
+  several slots of one package can coexist (`dev-lang/python:3.12` and `:3.13`) (#78).
+- **Requested atoms prefer the newest matching version** — the solver tries it first and
+  falls back to an older or the installed version only when the newest cannot be
+  satisfied, as Portage does (#78, #94).
+- **Installed packages (`/var/db/pkg`) are candidates** — versions removed from the tree
+  can be kept; dependencies keep their installed version unless `--update` and `--deep`
+  are both given; for `|| ( )` groups the leftmost alternative is preferred. Version
+  choice is now deterministic; if the optimization takes longer than 5 seconds, GRPM
+  warns and uses a valid but not optimal plan (#86, #88, #93).
+- **`--update` without `--deep` upgrades only the requested atoms** — Portage semantics.
+  Without `--deep`, dependencies of installed packages are not re-validated, and a
+  dependency already satisfied by an installed version is not traversed (#93, #94).
+- **Requesting an installed version reinstalls it** (`R`), as Portage does (#94).
+- **Plan actions match Portage** — `N`, `U`, `UD`, `R`, `NS`, plus removals forced by
+  blockers. Packages that stay unchanged are no longer listed (#90, #93, #94).
+- **Build dependencies of kept packages are skipped** — BDEPEND of an installed version
+  that stays is not pulled in; `--newuse` evaluates it again (#91, #92).
+- **Removed the post-solve "safety net" pass** — it added packages the solver had not
+  selected (369 extra packages on a real tree) (#93).
+- **Build order is topological** — builds and the `-p` plan follow dependency order
+  instead of map iteration order; PDEPEND edges are excluded (#77).
+- **Stable keywords by default** — the default `ACCEPT_KEYWORDS` is the stable keyword of
+  the detected architecture, also with `--nodeps`; testing (`~arch`) keywords were
+  accepted before (#77).
+- **Masked `@world` entries are skipped with a warning** instead of aborting (#94).
+- **`install` upgrades in place** — a different installed version is upgraded, the same
+  version is skipped unless `--replace` is given (#76).
 
 ### Added
-- **`SlotKey` value object** (`pkg.SlotKey`) — `{Name, Slot}` for slot-aware result keying
-- **`PostPassAdded` counter** on resolver — Tracks packages added by post-SAT safety net. Should be 0 if SAT encoding is complete.
-- **`resolveClean` test helper** — Asserts `PostPassAdded == 0` in every multi-version test, catching SAT encoding regressions
-- **26 multi-version SAT tests** — Covering: multi-slot coexistence, at-most-one per slot, implication correctness, UNSAT on missing deps, root backtracking, version/slot atom constraints, OR-group dep exploration, transitive deps
+
+- **Blockers** — `!atom` and `!!atom` are enforced per candidate version, including
+  USE-conditional blockers such as `!sys-libs/glibc[crypt]`. Both kinds forbid the two
+  packages in the final state (#85, #86, #95).
+- **USE dependencies on atoms** — `[flag]`, `[-flag]`, `(+)`/`(-)` defaults and the
+  conditional forms `[flag=]`, `[!flag=]`, `[flag?]`, `[!flag?]` (PMS 8.2.6.4) filter the
+  providers the solver may pick (#87, #94).
+- **UNSAT explanations** — when no plan exists, GRPM prints the chain from the requested
+  package down to the missing provider or the blocker conflict (#80, #85).
+- **One USE resolution order everywhere** — IUSE defaults < profile < make.conf <
+  USE_EXPAND < package.use, then `use.force`/`use.mask` as the final layer (PMS). The CLI
+  previously ignored profile USE flags (#84).
+- **`emerge --update` / `-u`** (#88).
 
 ### Fixed
-- **Topological build order** — `buildAndInstallPackages` and build plan (`-p`) use Kahn's algorithm instead of random Go map iteration. PDEPEND edges excluded.
-- **ACCEPT_KEYWORDS stable-only default** — `--nodeps` branch uses `getAcceptKeywords(cfg)` with architecture auto-detection instead of hardcoded `~amd64`.
-- **Version display normalized** — `FormatMainHelp` uses `TrimPrefix` to prevent double-v prefix.
-- **SA4023 staticcheck fix** — `lookupPortageUser` moved to platform-specific `initPortageUser`. Zero lint issues.
 
-### Known Limitations (open tasks)
-- **Version non-determinism** — Without MAX-SAT optimization (v0.10.0-014), dependency version is chosen by solver heuristic, not by preference.
-- **Consumer migration pending** — `Resolve()` still returns `map[string]*Package` with ad-hoc slot key strings. `internal/cli` parallel scheduler loses slot edges (v0.10.0-013).
-- **Blockers not enforced** — `portage.go` still skips `IsBlocker` deps. VDB not in candidate set (v0.10.0-012).
+- **`~` operator** matches any revision of the version (PMS 8.3.3); it matched the exact
+  version before (#94).
+- **`=ver*` in dependencies** matches at a version component boundary: `=5.44*` matches
+  `5.44.2` but not `5.440` (#79).
+- **Slot operators** `:=`, `:*` and `:slot=` are parsed and matched correctly; `:3=` used
+  to be read as slot `3=` and made most real packages unsatisfiable (#79).
+- **Nested USE conditionals** in dependency strings keep every outer condition (#94).
+- **Installed package database** — SLOT and USE are read from `/var/db/pkg` (SLOT was
+  always `0`); a missing SLOT file means `0`, as in Portage; entries without CONTENTS or
+  a parseable name are skipped with a warning (#94, #95).
+- **Ebuild execution** (#76):
+  - `mvdan.cc/sh` upgraded to upstream, which now includes our six merged fixes;
+    interpreter workarounds removed; `BASH_VERSINFO` reports 5.2.
+  - `inherit` inside a branch that cannot run (`[[ ${PV} == 9999 ]]` in a release ebuild)
+    no longer loads the eclass.
+  - Multilib packages (xz-utils, pkgconf): eclass `EXPORT_FUNCTIONS` resolved before the
+    phase loop, out-of-tree `BUILD_DIR` detected, and functions defined by the ebuild or
+    eclass take priority over GRPM's built-in implementation of the same name.
+  - `FORCE_UNSAFE_CONFIGURE=1` is set, as in Portage.
 
-### Upstream
-- **mvdan.cc/sh upgraded to upstream master** — All 6 GRPM-contributed PRs merged, 545 lines of workaround code removed
-- **Multilib phase dispatch fixed** — EXPORT_FUNCTIONS pre-resolution, out-of-tree build detection, bash function priority
+### Known Limitations
+
+- **`-uD @world` is not at parity** — on our test system GRPM plans 149 of the 204
+  packages Portage schedules. Missing are mostly upgrades of installed packages reached
+  only through deep dependencies, and USE_EXPAND defaults from the profile.
+- **Weak blockers** are enforced like strong ones in the final state; GRPM does not yet
+  schedule the temporary coexistence and unmerge that Portage allows for `!atom`.
+- **`=ver*` in command-line atoms** still uses a plain prefix match.
+- **Builds** — build coverage was not re-measured for this release; the 0.9.4 figure
+  was about 20% of `@world`. Python, CMake and Meson packages need further build-system
+  work.
 
 ---
 
@@ -1413,7 +1508,8 @@ GRPM (Go Resource Package Manager) is a modern reimplementation of Gentoo's Port
 - **Issues**: https://github.com/grpmsoft/grpm/issues
 - **License**: [Apache-2.0](LICENSE)
 
-[Unreleased]: https://github.com/grpmsoft/grpm/compare/v0.9.4...HEAD
+[Unreleased]: https://github.com/grpmsoft/grpm/compare/v0.9.5...HEAD
+[0.9.5]: https://github.com/grpmsoft/grpm/compare/v0.9.4...v0.9.5
 [0.9.4]: https://github.com/grpmsoft/grpm/compare/v0.9.3...v0.9.4
 [0.9.3]: https://github.com/grpmsoft/grpm/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/grpmsoft/grpm/compare/v0.9.1...v0.9.2

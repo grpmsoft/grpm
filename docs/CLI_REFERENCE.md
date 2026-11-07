@@ -71,6 +71,8 @@ grpm resolve [options] <package|@set>...
 | `--mock` | Use mock repository for testing | `false` |
 | `--pretend`, `-p` | Show what would be resolved (dry-run) | `false` |
 | `--dry-run` | Alias for `--pretend` | `false` |
+| `--autounmask` | Show USE/keyword changes that would resolve conflicts | `false` |
+| `--autounmask-write` | Write those changes to `/etc/portage` | `false` |
 | `--deep`, `-D` | Traverse dependencies of already-installed packages | `false` |
 | `--with-bdeps` | Include build-time dependencies (BDEPEND/DEPEND) for installed packages | `false` |
 | `--emptytree`, `-e` | Assume no packages are installed (full dependency tree) | `false` |
@@ -79,9 +81,13 @@ grpm resolve [options] <package|@set>...
 **Dependency Filtering (Portage-compatible):**
 
 By default, `grpm resolve` filters the dependency tree like Portage:
-- Already-installed packages are skipped (unless `--deep`)
-- Build-time dependencies (BDEPEND/DEPEND) for installed packages are skipped (unless `--with-bdeps`)
+- Installed packages that stay unchanged are not listed
+- Without `--deep`, dependencies of installed packages are not re-checked, and a dependency already satisfied by an installed version is not traversed
+- Build-time dependencies (BDEPEND/DEPEND) of installed packages that stay are skipped (unless `--with-bdeps`)
 - Use `--emptytree` to see the full dependency tree as if nothing was installed
+
+When no plan exists, GRPM prints the chain of reasons from the requested package down to
+the missing provider or the conflicting blocker.
 
 **Package Sets:**
 
@@ -229,11 +235,39 @@ grpm emerge [options] <package|@set>...
 | `--replace`, `-R` | Replace existing package (unmerge old before merge) | `false` |
 | `--force`, `-f` | Force installation (skip collision checks) | `false` |
 | `--onlydeps`, `-o` | Build dependencies only, skip target | `false` |
+| `--nodeps`, `-O` | Skip dependency resolution, build only the given packages | `false` |
 | `--check-tools` | Perform optional pre-build tool availability check | `false` |
 | `--info` | Show system environment information (like `emerge --info`) | `false` |
+| `--update`, `-u` | Upgrade to the best available versions; with `--deep`, dependencies too | `false` |
 | `--deep`, `-D` | Traverse dependencies of already-installed packages | `false` |
 | `--with-bdeps` | Include build-time dependencies for installed packages | `false` |
 | `--emptytree`, `-e` | Assume no packages installed (full dependency tree) | `false` |
+
+Short options are separate words: `grpm emerge -p -u -D @world` (Portage's `-uDp` form is
+not accepted).
+
+**Version selection (Portage semantics):**
+
+| Package | Default | `--update` | `--update --deep` |
+|---------|---------|------------|-------------------|
+| Requested atom | Best available version | Best available version | Best available version |
+| Dependency | Installed version if it satisfies | Installed version if it satisfies | Best available version |
+
+Requesting an atom whose best version is already installed reinstalls it (`R`), as
+`emerge <atom>` does.
+
+**Plan actions** (`--pretend`):
+
+| Action | Meaning |
+|--------|---------|
+| `N` | New package |
+| `NS` | New slot of an installed package |
+| `U` | Upgrade within the same slot |
+| `UD` | Downgrade within the same slot |
+| `R` | Reinstall of the same version |
+| removal | Installed package removed because a selected package blocks it |
+
+Installed packages that stay unchanged are not listed.
 
 **Build Phases:**
 
@@ -278,8 +312,9 @@ sudo grpm emerge --onlydeps app-misc/hello
 # Show full dependency tree (emptytree mode)
 grpm emerge -e -p app-misc/mc
 
-# Deep update - traverse installed package dependencies
-sudo grpm emerge -D @world
+# Update the whole system, dependencies included (like emerge -uD @world)
+grpm emerge -p -u -D @world
+sudo grpm emerge -u -D @world
 ```
 
 **Work Directory Structure:**

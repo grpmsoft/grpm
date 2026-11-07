@@ -155,8 +155,8 @@ Use `t.Skip()` for tests requiring real Gentoo environment.
 
 ## Tech Stack
 
-- Go 1.25
+- Go 1.27.3 (go.mod `go` line; CI and releases use exactly this version)
 - gRPC + Protocol Buffers
 - gophersat (SAT solver)
-- Cobra (CLI)
+- Standard library `flag` (CLI subcommands)
 - golangci-lint v2.8.0+

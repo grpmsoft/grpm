@@ -2,7 +2,7 @@
 
 > Go Resource Package Manager — a next-generation Gentoo package manager.
 >
-> This document describes the system architecture as validated against source code (2026-02-09).
+> This document describes the system architecture as validated against source code (2026-02-09; resolver and dispatch sections updated 2026-11-07 for v0.9.5).
 
 ---
 
@@ -133,7 +133,7 @@ Single binary with mode detection: CLI commands or daemon mode.
 
 | Component | Description |
 |-----------|-------------|
-| **CLI Commands** | Cobra-based: `resolve`, `emerge`, `install`, `remove`, `search`, `info`, `sync`, `status`, `analyze`, `tools` |
+| **CLI Commands** | Subcommands on the standard library `flag` package: `resolve`, `emerge`, `install`, `remove`, `search`, `info`, `sync`, `status`, `analyze`, `tools` |
 | **gRPC Client** | Connects to daemon via Unix socket; auto-falls back to standalone mode |
 
 ### Daemon Layer (`internal/daemon/`)
@@ -147,7 +147,7 @@ Background service for concurrent package operations.
 | **Job Queue** | Prioritized queue with per-package conflict detection |
 | **Worker Pool** | Parallel job execution with goroutine workers |
 
-> **Status**: Daemon scaffolding is functional. Health endpoint, job queue, and socket communication work. Full production hardening is planned for a future release.
+> **Status**: Daemon scaffolding is functional. Health endpoint, job queue, and socket communication work. Planned for v0.10.0: lifecycle (on-demand start, idle shutdown, PID locking, socket token) on [grpmsoft/daemon](https://github.com/grpmsoft/daemon), and an MCP server next to gRPC for AI agents on [grpmsoft/emcp-go](https://github.com/grpmsoft/emcp-go); both call the same application services.
 
 ### Application Layer (`internal/application/`)
 
@@ -159,8 +159,8 @@ Core business logic. Inner layers never depend on outer layers.
 
 | Component | Package | Description |
 |-----------|---------|-------------|
-| **Dependency Resolver** | `internal/solver/` | Orchestrates dependency collection, mask filtering, SAT encoding, and solution extraction |
-| **SAT Solver** | `internal/solver/` | `gophersat` adapter — encodes packages as Boolean variables, constraints as CNF clauses, `exactlyOne()` per slot |
+| **Dependency Resolver** | `internal/solver/` | Collects candidate versions (tree + installed), filters masks and keywords, encodes to SAT, solves, annotates plan actions, explains UNSAT |
+| **SAT Solver** | `internal/solver/` | `gophersat` adapter — one Boolean variable per candidate version; implication clauses for dependencies, at-most-one per slot, blocker conflicts, prohibit clauses; MAX-SAT soft clauses for version preferences |
 | **Package Model** | `internal/pkg/` | Core entities: `Package`, `Version`, `Slot`, `Constraint`, `Atom`, `UseFlag` |
 | **Atom Parser** | `internal/pkg/` | PMS Section 8.3 compliant parser with version, slot, USE dep, and blocker support |
 | **Dependency Service** | `internal/pkg/` | Domain service for dependency logic and constraint satisfaction |
@@ -324,27 +324,41 @@ User request ("emerge app-misc/hello")
     │   ├── package.mask / package.unmask
     │   └── ACCEPT_KEYWORDS matching
     │
-    ├── Recursive Dependency Collection
-    │   ├── DEPEND (build-time)
-    │   ├── RDEPEND (run-time)
-    │   ├── BDEPEND (CBUILD, EAPI 7+)
-    │   └── PDEPEND (post-merge)
+    ├── Candidate Collection (recursive)
+    │   ├── All visible versions from the tree + installed versions (VDB)
+    │   ├── DEPEND / RDEPEND / BDEPEND / PDEPEND, USE conditionals (nested)
+    │   ├── All `|| ( )` alternatives
+    │   └── Without --deep: deps already satisfied by an installed version
+    │       and deps of kept installed packages are not traversed
     │
     ├── SAT Encoding
-    │   ├── One variable per package-version
-    │   ├── exactlyOne() per slot
-    │   ├── Dependency constraints as CNF clauses
-    │   └── USE flag conditional dependencies
+    │   ├── One variable per candidate version
+    │   ├── Requested atom: at least one matching candidate
+    │   ├── Dependency: (-A | B1 | B2 ...) — applies only if A is selected
+    │   │   (providers filtered by version, slot, slot operator, USE deps)
+    │   ├── At most one version per (name, slot)
+    │   ├── Blockers: (-A | -B) per blocking candidate, USE-conditional
+    │   └── No provider: prohibit (-A)
     │
-    ├── SAT Solving (gophersat)
+    ├── SAT Solving (gophersat), two phases
+    │   ├── Phase 1: force the newest candidate of each requested atom
+    │   └── Phase 2: if UNSAT, solve without forcing (older/installed fallback)
     │
-    ├── Solution Optimization
-    │   ├── Prefer installed versions
-    │   ├── Minimize total packages
-    │   └── Respect slot preferences
+    ├── MAX-SAT Preferences (5 s limit, then best feasible plan + warning)
+    │   ├── Requested atoms: newest
+    │   ├── Dependencies: installed, unless --update and --deep
+    │   └── `|| ( )`: leftmost alternative
     │
-    └── Ordered Install Plan (topological sort)
+    ├── Plan Actions vs VDB: N, U, UD, R, NS, removal on blocker; unchanged hidden
+    │
+    ├── UNSAT → explanation chain (root → … → missing provider / blocker)
+    │
+    └── Ordered Install Plan (topological sort, PDEPEND edges excluded)
 ```
+
+Reference behaviour is Portage's `emerge -p`; on the tested packages GRPM's plan
+matches it line by line. The [CHANGELOG](../CHANGELOG.md) entry for v0.9.5 lists the
+change behind each rule.
 
 ---
 
@@ -385,12 +399,12 @@ User request ("emerge app-misc/hello")
 │ File: internal/ebuild/interpreter.go                         │
 │                                                              │
 │ Dispatch priority:                                           │
-│  1. Command Map (~160 Go helpers)                            │
+│  1. Bash function defined by the ebuild or a sourced eclass  │
+│     (tree code always wins over a built-in Go version)       │
+│  2. Command Map (~160 Go helpers)                            │
 │     PMS core: die, use, dobin, econf, emake, unpack, ...    │
-│     Eclass funcs: cmake_*, meson_*, python_*, cargo_*        │
-│     Unix tools: sed, cp, mv, grep, find, ...                 │
-│                                                              │
-│  2. Unknown commands → real shell pass-through               │
+│     Eclass fallbacks: cmake_*, meson_*, python_*, cargo_*    │
+│  3. Anything else → external command (sed, cp, grep, ...)    │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -410,22 +424,24 @@ User request ("emerge app-misc/hello")
 
 | Package | Lines | Description |
 |---------|------:|-------------|
-| `ebuild` | 41,312 | Build execution engine (largest subsystem) |
-| `cli` | 11,218 | Command-line interface |
+| `ebuild` | 41,567 | Build execution engine (largest subsystem) |
+| `solver` | 13,392 | Dependency resolution |
+| `cli` | 11,376 | Command-line interface |
+| `repo` | 10,930 | Repository abstraction |
+| `pkg` | 9,172 | Domain model |
 | `binpkg` | 9,166 | Binary package formats |
-| `repo` | 8,951 | Repository abstraction |
-| `solver` | 8,266 | Dependency resolution |
-| `pkg` | 8,066 | Domain model |
-| `install` | 5,153 | File merge/unmerge |
+| `install` | 5,303 | File merge/unmerge |
 | `daemon` | 4,981 | Background service |
 | `fetch` | 4,497 | Distfile downloading |
-| `state` | 4,376 | System state / VarDB |
+| `state` | 4,451 | System state / VarDB |
 | `config` | 4,118 | Configuration management |
 | `eclass` | 3,158 | Eclass loading system |
 | `tools` | 3,150 | External tool detection |
-| `privilege` | 2,300 | Privilege management |
+| `privilege` | 2,301 | Privilege management |
 | `sets` | 2,156 | Package set expansion |
-| | **~123K** | **Total internal/** |
+| | **~148K** | **Total internal/** |
+
+Lines: `scc` total lines of Go files, tests included (2026-11-07).
 
 ---
 
@@ -446,15 +462,15 @@ The Go-based bash interpreter (mvdan.cc/sh) provides comprehensive bash 5.2 comp
 | Positional parameter slicing | Fixed | [#1259](https://github.com/mvdan/sh/pull/1259) |
 | Brace expansion in declarations | Fixed | [#1261](https://github.com/mvdan/sh/pull/1261) |
 
-**Remaining limitation**: Process substitution `>()` is not yet supported. `EvalModeNativeBash` uses real `/bin/bash` as a fallback for full compatibility. The interpreter backend is **configurable** — users who prefer real `/bin/bash` can enable it via settings.
+**Remaining limitations**: process substitution `>()` and `read -d` are not supported. Build phases always run in this interpreter today. A real `/bin/bash` evaluator (`EvalModeNativeBash`) exists for metadata extraction only and is not exposed as a user setting yet; real bash for build phases is planned (see [Target Architecture](#roadmap-target-architecture-v0100)).
 
-### Command Map Shadowing
+### Built-in Eclass Fallbacks
 
-The ~160 Go helper functions in the command map intercept commands before dynamically loaded eclass functions. If an overlay provides a custom eclass with a function name matching a Go helper (e.g., `cmake_src_configure`), the Go version takes priority. This is a correctness concern for overlays. Tracked in v0.10.0-010.
+The command map also holds Go implementations of functions from 12 eclasses (e.g. `cmake_src_configure`). Since v0.9.5 a function defined by the ebuild or by an eclass sourced from the tree (including overlays) takes priority, so the Go version runs only when the tree did not define that function. These copies can still diverge from the tree and are planned for removal once build phases run in real bash.
 
 ### PMS Compliance
 
-As of v0.9.4+ (validated by 4-agent audit, 2026-02-09; multilib fixes 2026-02-23):
+As of v0.9.4+ (validated by community code audit, 2026-02-09; multilib fixes 2026-02-23):
 
 | Scenario | Compliance |
 |----------|-----------|
@@ -464,7 +480,7 @@ As of v0.9.4+ (validated by 4-agent audit, 2026-02-09; multilib fixes 2026-02-23
 | Packages with complex eclasses | ~40% |
 | **Weighted average across Portage tree** | **~51%** |
 
-Phase dispatch routing for EXPORT_FUNCTIONS has been fixed — eclass phase functions are now correctly resolved before the phase loop. Multilib out-of-tree builds work with correct BUILD_DIR detection. The remaining gap is missing build system support (Python/CMake/Meson). See `docs/dev/research/audit-validated-2026-02-09.md` for the full audit report.
+Phase dispatch routing for EXPORT_FUNCTIONS has been fixed — eclass phase functions are now correctly resolved before the phase loop. Multilib out-of-tree builds work with correct BUILD_DIR detection. The remaining gap is missing build system support (Python/CMake/Meson). Details per PMS chapter: [PMS_COMPLIANCE.md](PMS_COMPLIANCE.md).
 
 ---
 
@@ -481,22 +497,32 @@ Phase dispatch routing for EXPORT_FUNCTIONS has been fixed — eclass phase func
 
 ## Roadmap: Target Architecture (v0.10.0+)
 
+Goal: GRPM needs an update only when the tree starts using a new EAPI — the same
+condition under which Portage needs one. Eclasses and profiles are data from the tree,
+executed as they are; GRPM provides only what PMS assigns to the package manager.
+
 ```
 GRPM Orchestration (Go)
     │
-    ├── Metadata parsing (mvdan.cc/sh) — fast, in-process
+    ├── Metadata: md5-cache from the tree; built-in interpreter (mvdan.cc/sh)
+    │   only when the cache is missing
     ├── Dependency resolution (SAT solver) — Go native
-    ├── Phase execution (configurable backend):
-    │   ├── Default → Go interpreter (mvdan.cc/sh, bash 5.2 compatible)
-    │   └── Optional → real /bin/bash (enabled via settings)
-    ├── Helper functions → standalone Go binaries in PATH
+    │   └── Unsupported EAPI → package masked (as in Portage), not a build failure
+    ├── Phase execution:
+    │   ├── Linux default → real /bin/bash (as Portage's ebuild.sh)
+    │   └── Built-in interpreter → non-Linux development, opt-in
+    ├── PMS commands, as in Portage:
+    │   ├── State-changing (use, econf, eapply, die, ...) → sourced bash library
+    │   └── File-installing (dobin, doins, dosym, ...) → helper executables in PATH
+    ├── No built-in copies of eclasses
     ├── File merge & VarDB → Go native (transactional)
     └── Configuration → Go native
 ```
 
-The interpreter backend is configurable: by default GRPM uses its Go interpreter (fast, cross-platform, bash 5.2 compatible), but users can enable real `/bin/bash` via settings for full compatibility. GRPM contributed 6 upstream PRs to mvdan/sh (all merged), resolving all major interpreter gaps.
+A scheduled CI run against the current Gentoo tree is planned to catch tree changes that
+break GRPM before users hit them.
 
 ---
 
-*Validated: 2026-02-09 against source code*
-*Source: 4-agent community audit + manual code verification*
+*Validated: 2026-02-09 against source code; resolver, dispatch and package sizes re-checked 2026-11-07*
+*Source: community code audit + manual code verification*
