@@ -65,6 +65,12 @@ jobs:
         run: |
           ./dist/grpm --version
           ./dist/grpm --help > /dev/null
+      # Integration tests need a Gentoo tree and run only in integration.yml and the
+      # release workflow, so a normal `go test` never compiles them. Vet them here so an
+      # API change cannot break them unnoticed (v0.9.5: the release failed on e2e tests
+      # that had not compiled since the resolver result type changed).
+      - name: Vet integration-tagged tests
+        run: go vet -tags=integration ./...
       # Release archives include linux/386 and linux/arm (.goreleaser.yml).
       - name: Build linux/386
         run: CGO_ENABLED=0 GOARCH=386 go build ./...

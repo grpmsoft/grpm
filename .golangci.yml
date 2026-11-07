@@ -6,6 +6,9 @@ version: "2"
 run:
   timeout: 5m
   tests: true
+  # Lint integration tests too (tests/integration, build tag "integration").
+  build-tags:
+    - integration
 
 linters:
   # Enable additional useful linters beyond defaults
