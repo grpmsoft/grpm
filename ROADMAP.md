@@ -8,6 +8,7 @@
 > Configuration management (v0.8.0-v0.8.4).
 > Enterprise CLI & emerge filtering (v0.9.0-v0.9.2).
 > Install helpers & bash interpreter hardening (v0.9.3-v0.9.4).
+> Dependency resolver rewrite — multi-version SAT, plans match `emerge -p` on tested packages (v0.9.5).
 > **Community code audit completed (2026-02-09): PMS compliance validated at ~60%.**
 > **98.2% tree coverage verified on real Gentoo WSL2.**
 
@@ -27,20 +28,21 @@ GRPM aims to be a modern, reliable package manager for Gentoo Linux with:
 ## Path to v1.0.0
 
 ```
-v0.9.4 ← LATEST RELEASE (Bash Interpreter Hardening)
+v0.9.5 ← LATEST RELEASE (Dependency Resolver Rewrite)
     │
     │   ✅ v0.6.0: Distfile fetching, debug helpers, coverage analyzer
     │   ✅ v0.7.x: Portage compatibility, security fixes
     │   ✅ v0.8.x: Configuration management, mask/keywords, package sets
     │   ✅ v0.9.x: Enterprise CLI, emerge filtering, bash hardening
+    │   ✅ v0.9.5: Multi-version SAT resolver (plan parity on tested packages)
     │   ✅ Community audit: PMS compliance validated (~60%/~51%)
     │   ✅ 98.2% tree coverage on real Gentoo WSL2
     ↓
 v0.10.x ← CURRENT PHASE (Audit-Driven Quality & Bash Evolution)
     │
     │   Wave 1: Audit bug fixes (=* glob, phase defaults, dead code)
-    │   Wave 1.5: Resolver rewrite — multi-version SAT ✅ (in review)
-    │   Wave 2: Build system expansion, eclass compatibility
+    │   Wave 1.5: Resolver rewrite ✅ — remaining: -uD @world parity
+    │   Wave 2: Real bash for build phases, no built-in eclass copies, build systems
     │   Wave 3: @world 90%+ build success, community validation
     ↓
 v0.11.x — Community Testing & Feedback
@@ -74,27 +76,36 @@ Following the community code audit (2026-02-09), development is organized in thr
 
 | Task | Priority | Status |
 |------|----------|--------|
-| Multi-version SAT encoding (implications, at-most-one) | P0 | **DONE** (PR #78) |
-| Blocker support (SAT conflict clauses) | P0 | Planned (v0.10.0-012) |
-| Consumer migration to SlotKey result | P0 | Planned (v0.10.0-013) |
-| MAX-SAT optimization + mode weights | P1 | Planned (v0.10.0-014) |
-| Real-tree validation fixtures | P1 | Planned (v0.10.0-015) |
-| USE flag resolution unification | P1 | Planned (v0.10.0-016) |
-
-**ADR:** [ADR-001](docs/dev/adr/ADR-001-resolver-multi-version-sat.md)
+| Multi-version SAT encoding (implications, at-most-one per slot) | P0 | **DONE** (PR #78) |
+| UNSAT explanations | P1 | **DONE** (PR #80) |
+| Slot-keyed resolver result in all consumers | P0 | **DONE** (PRs #81, #83) |
+| USE flag resolution unification | P1 | **DONE** (PR #84) |
+| Blockers as SAT conflicts (incl. USE-conditional) | P0 | **DONE** (PRs #85, #95) |
+| Installed packages as candidates | P0 | **DONE** (PRs #86, #94, #95) |
+| USE dependencies on atoms | P1 | **DONE** (PRs #87, #94) |
+| MAX-SAT version preferences | P1 | **DONE** (PR #88) |
+| Plan actions and `emerge -p` parity on tested packages | P0 | **DONE** (PRs #90–#94) |
+| `-uD @world` parity with Portage | P0 | In progress (149 of 204 packages) |
 
 ### Wave 2: Architecture Evolution
+
+The goal of this wave: GRPM needs an update only when the tree needs a new EAPI, as
+Portage does. Eclasses and profiles from the tree are executed as they are; GRPM provides
+only what PMS assigns to the package manager.
 
 | Task | Priority | Status |
 |------|----------|--------|
 | mvdan.cc/sh upstream integration | P0 | **DONE** (6 PRs merged, workarounds removed) |
-| Reduce Go command map shadowing | P1 | Planned |
+| Ebuild and eclass functions take priority over built-in Go implementations | P1 | **DONE** (PR #76) |
+| Real `/bin/bash` for build phases; PMS helpers as a sourced library and helper executables | P1 | Planned |
+| Remove built-in Go copies of eclasses (tree code always runs) | P1 | Planned (after real bash) |
+| Unsupported EAPI masked in the resolver, as in Portage; clear errors for missing helpers | P1 | Planned |
+| Weekly CI run against the current Gentoo tree | P1 | Planned |
 | Python/distutils build system | P1 | Planned |
-| Top 20 eclass compatibility | P1 | Planned |
 
-**Architectural decisions resolved:**
-- **Interpreter:** All 6 upstream PRs to `mvdan.cc/sh` merged (2026-02-23). Full bash 5.2 compatibility. Configurable backend — users can enable real `/bin/bash` via settings.
-- **Resolver:** Multi-version SAT with implication clauses, at-most-one per slot, prohibit clauses for unsatisfiable candidates (2026-10-02). See ADR-001.
+**Architectural decisions:**
+- **Interpreter:** All 6 upstream PRs to `mvdan.cc/sh` merged (2026-02-23). Next: real `/bin/bash` runs build phases by default on Linux, as in Portage; the built-in interpreter remains for metadata without md5-cache and for non-Linux development.
+- **Resolver:** Multi-version SAT with implication clauses, at-most-one per slot, blockers, installed packages as candidates and MAX-SAT version preferences (2026-10).
 
 ### Wave 3: Validation & Community
 
@@ -108,9 +119,9 @@ Following the community code audit (2026-02-09), development is organized in thr
 
 | Bug | Location | Status |
 |-----|----------|--------|
-| `=*` glob operator overly permissive | `internal/pkg/atom.go:748` | Tracked |
+| `=*` glob operator overly permissive | `internal/pkg/atom.go` | **Fixed for dependencies** (PR #79); command-line atoms still use a plain prefix match |
 | Phase defaults routing | `internal/ebuild/phases_impl.go` | **Fixed** (PR #76) |
-| Hardcoded `--libdir=/usr/lib64` | `internal/ebuild/phases_impl.go` | **Fixed** (PR #76) |
+| Hardcoded `--libdir=/usr/lib64` | `internal/ebuild/phases_impl.go` | **Fixed in `econf`**; the built-in default configure phase still hardcodes it |
 | Dead code in compat | `internal/compat/portage.go` | Tracked |
 
 See [PMS_COMPLIANCE.md](docs/PMS_COMPLIANCE.md) for the full compliance matrix.
@@ -118,6 +129,15 @@ See [PMS_COMPLIANCE.md](docs/PMS_COMPLIANCE.md) for the full compliance matrix.
 ---
 
 ## Release History
+
+### v0.9.5 — Dependency Resolver Rewrite (2026-11-08)
+
+- **Multi-version SAT resolver** — every candidate version is a variable; slots coexist
+- **Blockers, USE dependencies, installed packages** handled in the solver
+- **Portage semantics** for `-u`/`-D`, reinstall of requested atoms, plan actions (`N`, `U`, `UD`, `R`, `NS`)
+- **Plans match `emerge -p`** line by line on tested packages; UNSAT explanations
+- **Operator fixes** — `~`, `=ver*`, slot operators, nested USE conditionals
+- **mvdan.cc/sh upstream** with all six of our fixes; multilib build fixes
 
 ### v0.9.4 — Bash Interpreter Hardening (2026-02-09)
 
@@ -203,7 +223,7 @@ See [PMS_COMPLIANCE.md](docs/PMS_COMPLIANCE.md) for the full compliance matrix.
 
 | Category | Features |
 |----------|----------|
-| **Core** | SAT solver, version comparison, slot/subslot, USE flags |
+| **Core** | Multi-version SAT solver (blockers, USE dependencies, installed packages), version comparison, slot/subslot, USE flags |
 | **Configuration** | make.conf, repos.conf, package.use/mask/keywords — full Portage compatibility |
 | **Build Systems** | Autotools (full), CMake (partial), Meson (partial) |
 | **Languages** | Python, Rust, Go — basic support via eclasses |
@@ -216,11 +236,12 @@ See [PMS_COMPLIANCE.md](docs/PMS_COMPLIANCE.md) for the full compliance matrix.
 
 | Limitation | Impact | Planned Resolution |
 |------------|--------|-------------------|
-| Process substitution `>()` | multibuild.eclass affected | Not yet supported in mvdan.cc/sh |
-| ~160 Go command map entries shadow eclass functions | Correctness concern for custom overlays | Reduce shadowing (v0.10.0) |
+| Process substitution `>()` | multibuild.eclass affected | Real `/bin/bash` for build phases (v0.10.0) |
+| Built-in Go copies of 12 eclasses | Used only when the eclass function is not defined by the tree; can diverge from the tree | Remove after real bash for phases (v0.10.0) |
+| `-uD @world` plan | 149 of 204 packages on our test system | Resolver work (v0.10.0) |
 | PMS compliance ~60% (simple) / ~51% (weighted) | Complex eclasses may fail | Audit fixes + build system expansion (v0.10.0) |
 | @world build success ~20% | Only autotools packages pass | Build system improvements (v0.10.0) |
-| Daemon scaffolding | Functional but not production-hardened | Production hardening (v0.11.0) |
+| Daemon scaffolding | Functional but not production-hardened | Lifecycle on [grpmsoft/daemon](https://github.com/grpmsoft/daemon) (idle shutdown, PID locking, socket token) and an MCP server for AI agents on [grpmsoft/emcp-go](https://github.com/grpmsoft/emcp-go) (v0.10.0) |
 
 ---
 
@@ -242,7 +263,7 @@ See [PMS_COMPLIANCE.md](docs/PMS_COMPLIANCE.md) for the full compliance matrix.
 
 | Metric | Target | Current |
 |--------|--------|---------|
-| Test functions | Comprehensive | 1,971 passing |
+| Test functions | Comprehensive | 2,223 |
 | Lint issues | 0 | 0 |
 | Test coverage | 70%+ overall, 90%+ domain | Achieved |
 | Tree coverage | 98%+ packages | 98.2% |
@@ -271,4 +292,4 @@ See [PMS_COMPLIANCE.md](docs/PMS_COMPLIANCE.md) for the full compliance matrix.
 ---
 
 *This roadmap evolves based on community feedback and project needs.*
-*Last updated: 2026-02-09 (post-audit roadmap restructuring)*
+*Last updated: 2026-11-07 (v0.9.5 resolver rewrite; Wave 2 goal: tree updates need no GRPM update except for a new EAPI)*

@@ -140,7 +140,7 @@ When syncing with upstream changes:
 3. **Review commits**: Focus on _emerge/ and dep/ changes
 4. **Check PMS updates**: https://projects.gentoo.org/pms/
 5. **Update this file**: Document what was synced
-6. **Create tasks**: Add to docs/dev/kanban/backlog/
+6. **Create tasks**: Open issues for follow-up work
 
 ### Automated Check (TODO)
 
@@ -173,7 +173,7 @@ git log --oneline HEAD..origin/master
 ## Community Feedback Integration
 
 ### Gentoo Forums (2026-01-17)
-- grknight: Concerns about internal bash executor — addressed with configurable backend (users can opt into real /bin/bash)
+- grknight: Concerns about internal bash executor — planned: real `/bin/bash` runs build phases by default on Linux, as in Portage (v0.10.0); the built-in interpreter stays for metadata and non-Linux development
 - NeddySeagoon: Bug-for-bug compatibility concerns
 - pietinger: Track gentoo-dev@ for eclass changes
 

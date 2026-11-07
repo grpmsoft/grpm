@@ -32,7 +32,7 @@ This guide covers installation of GRPM on Gentoo Linux and compatible distributi
 
 ### Build Dependencies (source installation only)
 
-- Go 1.25 or later
+- Go 1.27.3 or later
 - Git
 - Make
 - GCC (for race detector tests)
@@ -45,7 +45,7 @@ This guide covers installation of GRPM on Gentoo Linux and compatible distributi
 
 ```bash
 # Set version and architecture
-VERSION="0.9.4"
+VERSION="0.9.5"
 ARCH="x86_64"  # Options: x86_64, arm64, armv7, armv6, i386
 
 # Download binary

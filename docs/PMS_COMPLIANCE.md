@@ -2,8 +2,8 @@
 
 > **GRPM Implementation Status per [Package Manager Specification](https://projects.gentoo.org/pms/)**
 >
-> **Version:** v0.9.4
-> **Last Updated:** 2026-02-09
+> **Version:** v0.9.5
+> **Last Updated:** 2026-11-07 (Chapter 8 re-checked against the rewritten resolver)
 > **License:** This document follows PMS under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/)
 
 ---
@@ -31,13 +31,13 @@
 | Ch. 5: Profiles | **Partial** | Profile loading works, some features missing |
 | Ch. 6: Ebuild File Format | **Partial** | Parsing via mvdan.cc/sh (bash 5.2 compatible, 6 upstream PRs merged) |
 | Ch. 7: Ebuild Variables | **Full** | All mandatory/optional variables parsed |
-| Ch. 8: Dependencies | **Full** | All operators, slots, USE deps supported |
+| Ch. 8: Dependencies | **Partial** | Operators, slots, blockers and USE deps resolved in the SAT solver; no rebuild on subslot change; weak blockers enforced as hard conflicts |
 | Ch. 9: Phase Functions | **Partial** | Core phases work, hardened metadata extraction |
 | Ch. 10: Eclasses | **Partial** | 12 eclass Go modules + 2 via helpers, dynamic loading |
 | Ch. 11: Environment | **Full** | All core variables, CHOST/CBUILD, USE_EXPAND |
 | Ch. 12: Commands | **Partial** | ~160 helper functions, ~55 command map entries |
 
-**Overall Estimate:** ~65% PMS compliance for simple autotools packages, ~51% weighted across all package types. Phase dispatch routing for EXPORT_FUNCTIONS has been fixed (2026-02-23). Primary remaining gap: missing build system support (Python/CMake/Meson). The bash interpreter (mvdan.cc/sh) is fully bash 5.2 compatible after 6 upstream PRs merged. See [Known Bugs](#known-bugs) below.
+**Overall Estimate:** ~65% PMS compliance for simple autotools packages, ~51% weighted across all package types. Phase dispatch routing for EXPORT_FUNCTIONS has been fixed (2026-02-23). Primary remaining gap: missing build system support (Python/CMake/Meson). The bash interpreter (mvdan.cc/sh) covers bash 5.2 after 6 upstream PRs merged, except process substitution `>()` and `read -d`. These estimates are for ebuild execution and were not re-measured for v0.9.5; v0.9.5 changed dependency resolution (Chapter 8). See [Known Bugs](#known-bugs) below.
 
 ---
 
@@ -276,17 +276,19 @@ internal/pkg/package.go         # Package struct
 
 ## Chapter 8: Dependencies
 
-**Status: Full**
+**Status: Partial** — everything below is resolved in the multi-version SAT solver
+(v0.9.5); the gaps are subslot-change rebuilds, weak-blocker merge scheduling and `=*`
+in command-line atoms.
 
 ### Section 8.2: Dependency Syntax
 
 | Syntax | Status | Notes |
 |--------|--------|-------|
 | All-of groups `( )` | Full | |
-| Any-of groups `\|\| ( )` | Full | |
+| Any-of groups `\|\| ( )` | Full | All alternatives explored; leftmost preferred (as Portage) |
 | Exactly-one-of `^^ ( )` | Full | |
 | At-most-one-of `?? ( )` | Full | EAPI 5+ |
-| USE conditionals `use? ( )` | Full | |
+| USE conditionals `use? ( )` | Full | Nested conditionals keep all outer conditions (v0.9.5) |
 | Negated conditionals `!use? ( )` | Full | |
 
 ### Section 8.3: Package Dependency Specs
@@ -294,15 +296,17 @@ internal/pkg/package.go         # Package struct
 | Feature | Status | Notes |
 |---------|--------|-------|
 | Simple `category/package` | Full | |
-| Version operators `<`, `<=`, `=`, `~`, `>=`, `>` | Full | |
-| Glob match `=cat/pkg-1.2*` | Partial | `=*` uses `strings.HasPrefix` — overly permissive per PMS (should match at component boundary). See [Known Bugs](#known-bugs) |
-| Weak blocker `!cat/pkg` | Full | |
-| Strong blocker `!!cat/pkg` | Full | |
+| Version operators `<`, `<=`, `=`, `>=`, `>` | Full | |
+| Revision match `~cat/pkg-1.2` | Full | Any revision of the version (v0.9.5; was exact match) |
+| Glob match `=cat/pkg-1.2*` | Partial | Dependencies: component-boundary match (v0.9.5). Command-line atoms: still a plain prefix match. See [Known Bugs](#known-bugs) |
+| Weak blocker `!cat/pkg` | Partial | Enforced in the final state; the temporary coexistence and unmerge that PMS allows during the merge are not scheduled |
+| Strong blocker `!!cat/pkg` | Full | Per candidate version, USE-conditional blockers honoured (v0.9.5) |
 | Slot deps `:slot` | Full | |
-| Slot operators `:=`, `:*`, `:slot=` | Full | EAPI 5+ |
+| Slot operators `:=`, `:*`, `:slot=` | Partial | Parsed and matched (v0.9.5; `:3=` was read as slot `3=`). Dependents are not rebuilt when a subslot changes |
 | Subslots `:slot/subslot` | Full | EAPI 5+ |
-| USE deps `[flag]`, `[-flag]` | Full | |
+| USE deps `[flag]`, `[-flag]` | Full | Filter SAT providers (v0.9.5) |
 | USE dep defaults `[flag(+)]`, `[flag(-)]` | Full | EAPI 4+ |
+| Conditional USE deps `[flag=]`, `[!flag=]`, `[flag?]`, `[!flag?]` | Full | PMS 8.2.6.4 (v0.9.5; atoms with `[flag=]` failed to parse before) |
 
 ### Implementation
 
@@ -711,7 +715,7 @@ EAPI 7+ cross-compilation variables (SYSROOT, ESYSROOT, BROOT) are defined but n
 | Version comparison | `version_test.go`, `constraint_test.go` | High |
 | Atom parsing | `atom_test.go`, `atom_parse_test.go` | High |
 | EAPI features | `eapi_test.go` | High |
-| Dependency resolution | `resolver_test.go`, `solver_test.go` | Medium |
+| Dependency resolution | `multi_version_test.go`, `closed_fixture_test.go`, `resolver_test.go`, `solver_test.go` | High (v0.9.5, incl. fixtures from a real tree snapshot) |
 | Ebuild execution | `executor_test.go`, `phases_test.go` | Medium |
 | Helpers | `helpers_*_test.go` (15 test files) | Medium |
 | Metadata extraction | `metadata_test.go` | High (v0.9.4) |
@@ -777,6 +781,16 @@ EAPI 7+ cross-compilation variables (SYSROOT, ESYSROOT, BROOT) are defined but n
 - [x] golangci-lint: 0 issues
 - [x] 33 new tests for metadata extraction and distfile resolution
 
+### v0.9.5 (Complete)
+
+- [x] Multi-version SAT resolver (implications, at-most-one per slot, installed packages as candidates)
+- [x] Blockers `!`/`!!` as SAT conflicts, USE-conditional blockers
+- [x] USE deps on atoms, including conditional forms (PMS 8.2.6.4)
+- [x] `~` revision match (PMS 8.3.3), `=*` component boundary in dependencies
+- [x] Slot operators `:=`, `:*`, `:slot=` parsed and matched
+- [x] Nested USE conditionals in dependency strings
+- [x] USE resolution order with `use.force`/`use.mask` as the final layer
+
 ### v0.9.x (Planned)
 
 - [ ] `package.provided` support
@@ -798,11 +812,12 @@ Issues identified during community code audit (2026-02-09) and tracked for resol
 
 | Bug | Location | Impact | Status |
 |-----|----------|--------|--------|
-| `=*` glob operator overly permissive | `internal/pkg/atom.go:748` | `strings.HasPrefix` matches at any position; PMS requires component boundary match | Open (v0.10.0) |
+| `=*` glob operator overly permissive | `internal/pkg/atom.go` (`matchesVersion`) | Command-line atoms use `strings.HasPrefix`, so `=foo-1.2*` matches `1.20`; dependency constraints were fixed in v0.9.5 (`constraint.go`, component boundary) | Partly fixed (v0.9.5), rest open (v0.10.0) |
 | ~~Phase defaults routing~~ | ~~`internal/ebuild/phases_impl.go`~~ | ~~Dispatch may call incomplete defaults~~ | **Fixed** (2026-02-23): pre-resolve eclass chain + EXPORT_FUNCTIONS before phase loop |
 | ~~`phasePrepare()` eapply_user dispatch~~ | ~~`internal/ebuild/phases_impl.go`~~ | ~~May not be invoked in all entry points~~ | **Fixed** (2026-02-23): EXPORT_FUNCTIONS routing now works |
 | ~~`phaseInstall()` einstalldocs dispatch~~ | ~~`internal/ebuild/phases_impl.go`~~ | ~~May not be invoked in all entry points~~ | **Fixed** (2026-02-23): EXPORT_FUNCTIONS routing now works |
-| Hardcoded `--libdir=/usr/lib64` | `internal/ebuild/phases_impl.go` | `phaseConfigure()` always uses lib64 instead of detecting from ABI/profile | Open (v0.10.0) |
+| Hardcoded `--libdir=/usr/lib64` | `internal/ebuild/phases_impl.go` | The built-in default `phaseConfigure()` always uses lib64; the `econf` helper detects libdir correctly | Open for the default phase (v0.10.0) |
+| Unknown EAPI not masked | `internal/ebuild/environment.go`, resolver | Resolver can select an ebuild with an unsupported EAPI (Portage masks it); environment setup silently falls back to EAPI 8 features | Open (v0.10.0) |
 | Dead code in compat | `internal/compat/portage.go` | 17 lines with "not yet implemented" placeholder | Open (v0.10.0) |
 
 ---
@@ -820,15 +835,15 @@ GRPM uses `mvdan.cc/sh` (pure Go bash interpreter). As of 2026-02-23, the GRPM p
 | [#1259](https://github.com/mvdan/sh/pull/1259) | Positional parameter slicing offsets | Correct `"${@:N:M}"` |
 | [#1261](https://github.com/mvdan/sh/pull/1261) | Brace expansion in declarations | `local {A,B}_VAR=1` works |
 
-**Result:** The Go interpreter now provides full bash 5.2 compatibility for ebuild/eclass execution. The remaining gap is process substitution `>()`, which affects `multibuild.eclass`.
+**Result:** The Go interpreter now covers the bash features ebuilds and eclasses commonly use. Known gaps: process substitution `>()` (affects `multibuild.eclass`) and `read -d`.
 
-GRPM also supports **configurable interpreter backend** — users who prefer real `/bin/bash` can enable it via settings for full compatibility.
+A real `/bin/bash` evaluator exists for metadata extraction but is not exposed as a user setting yet. Running build phases in real `/bin/bash`, as Portage does, is planned for v0.10.0 — see the [Roadmap](../ROADMAP.md).
 
 ---
 
 ## Community Audit (2026-02-09)
 
-This document was validated against source code by a 4-agent deep code audit. Key corrections from the audit:
+This document was validated against source code in a deep code audit. Key corrections from the audit:
 
 | Claim | Before Audit | After Validation |
 |-------|--------------|------------------|
@@ -838,8 +853,6 @@ This document was validated against source code by a 4-agent deep code audit. Ke
 | Routed commands | 159 | ~55 command map entries |
 | `eshopts_push/pop` | Full | Partial (stack works, shell options simulated) |
 | `src_prepare` | Full | Partial (routing issue) |
-
-Full audit report: `docs/dev/research/audit-validated-2026-02-09.md` (internal)
 
 ---
 
@@ -855,4 +868,4 @@ Full audit report: `docs/dev/research/audit-validated-2026-02-09.md` (internal)
 
 *This document is maintained alongside GRPM development and validated against source code.*
 *Corrections welcome via [GitHub Issues](https://github.com/grpmsoft/grpm/issues).*
-*Last audit: 2026-02-09 (4-agent code analysis)*
+*Last audit: 2026-02-09 (code audit); Chapter 8 re-checked 2026-11-07*

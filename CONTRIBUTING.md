@@ -19,7 +19,7 @@ make build    # Build binary
 
 ## Requirements
 
-- **Go 1.25+**
+- **Go 1.27.3+** (the go.mod `go` line; CI and releases build with exactly this version)
 - **golangci-lint v2.5.0+**
 - Linux recommended (GRPM targets Gentoo)
 
@@ -110,7 +110,7 @@ internal/
 ├── binpkg/       # Binary packages (GPKG, TBZ2 read/write, signing)
 ├── sync/         # Repository sync (rsync, Git with GPG)
 ├── state/        # System state (VarDB, Btrfs/ZFS snapshots)
-├── cli/          # CLI commands (Cobra-based)
+├── cli/          # CLI commands (standard library flag subcommands)
 ├── daemon/       # gRPC + REST daemon
 ├── application/  # Application layer (use case orchestration, DTOs)
 └── compat/       # Portage compatibility layer

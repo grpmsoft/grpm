@@ -19,7 +19,7 @@
   <a href="https://github.com/grpmsoft/grpm/issues"><img src="https://img.shields.io/github/issues/grpmsoft/grpm?style=flat-square&logo=github" alt="GitHub Issues"></a>
 </p>
 
-GRPM (Go Resource Package Manager) is a modern source-based package manager written in Go, inspired by and fully compatible with **Gentoo's Portage**. It brings SAT-based dependency resolution, transactional updates with filesystem snapshots, and binary package support. While rooted in the Gentoo ecosystem, GRPM is designed to be distribution-agnostic and extensible for any Linux distribution.
+GRPM (Go Resource Package Manager) is a modern source-based package manager written in Go, inspired by **Gentoo's Portage** and aiming to be a drop-in replacement for it: it reads the same tree, configuration, profiles and installed-package database. It brings SAT-based dependency resolution, transactional updates with filesystem snapshots, and binary package support. GRPM is not yet at full parity with Portage — see [Known Limitations](#roadmap). While rooted in the Gentoo ecosystem, GRPM is designed to be distribution-agnostic and extensible for any Linux distribution.
 
 **Current Version:** [Latest Release](https://github.com/grpmsoft/grpm/releases/latest)
 
@@ -29,7 +29,7 @@ GRPM (Go Resource Package Manager) is a modern source-based package manager writ
 
 | Feature | Description |
 |---------|-------------|
-| **SAT-based Dependency Resolution** | Boolean satisfiability solver for guaranteed conflict-free resolution |
+| **SAT-based Dependency Resolution** | Multi-version SAT solver: slots, blockers, USE dependencies and installed packages; plans match `emerge -p` on tested packages; explains unsatisfiable requests |
 | **Binary Package Support** | Full GPKG (.gpkg.tar) and legacy TBZ2 (.tbz2) format support |
 | **Transactional Updates** | Btrfs/ZFS snapshot-based rollbacks for safe system updates |
 | **Source Building** | Ebuild execution with autotools (full); CMake and Meson (basic); hardened bash interpreter (~160 Go helpers) |
@@ -58,7 +58,7 @@ GRPM (Go Resource Package Manager) is a modern source-based package manager writ
 
 ```bash
 # Download latest release (check https://github.com/grpmsoft/grpm/releases for VERSION)
-VERSION="0.9.4"
+VERSION="0.9.5"
 wget "https://github.com/grpmsoft/grpm/releases/download/v${VERSION}/grpm_${VERSION}_linux_x86_64.tar.gz"
 tar -xzf "grpm_${VERSION}_linux_x86_64.tar.gz"
 sudo install -m 0755 grpm /usr/bin/grpm
@@ -70,7 +70,7 @@ grpm -V
 ### Build from Source
 
 ```bash
-# Requires Go 1.25+
+# Requires Go 1.27.3+
 git clone https://github.com/grpmsoft/grpm.git
 cd grpm
 make build
@@ -104,6 +104,9 @@ sudo grpm emerge --root /mnt/gentoo app-misc/hello
 
 # Build dependencies only (useful for Docker layer caching)
 sudo grpm emerge --onlydeps app-misc/hello
+
+# Show the update plan for the whole system (like emerge -uDp @world)
+grpm emerge -p -u -D @world
 
 # Work with package sets
 grpm resolve @world              # Resolve all world packages
@@ -233,9 +236,10 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidelines and [AGENTS.md
 > Rapid development complete. Infrastructure, build quality, and security hardening done.
 > **Community audit completed (2026-02-09): PMS compliance validated at ~60%.**
 > **98.2% tree coverage verified on real Gentoo WSL2.**
+> **v0.9.5: dependency resolver rewritten — plans match `emerge -p` on tested packages.**
 
 **Completed Features:**
-- ✅ SAT-based dependency resolution
+- ✅ Multi-version SAT dependency resolution (slots, blockers, USE dependencies, installed packages, Portage `-u`/`-D` semantics)
 - ✅ Ebuild execution (autotools full; CMake, Meson basic)
 - ✅ Language ecosystem support (Python, Rust, Go — basic)
 - ✅ Multilib support (32-bit/64-bit)
@@ -255,8 +259,10 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidelines and [AGENTS.md
 - ✅ Eclass metadata extraction with stdout isolation
 
 **Known Limitations:**
-- Build success ~20% of @world (autotools packages pass; Python/CMake/Meson builds need build system support)
+- `-uD @world` plan not yet at parity with Portage (149 of 204 packages on our test system)
+- Build success ~20% of @world as of v0.9.4 (autotools packages pass; Python/CMake/Meson builds need build system support)
 - PMS compliance ~60% for simple packages (validated by community audit, 2026-02-09)
+- Ebuild phases run in GRPM's built-in bash interpreter; eclasses that use bash features it lacks (process substitution `>()`) fail
 
 **v1.0.0** — Production ready after community validation (no fixed date).
 
