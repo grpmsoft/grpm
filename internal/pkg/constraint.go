@@ -56,7 +56,7 @@ const (
 	OpGreaterEqual
 	OpLess
 	OpLessEqual
-	OpEqualGlob    // =pkg-ver* (PMS 8.3.1: prefix match at version component boundary)
+	OpEqualGlob     // =pkg-ver* (PMS 8.3.1: prefix match at version component boundary)
 	OpRevisionMatch // ~pkg-ver (PMS 8.3.3: match any revision of base version)
 )
 
@@ -79,16 +79,16 @@ func (vc *VersionConstraint) Version() string {
 
 // Constraint represents a general package constraint
 type Constraint struct {
-	Type      ConstraintType
-	Name      string
-	Version   *VersionConstraint // For version constraints
-	Slot      string             // For slot constraints
-	Flag      string             // For USE flags
-	Required  bool               // Mandatory requirement
-	Condition  string   // USE flag condition (flat, single flag — legacy)
-	Conditions []string // USE flag conditions (all must be true for dep to be active)
-	OrGroupID int                // OR-group ID (0 = required, >0 = alternative)
-	DepType   DepType            // Dependency type (RDEPEND, BDEPEND, etc.)
+	Type       ConstraintType
+	Name       string
+	Version    *VersionConstraint // For version constraints
+	Slot       string             // For slot constraints
+	Flag       string             // For USE flags
+	Required   bool               // Mandatory requirement
+	Condition  string             // USE flag condition (flat, single flag — legacy)
+	Conditions []string           // USE flag conditions (all must be true for dep to be active)
+	OrGroupID  int                // OR-group ID (0 = required, >0 = alternative)
+	DepType    DepType            // Dependency type (RDEPEND, BDEPEND, etc.)
 
 	// UseRequire lists USE flags that the provider MUST have enabled.
 	// Populated from atom USE deps: dev-libs/openssl[ssl] -> UseRequire=["ssl"]

@@ -7,10 +7,10 @@ project_name: grpm
 
 before:
   hooks:
-    # Ensure dependencies are up to date
+    # Ensure dependencies are up to date (CI's Formatting job already fails on an untidy go.mod)
     - go mod tidy
-    # Generate protobuf code
-    - make proto
+    # Generated gRPC code (api/gen) is committed and tested; it is not regenerated here,
+    # so the release is built from exactly the tested sources.
 
 builds:
   - id: grpm
@@ -134,17 +134,13 @@ release:
     sudo install -m 0755 grpm /usr/bin/grpm
 
     # Verify
-    grpm version
+    grpm --version
     ```
 
-    ### What's Changed
-
+  # The notes themselves come from the CHANGELOG.md section of the version
+  # (release.yml passes --release-notes).
   footer: |
     **Full Changelog**: https://github.com/grpmsoft/grpm/compare/{{ .PreviousTag }}...{{ .Tag }}
-
-    ---
-
-    🤖 Generated with [GoReleaser](https://goreleaser.com)
 
   # Disable release if this is a snapshot
   disable: '{{ if .IsSnapshot }}true{{ end }}'
