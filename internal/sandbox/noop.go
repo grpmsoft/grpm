@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"log"
 	"os/exec"
 	"sync"
@@ -68,10 +69,15 @@ func (s *NoopSandbox) Run(ctx context.Context, cmd *exec.Cmd) error {
 	select {
 	case <-ctx.Done():
 		// Context canceled - kill process
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
+		killErr := killProcess(cmd)
+		// Wait for the process. Its exit error is normally "signal: killed" from the kill
+		// above, so ctx.Err() is returned; the exit error is still logged for diagnosis.
+		if waitErr := <-done; waitErr != nil {
+			log.Printf("[sandbox] process ended after cancellation: %v", waitErr)
 		}
-		<-done // Wait for process to exit
+		if killErr != nil {
+			return errors.Join(ctx.Err(), killErr)
+		}
 		return ctx.Err()
 	case err := <-done:
 		return err
