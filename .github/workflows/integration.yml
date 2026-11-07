@@ -32,7 +32,7 @@ permissions:
   contents: read
 
 env:
-  GO_VERSION: '1.25'
+  GOTOOLCHAIN: local
   GENTOO_MIRROR: 'https://distfiles.gentoo.org'
 
 jobs:
@@ -57,7 +57,6 @@ jobs:
         run: |
           emerge-webrsync
           emerge --quiet --noreplace --usepkg --binpkg-respect-use=y \
-            dev-lang/go \
             dev-build/make \
             dev-build/cmake \
             dev-build/meson \
@@ -68,7 +67,14 @@ jobs:
             dev-vcs/git
 
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
+
+      # Go from go.mod, not Gentoo's dev-lang/go: the stage3 Go may be older than the
+      # go.mod `go` line, and GOTOOLCHAIN=local forbids downloading a newer one.
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
 
       - name: Build GRPM
         run: |

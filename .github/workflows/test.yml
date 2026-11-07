@@ -1,83 +1,145 @@
 name: CI
 
+# GitHub Flow: main is always releasable; work happens in short-lived branches via PRs.
+# GRPM is a program (nobody imports it): the go.mod `go` line is the exact, patched Go the
+# release binaries are built with, and CI tests with it (go-version-file). There is no
+# `toolchain` line: setup-go reads the `go` line (see release.yml).
+# Linux only: GRPM targets Gentoo Linux.
+#
+# Required checks on main: "Test" (the gate at the end), "Lint" and "Build". A new
+# required job goes into the gate's `needs`, so the branch protection does not change.
+# Tool versions are pinned and bumped on purpose in their own PRs.
+
 on:
   push:
-    branches: [master, main]
+    branches: [main]
   pull_request:
-    branches: [master, main]
+    branches: [main]
 
 permissions:
   contents: read
 
 env:
-  GO_VERSION: '1.25'
+  # Never download a newer Go behind our back: the job must run the Go it asked for.
+  GOTOOLCHAIN: local
 
 jobs:
   test:
-    name: Test
+    name: Test - ubuntu-latest - Go from go.mod
     runs-on: ubuntu-latest
-
+    permissions:
+      contents: read
+      id-token: write # Codecov OIDC — only this job needs it
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v5
-
-      - name: Set up Go
-        uses: actions/setup-go@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
-          go-version: ${{ env.GO_VERSION }}
-
-      - name: Download dependencies
-        run: go mod download
-
-      - name: Verify dependencies
+          go-version-file: go.mod
+          cache: true
+      - run: go version
+      - name: Verify modules
         run: go mod verify
-
-      - name: Run go vet
+      - name: Vet
         run: go vet ./...
-
-      - name: Run tests with race detector
-        run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
-
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
+      - name: Test (race)
+        run: go test -race -count=1 -coverprofile=coverage.txt -covermode=atomic ./...
+      - name: Upload coverage
+        uses: codecov/codecov-action@v7
+        continue-on-error: true
         with:
-          files: ./coverage.out
-          fail_ci_if_error: false
-
-  lint:
-    name: Lint
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v5
-
-      - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version: ${{ env.GO_VERSION }}
-
-      - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v9
-        with:
-          version: v2.8.0
-          args: --timeout=5m
+          use_oidc: true
+          files: ./coverage.txt
 
   build:
     name: Build
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v5
-
-      - name: Set up Go
-        uses: actions/setup-go@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
-          go-version: ${{ env.GO_VERSION }}
-
+          go-version-file: go.mod
+          cache: true
       - name: Build binary
-        run: go build -v -o bin/grpm ./cmd/grpm
+        run: go build -o dist/grpm ./cmd/grpm
+      - name: Run binary
+        run: |
+          ./dist/grpm --version
+          ./dist/grpm --help > /dev/null
+      # Release archives include linux/386 and linux/arm (.goreleaser.yml).
+      - name: Build linux/386
+        run: CGO_ENABLED=0 GOARCH=386 go build ./...
+      - name: Build linux/arm
+        run: CGO_ENABLED=0 GOARCH=arm GOARM=7 go build ./...
 
-      - name: Verify binary
-        run: ./bin/grpm version || ./bin/grpm --version || echo "Version check skipped"
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          # Exact version (golangci-lint docs: "don't start to fail all builds at the same
+          # time"). Bump in its own PR that fixes the new findings, and with each new Go
+          # minor: an older linter may not understand the new Go.
+          version: v2.15.0
+          args: --timeout=5m
+
+  formatting:
+    name: Formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "Not gofmt-ed:"; echo "$unformatted"; exit 1
+          fi
+      - name: go mod tidy
+        run: |
+          go mod tidy
+          if [ -n "$(git status --porcelain -- go.mod go.sum)" ]; then
+            echo "go mod tidy changed go.mod/go.sum:"
+            git status --porcelain -- go.mod go.sum
+            git diff -- go.mod go.sum; exit 1
+          fi
+
+  # Informational: not in the gate, so a new CVE in a dependency does not block unrelated
+  # PRs. A red run is still a task (update the dependency or report). It stays on the
+  # latest govulncheck on purpose: the vulnerability data must be current. Releases are
+  # protected by the blocking govulncheck in release.yml.
+  vulncheck:
+    name: Vulncheck
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: golang/govulncheck-action@v1
+        with:
+          go-version-input: ""
+          go-version-file: go.mod
+
+  # The required "Test" check. `if: always()` and the explicit result check matter: a job
+  # that is skipped (for example because a job it needs failed) counts as passed for a
+  # required check, so a gate without them can let a red PR through.
+  gate:
+    name: Test
+    if: always()
+    needs: [test, build, lint, formatting]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every required job succeeded
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "results: $RESULTS"
+          for r in $RESULTS; do
+            if [ "$r" != success ]; then echo "a required job ended with: $r"; exit 1; fi
+          done

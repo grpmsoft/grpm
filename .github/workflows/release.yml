@@ -48,7 +48,11 @@ permissions:
   contents: write
 
 env:
-  GO_VERSION: '1.25'
+  # Binaries are built with the exact Go of the go.mod `go` line (go-version-file);
+  # GOTOOLCHAIN=local makes sure nothing else is used. There is deliberately no
+  # `toolchain` line: setup-go and govulncheck-action read the `go` line (measured on
+  # 2026-11-08, PR #96: `go 1.27.1` + `toolchain go1.27.3` gave go1.27.1 in every job).
+  # Raise the `go` line in a PR when a Go patch fixes a vulnerability we reach, then release.
   GOTOOLCHAIN: local
 
 jobs:
@@ -175,14 +179,14 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
-          go-version: ${{ env.GO_VERSION }}
+          go-version-file: go.mod
 
       - name: Download dependencies
         run: go mod download
@@ -191,10 +195,20 @@ jobs:
         run: go mod verify
 
       - name: Run linter
-        uses: golangci/golangci-lint-action@v8
+        uses: golangci/golangci-lint-action@v9
         with:
-          version: latest
+          version: v2.15.0 # same pin as CI (test.yml)
           args: --timeout=5m
+
+      # Blocking here, unlike in CI: a release never ships a known reachable
+      # vulnerability. go-version-input defaults to 'stable', and setup-go prefers it over
+      # go-version-file: without the empty input this would scan with stable, not the
+      # toolchain the binaries are built with.
+      - name: Vulnerability check
+        uses: golang/govulncheck-action@v1
+        with:
+          go-version-input: ""
+          go-version-file: go.mod
 
       - name: Run unit tests with race detector
         run: go test -v -race -coverprofile=coverage.out -timeout=15m ./...
@@ -215,12 +229,12 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
-          go-version: ${{ env.GO_VERSION }}
+          go-version-file: go.mod
 
       - name: Build binary
         run: go build -v -o bin/grpm ./cmd/grpm
@@ -266,11 +280,18 @@ jobs:
         run: |
           emerge-webrsync
           emerge --quiet --noreplace --usepkg --binpkg-respect-use=y \
-            dev-lang/go dev-build/make dev-build/cmake dev-build/meson \
+            dev-build/make dev-build/cmake dev-build/meson \
             dev-build/ninja sys-devel/gcc app-arch/unzip net-misc/curl dev-vcs/git
 
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
+
+      # Go from go.mod, not Gentoo's dev-lang/go: the stage3 Go may be older than the
+      # go.mod `go` line, and GOTOOLCHAIN=local forbids downloading a newer one.
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
 
       - name: Build and run integration tests
         run: |
@@ -309,7 +330,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -344,29 +365,37 @@ jobs:
           echo "Local tag $TAG created. Will be pushed after successful release."
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
-          go-version: ${{ env.GO_VERSION }}
-
-      - name: Install protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Install protoc Go plugins
-        run: |
-          go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
-          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+          go-version-file: go.mod
 
       - name: Download dependencies
         run: go mod download
 
+      # Generated gRPC code (api/gen) is committed and tested; it is not regenerated at
+      # release time, so the binaries are built from exactly the tested sources.
+
+      - name: Release notes from CHANGELOG.md
+        run: |
+          version="${{ needs.prepare.outputs.version }}"
+          awk -v head="## [$version]" '
+            index($0, head) == 1 { on = 1; next }
+            on && index($0, "## [") == 1 { exit }
+            on { print }
+          ' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          if ! grep -q '[^[:space:]]' "$RUNNER_TEMP/notes.md"; then
+            echo "::error::CHANGELOG.md has no section for $version"
+            exit 1
+          fi
+
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser
+          # Any v2, never a v3 with breaking changes; `goreleaser check` runs before every
+          # release.
           version: '~> v2'
-          args: release --clean
+          args: release --clean --release-notes ${{ runner.temp }}/notes.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
