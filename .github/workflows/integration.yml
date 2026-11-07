@@ -42,7 +42,8 @@ jobs:
     container:
       image: gentoo/stage3:latest
       options: --privileged
-    timeout-minutes: ${{ github.event.inputs.timeout_minutes || 120 }}
+    # Inputs arrive as strings; timeout-minutes needs a number.
+    timeout-minutes: ${{ fromJSON(github.event.inputs.timeout_minutes || '120') }}
 
     steps:
       - name: Configure binary packages

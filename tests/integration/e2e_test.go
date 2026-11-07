@@ -228,8 +228,8 @@ func TestE2E_ResolveWorkflow(t *testing.T) {
 			}
 
 			// Log resolved packages
-			for name, p := range solution {
-				t.Logf("  - %s-%s", name, p.Version)
+			for key, entry := range solution {
+				t.Logf("  - [%s] %s:%s-%s", entry.Action, key.Name, key.Slot, entry.Package.Version)
 			}
 		})
 	}
@@ -278,27 +278,33 @@ func TestE2E_DependencyChain(t *testing.T) {
 
 			// Verify no duplicate packages (map keys are unique by nature)
 			// Just log all resolved packages
-			for name, p := range solution {
-				t.Logf("  - %s-%s", name, p.Version)
+			for key, entry := range solution {
+				t.Logf("  - [%s] %s:%s-%s", entry.Action, key.Name, key.Slot, entry.Package.Version)
 			}
 
-			// Verify all versions are highest available
-			for name, p := range solution {
-				allVersions, err := ctx.Repo.GetAllVersions(name)
+			// Report packages not resolved to their highest version. Informational only:
+			// the resolver may legitimately pick a lower version (slot, keywords, masks,
+			// blockers), so a difference is logged, not failed.
+			for key, entry := range solution {
+				allVersions, err := ctx.Repo.GetAllVersions(key.Name)
 				if err != nil {
-					continue // Skip if can't get versions
+					t.Logf("  cannot list versions of %s: %v", key.Name, err)
+					continue
 				}
 
 				var highest string
 				for _, v := range allVersions {
+					if v.Slot.Name != key.Slot {
+						continue
+					}
 					if highest == "" || pkg.CompareVersions(v.Version, highest) > 0 {
 						highest = v.Version
 					}
 				}
 
-				if p.Version != highest {
-					t.Logf("  WARNING: %s selected %s, highest is %s",
-						name, p.Version, highest)
+				if highest != "" && entry.Package.Version != highest {
+					t.Logf("  NOTE: %s:%s selected %s, highest in slot is %s",
+						key.Name, key.Slot, entry.Package.Version, highest)
 				}
 			}
 		})
